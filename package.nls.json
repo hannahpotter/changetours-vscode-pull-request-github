@@ -204,6 +204,7 @@
 	"command.pr.pick.title": "Checkout Pull Request",
 	"command.pr.openChanges.title": "Open Changes",
 	"command.pr.openChangedFiles.title": "Open Changed Files List",
+	"command.pr.openDiffs.title": "Open Pull Request Diffs",
 	"command.pr.pickOnVscodeDev.title": "Checkout Pull Request on vscode.dev",
 	"command.pr.pickOnCodespaces.title": "Checkout Pull Request on Codespaces",
 	"command.pr.exit.title": "Checkout Default Branch",

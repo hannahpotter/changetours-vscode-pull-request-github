@@ -26,6 +26,7 @@ import { Issue } from './github/interface';
 import { IssueModel } from './github/issueModel';
 import { IssueOverviewPanel } from './github/issueOverview';
 import { GHPRComment, GHPRCommentThread, TemporaryComment } from './github/prComment';
+import { PullRequestDiffsWebviewPanel } from './github/pullRequestDiffsWebview';
 import { PullRequestFilesWebviewPanel } from './github/pullRequestFilesWebview';
 import { PullRequestModel } from './github/pullRequestModel';
 import { PullRequestOverviewPanel } from './github/pullRequestOverview';
@@ -779,6 +780,26 @@ export function registerCommands(
 				return;
 			}
 			return PullRequestFilesWebviewPanel.createOrShow(folderReposManager, pullRequestModel);
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.openDiffs', async (pr: PRNode | RepositoryChangesNode | PullRequestModel | OverviewContext | CrossChatSessionWithPR | { path: string } | undefined) => {
+			if (pr === undefined) {
+				Logger.error('Unexpectedly received undefined when picking a PR.', logId);
+				return vscode.window.showErrorMessage(vscode.l10n.t('No pull request was selected to open diffs.'));
+			}
+
+			const pullRequestModel = await resolvePullRequestModelFromContext(pr);
+			if (!pullRequestModel) {
+				return vscode.window.showErrorMessage(vscode.l10n.t('No pull request found to open diffs.'));
+			}
+
+			const folderReposManager = reposManager.getManagerForIssueModel(pullRequestModel);
+			if (!folderReposManager) {
+				return;
+			}
+			return PullRequestDiffsWebviewPanel.createOrShow(folderReposManager, pullRequestModel);
 		}),
 	);
 
