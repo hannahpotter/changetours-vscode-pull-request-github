@@ -222,8 +222,6 @@ export class PullRequestFilesWebviewPanel {
 			};
 		});
 
-		const totalText = vscode.l10n.t('{0} files changed', files.length.toString());
-		const diffText = vscode.l10n.t('+{0} -{1}', totals.additions.toString(), totals.deletions.toString());
 		const defaultGroupName = vscode.l10n.t('Changed Files');
 		const emptyGroupText = vscode.l10n.t('Drop files here');
 		const newGroupBaseName = vscode.l10n.t('New Group');
@@ -233,6 +231,8 @@ export class PullRequestFilesWebviewPanel {
 		const addSubgroupLabel = vscode.l10n.t('Add Subgroup');
 		const collapseLabel = vscode.l10n.t('Collapse');
 		const expandLabel = vscode.l10n.t('Expand');
+		const totalText = vscode.l10n.t('{0} files changed', files.length.toString());
+		const diffText = vscode.l10n.t('+{0} -{1}', totals.additions.toString(), totals.deletions.toString());
 
 		return `<!DOCTYPE html>
 <html lang="en">
@@ -283,9 +283,49 @@ export class PullRequestFilesWebviewPanel {
 				margin-bottom: 12px;
 				font-size: 12px;
 			}
+			.container {
+				display: flex;
+				gap: 16px;
+				height: calc(100vh - 120px);
+			}
+			.left-panel {
+				flex: 0 0 30%;
+				display: flex;
+				flex-direction: column;
+				border-right: 1px solid var(--vscode-editorWidget-border);
+				padding-right: 12px;
+				overflow: hidden;
+			}
+			.right-panel {
+				flex: 1;
+				display: flex;
+				flex-direction: column;
+				overflow: hidden;
+			}
+			.panel-header {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 8px;
+				margin-bottom: 12px;
+				flex-shrink: 0;
+			}
+			.panel-header h2 {
+				font-size: 14px;
+				font-weight: 600;
+				margin: 0;
+			}
 			.groups {
 				display: grid;
 				gap: 12px;
+				overflow-y: auto;
+				flex: 1;
+			}
+			.files-list {
+				display: grid;
+				gap: 8px;
+				overflow-y: auto;
+				flex: 1;
 			}
 			.group {
 				border: 1px solid var(--vscode-editorWidget-border);
@@ -476,74 +516,6 @@ export class PullRequestFilesWebviewPanel {
 				background: transparent;
 				color: var(--vscode-foreground);
 			}
-			.text-item {
-				display: grid;
-				grid-template-columns: 1fr auto auto;
-				gap: 8px;
-				align-items: center;
-				padding: 6px 8px;
-				border-radius: 4px;
-				background: var(--vscode-notebook-cellTagDefault-background);
-				border: 1px solid var(--vscode-input-border, transparent);
-				font-size: 12px;
-			}
-			.text-item[draggable="true"] {
-				cursor: grab;
-			}
-			.text-label {
-				font-family: var(--vscode-editor-font-family);
-				word-break: break-word;
-			}
-			.text-item-input {
-				background: var(--vscode-input-background);
-				color: var(--vscode-input-foreground);
-				border: 1px solid var(--vscode-input-border);
-				border-radius: 3px;
-				padding: 4px 6px;
-				font-family: var(--vscode-editor-font-family);
-				font-size: 12px;
-				flex: 1;
-				grid-column: 1;
-			}
-			.text-item-input::placeholder {
-				color: var(--vscode-input-placeholderForeground);
-			}
-			.text-item-input:focus {
-				outline: none;
-				border-color: var(--vscode-focusBorder);
-			}
-			.text-item-confirm,
-			.text-item-cancel {
-				background: transparent;
-				color: var(--vscode-foreground);
-				border: none;
-				padding: 4px 8px;
-				cursor: pointer;
-				border-radius: 3px;
-				font-size: 12px;
-				line-height: 1;
-				white-space: nowrap;
-			}
-			.text-item-confirm:hover,
-			.text-item-cancel:hover {
-				background: var(--vscode-editor-lineHighlightBackground);
-			}
-			.text-item-edit,
-			.text-item-delete {
-				background: transparent;
-				color: var(--vscode-foreground);
-				border: none;
-				padding: 4px 8px;
-				cursor: pointer;
-				border-radius: 3px;
-				font-size: 12px;
-				line-height: 1;
-				white-space: nowrap;
-			}
-			.text-item-edit:hover,
-			.text-item-delete:hover {
-				background: var(--vscode-editor-lineHighlightBackground);
-			}
 			.empty-group {
 				color: var(--vscode-descriptionForeground);
 				font-size: 11px;
@@ -573,7 +545,21 @@ export class PullRequestFilesWebviewPanel {
 			<button id="create-group" type="button">${vscode.l10n.t('New Group')}</button>
 		</div>
 		<div class="summary">${escapeHtml(totalText)} &nbsp; ${escapeHtml(diffText)}</div>
-		<div id="groups" class="groups" aria-label="${vscode.l10n.t('Changed files groups')}"></div>
+		<div class="container">
+			<div class="left-panel">
+				<div class="panel-header">
+					<h2>${vscode.l10n.t('Groups')}</h2>
+					<button id="create-group" type="button">${vscode.l10n.t('New Group')}</button>
+				</div>
+				<div id="groups" class="groups" aria-label="${vscode.l10n.t('Changed files groups')}"></div>
+			</div>
+			<div class="right-panel">
+				<div class="panel-header">
+					<h2>${vscode.l10n.t('Files')}</h2>
+				</div>
+				<div id="files-list" class="files-list" aria-label="${vscode.l10n.t('Changed files')}"></div>
+			</div>
+		</div>
 		<script nonce="${nonce}">
 			const files = ${serializeForScript(fileItems)};
 			const defaultGroupName = ${serializeForScript(defaultGroupName)};
@@ -588,11 +574,9 @@ export class PullRequestFilesWebviewPanel {
 			const vscodeApi = acquireVsCodeApi();
 			let groupCounter = 1;
 			let subgroupCounter = 1;
-			let textItemCounter = 1;
 			const collapsedGroups = new Set();
 			const collapsedSubgroups = new Set();
 			const collapsedFiles = new Set();
-			const editingTextItems = new Set();
 
 			// Type constants matching DiffChangeType from diffHunk.ts
 			const DiffChangeType = {
@@ -607,10 +591,11 @@ export class PullRequestFilesWebviewPanel {
 			let draggedFromFileIndex = null;
 			let draggedFromHunkIndex = null;
 			const groups = [
-				{ id: 'group-' + groupCounter, name: defaultGroupName, fileIds: files.map(file => file.id), subgroups: [], textItems: [], itemOrder: files.map(file => file.id) },
+				{ id: 'group-' + groupCounter, name: defaultGroupName, fileIds: [], subgroups: [], textItems: [], itemOrder: [] },
 			];
 
 			const groupsRoot = document.getElementById('groups');
+			const filesListRoot = document.getElementById('files-list');
 			const createGroupButton = document.getElementById('create-group');
 
 			function normalizeName(name) {
@@ -701,95 +686,7 @@ export class PullRequestFilesWebviewPanel {
 				render();
 			}
 
-			function moveTextItemToGroup(textItemId, targetGroupId, targetSubgroupId) {
-				let sourceTextItem = null;
-				let sourceContainer = null;
-				groups.forEach(group => {
-					const index = group.textItems.indexOf(textItemId);
-					if (index !== -1) {
-						sourceTextItem = group.textItemsMap && group.textItemsMap[textItemId];
-						sourceContainer = group;
-						group.textItems.splice(index, 1);
-					}
-					const orderIndex = group.itemOrder.indexOf(textItemId);
-					if (orderIndex !== -1) {
-						group.itemOrder.splice(orderIndex, 1);
-					}
-					group.subgroups.forEach(subgroup => {
-						const subgroupIndex = subgroup.textItems.indexOf(textItemId);
-						if (subgroupIndex !== -1) {
-							sourceTextItem = subgroup.textItemsMap && subgroup.textItemsMap[textItemId];
-							sourceContainer = subgroup;
-							subgroup.textItems.splice(subgroupIndex, 1);
-						}
-						const subgroupOrderIndex = subgroup.itemOrder.indexOf(textItemId);
-						if (subgroupOrderIndex !== -1) {
-							subgroup.itemOrder.splice(subgroupOrderIndex, 1);
-						}
-					});
-				});
-				const targetGroup = groups.find(group => group.id === targetGroupId);
-				if (targetGroup && sourceTextItem && sourceContainer) {
-					if (targetSubgroupId) {
-						const targetSubgroup = targetGroup.subgroups.find(subgroup => subgroup.id === targetSubgroupId);
-						if (targetSubgroup) {
-							targetSubgroup.textItems.push(textItemId);
-							targetSubgroup.itemOrder = targetSubgroup.itemOrder || [];
-							targetSubgroup.itemOrder.push(textItemId);
-							targetSubgroup.textItemsMap = targetSubgroup.textItemsMap || {};
-							targetSubgroup.textItemsMap[textItemId] = sourceTextItem;
-							if (sourceContainer.textItemsMap && sourceContainer.textItemsMap[textItemId]) {
-								delete sourceContainer.textItemsMap[textItemId];
-							}
-						} else {
-							targetGroup.textItems.push(textItemId);
-							targetGroup.itemOrder.push(textItemId);
-							targetGroup.textItemsMap = targetGroup.textItemsMap || {};
-							targetGroup.textItemsMap[textItemId] = sourceTextItem;
-							if (sourceContainer.textItemsMap && sourceContainer.textItemsMap[textItemId]) {
-								delete sourceContainer.textItemsMap[textItemId];
-							}
-						}
-					} else {
-						targetGroup.textItems.push(textItemId);
-						targetGroup.itemOrder.push(textItemId);
-						targetGroup.textItemsMap = targetGroup.textItemsMap || {};
-						targetGroup.textItemsMap[textItemId] = sourceTextItem;
-						if (sourceContainer.textItemsMap && sourceContainer.textItemsMap[textItemId]) {
-							delete sourceContainer.textItemsMap[textItemId];
-						}
-					}
-				}
-				render();
-			}
 
-			function reorderItemWithinGroup(itemId, groupId, subgroupId, moveUp) {
-				let container = null;
-				const group = groups.find(g => g.id === groupId);
-				if (!group) {
-					return;
-				}
-				if (subgroupId) {
-					container = group.subgroups.find(sg => sg.id === subgroupId);
-				} else {
-					container = group;
-				}
-				if (!container || !container.itemOrder) {
-					return;
-				}
-				const index = container.itemOrder.indexOf(itemId);
-				if (index === -1) {
-					return;
-				}
-				const newIndex = moveUp ? index - 1 : index + 1;
-				if (newIndex < 0 || newIndex >= container.itemOrder.length) {
-					return;
-				}
-				const temp = container.itemOrder[index];
-				container.itemOrder[index] = container.itemOrder[newIndex];
-				container.itemOrder[newIndex] = temp;
-				render();
-			}
 
 			function isGroupCollapsed(groupId) {
 				return collapsedGroups.has(groupId);
@@ -813,15 +710,6 @@ export class PullRequestFilesWebviewPanel {
 					collapsedSubgroups.delete(subgroupId);
 				} else {
 					collapsedSubgroups.add(subgroupId);
-				}
-				render();
-			}
-
-			function toggleTextItemEditMode(textItemId) {
-				if (editingTextItems.has(textItemId)) {
-					editingTextItems.delete(textItemId);
-				} else {
-					editingTextItems.add(textItemId);
 				}
 				render();
 			}
@@ -988,105 +876,7 @@ export class PullRequestFilesWebviewPanel {
 				return row;
 			}
 
-			function createTextItemElement(textItem, group, subgroup, isEditing) {
-				const row = document.createElement('div');
-				row.className = 'text-item';
-				const isInEditMode = isEditing || editingTextItems.has(textItem.id);
-				if (!isInEditMode) {
-					row.draggable = true;
-				}
-				row.dataset.textItemId = textItem.id;
-				if (isInEditMode) {
-					const input = document.createElement('input');
-					input.type = 'text';
-					input.className = 'text-item-input';
-					input.value = textItem.text;
-					input.placeholder = 'Enter note text...';
-					const confirmButton = document.createElement('button');
-					confirmButton.type = 'button';
-					confirmButton.className = 'text-item-confirm';
-					confirmButton.textContent = 'Save';
-					confirmButton.title = 'Save note';
-					confirmButton.addEventListener('click', () => {
-						const trimmed = input.value.trim();
-						if (trimmed) {
-							textItem.text = trimmed;
-							editingTextItems.delete(textItem.id);
-							render();
-						}
-					});
-					const cancelButton = document.createElement('button');
-					cancelButton.type = 'button';
-					cancelButton.className = 'text-item-cancel';
-					cancelButton.textContent = 'Cancel';
-					cancelButton.title = 'Cancel';
-					cancelButton.addEventListener('click', () => {
-						editingTextItems.delete(textItem.id);
-						if (textItem.text === '') {
-							if (subgroup) {
-								const index = subgroup.textItems.indexOf(textItem.id);
-								if (index !== -1) {
-									subgroup.textItems.splice(index, 1);
-								}
-							} else {
-								const index = group.textItems.indexOf(textItem.id);
-								if (index !== -1) {
-									group.textItems.splice(index, 1);
-								}
-							}
-						}
-						render();
-					});
-					row.appendChild(input);
-					row.appendChild(confirmButton);
-					row.appendChild(cancelButton);
-					setTimeout(() => input.focus(), 0);
-				} else {
-					const label = document.createElement('div');
-					label.className = 'text-label';
-					label.textContent = textItem.text;
-					const editButton = document.createElement('button');
-					editButton.type = 'button';
-					editButton.className = 'text-item-edit';
-					editButton.textContent = 'Edit';
-					editButton.title = 'Edit note';
-					editButton.addEventListener('click', () => {
-						toggleTextItemEditMode(textItem.id);
-					});
-					const deleteButton = document.createElement('button');
-					deleteButton.type = 'button';
-					deleteButton.className = 'text-item-delete';
-					deleteButton.textContent = 'Delete';
-					deleteButton.title = 'Delete note';
-					deleteButton.addEventListener('click', () => {
-						editingTextItems.delete(textItem.id);
-						if (subgroup) {
-							const index = subgroup.textItems.indexOf(textItem.id);
-							if (index !== -1) {
-								subgroup.textItems.splice(index, 1);
-							}
-						} else {
-							const index = group.textItems.indexOf(textItem.id);
-							if (index !== -1) {
-								group.textItems.splice(index, 1);
-							}
-						}
-						render();
-					});
-					row.appendChild(label);
-					row.appendChild(editButton);
-					row.appendChild(deleteButton);
-					row.addEventListener('dragstart', event => {
-						if (!event.dataTransfer) {
-							return;
-						}
-						event.dataTransfer.setData('application/x-pr-text-item-id', textItem.id);
-						event.dataTransfer.setData('text/plain', textItem.id);
-						event.dataTransfer.effectAllowed = 'move';
-					});
-				}
-				return row;
-			}
+
 
 			function createSubgroupElement(group, subgroup) {
 				const container = document.createElement('section');
@@ -1120,43 +910,12 @@ export class PullRequestFilesWebviewPanel {
 				const count = document.createElement('div');
 				count.className = 'subgroup-count';
 				count.textContent = subgroup.fileIds.length + ' ' + (subgroup.fileIds.length === 1 ? 'file' : 'files');
-				const addNoteButton = document.createElement('button');
-				addNoteButton.type = 'button';
-				addNoteButton.textContent = 'Add Note';
-				addNoteButton.addEventListener('click', () => {
-					textItemCounter += 1;
-					subgroup.textItems = subgroup.textItems || [];
-					const textItemId = 'text-item-' + textItemCounter;
-					subgroup.textItems.push(textItemId);
-					subgroup.itemOrder = subgroup.itemOrder || [];
-					subgroup.itemOrder.push(textItemId);
-					subgroup.textItemsMap = subgroup.textItemsMap || {};
-					subgroup.textItemsMap[textItemId] = { id: textItemId, text: '' };
-					render();
-				});
-				const openButton = document.createElement('button');
-				openButton.type = 'button';
-				openButton.textContent = openChangesLabel;
-				openButton.disabled = subgroup.fileIds.length === 0;
-				openButton.addEventListener('click', () => {
-					const subgroupFileNames = subgroup.fileIds
-						.map(fileId => files.find(item => item.id === fileId))
-						.filter(file => file && file.fileName)
-						.map(file => file.fileName);
-					vscodeApi.postMessage({
-						command: 'openGroupChanges',
-						fileNames: subgroupFileNames,
-						groupName: group.name + ' / ' + subgroup.name,
-					});
-				});
 				const collapseButton = document.createElement('button');
 				collapseButton.type = 'button';
 				collapseButton.textContent = isSubgroupCollapsed(subgroup.id) ? expandLabel : collapseLabel;
 				collapseButton.addEventListener('click', () => toggleSubgroupCollapsed(subgroup.id));
 				header.appendChild(title);
 				header.appendChild(count);
-				header.appendChild(addNoteButton);
-				header.appendChild(openButton);
 				header.appendChild(collapseButton);
 				const body = document.createElement('div');
 				body.className = 'subgroup-body';
@@ -1178,35 +937,29 @@ export class PullRequestFilesWebviewPanel {
 						return;
 					}
 					const fileId = event.dataTransfer.getData('application/x-pr-file-id');
-					const textItemId = event.dataTransfer.getData('application/x-pr-text-item-id');
 					if (fileId) {
 						moveFileToGroup(fileId, group.id, subgroup.id);
-					} else if (textItemId) {
-						moveTextItemToGroup(textItemId, group.id, subgroup.id);
 					}
 				});
-				if (subgroup.fileIds.length === 0 && (!subgroup.textItems || subgroup.textItems.length === 0)) {
+				if (subgroup.fileIds.length === 0) {
 					const empty = document.createElement('div');
 					empty.className = 'empty-group';
 					empty.textContent = emptyGroupText;
 					body.appendChild(empty);
 				} else {
-					const itemOrder = subgroup.itemOrder || [];
-					itemOrder.forEach(itemId => {
-						if (itemId.startsWith('file-')) {
-							const file = files.find(item => item.id === itemId);
-							if (file) {
-								const fileIndex = files.indexOf(file);
-								body.appendChild(createFileElement(file, fileIndex));
-							}
-						} else if (itemId.startsWith('text-item-')) {
-							const textItem = subgroup.textItemsMap && subgroup.textItemsMap[itemId];
-							if (textItem) {
-								const isEditing = textItem.text === '';
-								body.appendChild(createTextItemElement(textItem, group, subgroup, isEditing));
-							}
+					const fileList = document.createElement('div');
+					fileList.style.fontSize = '11px';
+					subgroup.fileIds.forEach(fileId => {
+						const file = files.find(item => item.id === fileId);
+						if (file) {
+							const fileItem = document.createElement('div');
+							fileItem.style.padding = '4px 0';
+							fileItem.style.borderBottom = '1px solid var(--vscode-editorWidget-border)';
+							fileItem.textContent = file.label;
+							fileList.appendChild(fileItem);
 						}
 					});
+					body.appendChild(fileList);
 				}
 				container.appendChild(header);
 				if (!isSubgroupCollapsed(subgroup.id)) {
@@ -1247,50 +1000,12 @@ export class PullRequestFilesWebviewPanel {
 				count.className = 'group-count';
 				const totalCount = getGroupTotalCount(group);
 				count.textContent = totalCount + ' ' + (totalCount === 1 ? 'file' : 'files');
-				const addSubgroupButton = document.createElement('button');
-				addSubgroupButton.type = 'button';
-				addSubgroupButton.textContent = addSubgroupLabel;
-				addSubgroupButton.addEventListener('click', () => {
-					subgroupCounter += 1;
-					const name = getUniqueSubgroupName(group, newSubgroupBaseName);
-					group.subgroups.push({ id: 'subgroup-' + subgroupCounter, name: name, fileIds: [], textItems: [], textItemsMap: {}, itemOrder: [] });
-					render();
-				});
-				const addNoteButton = document.createElement('button');
-				addNoteButton.type = 'button';
-				addNoteButton.textContent = 'Add Note';
-				addNoteButton.addEventListener('click', () => {
-					textItemCounter += 1;
-					group.textItems = group.textItems || [];
-					group.textItemsMap = group.textItemsMap || {};
-					group.itemOrder = group.itemOrder || [];
-					const textItemId = 'text-item-' + textItemCounter;
-					group.textItems.push(textItemId);
-					group.itemOrder.push(textItemId);
-					group.textItemsMap[textItemId] = { id: textItemId, text: '' };
-					render();
-				});
-				const openButton = document.createElement('button');
-				openButton.type = 'button';
-				openButton.textContent = openChangesLabel;
-				openButton.disabled = totalCount === 0;
-				openButton.addEventListener('click', () => {
-					const groupFileNames = getGroupFileNames(group);
-					vscodeApi.postMessage({
-						command: 'openGroupChanges',
-						fileNames: groupFileNames,
-						groupName: group.name,
-					});
-				});
 				const collapseButton = document.createElement('button');
 				collapseButton.type = 'button';
 				collapseButton.textContent = isGroupCollapsed(group.id) ? expandLabel : collapseLabel;
 				collapseButton.addEventListener('click', () => toggleGroupCollapsed(group.id));
 				header.appendChild(title);
 				header.appendChild(count);
-				header.appendChild(addSubgroupButton);
-				header.appendChild(addNoteButton);
-				header.appendChild(openButton);
 				header.appendChild(collapseButton);
 				const body = document.createElement('div');
 				body.className = 'group-body';
@@ -1312,35 +1027,29 @@ export class PullRequestFilesWebviewPanel {
 						return;
 					}
 					const fileId = event.dataTransfer.getData('application/x-pr-file-id');
-					const textItemId = event.dataTransfer.getData('application/x-pr-text-item-id');
 					if (fileId) {
 						moveFileToGroup(fileId, group.id);
-					} else if (textItemId) {
-						moveTextItemToGroup(textItemId, group.id);
 					}
 				});
-				if (group.fileIds.length === 0 && (!group.textItems || group.textItems.length === 0)) {
+				if (group.fileIds.length === 0) {
 					const empty = document.createElement('div');
 					empty.className = 'empty-group';
 					empty.textContent = emptyGroupText;
 					body.appendChild(empty);
 				} else {
-					const itemOrder = group.itemOrder || [];
-					itemOrder.forEach(itemId => {
-						if (itemId.startsWith('file-')) {
-							const file = files.find(item => item.id === itemId);
-							if (file) {
-								const fileIndex = files.indexOf(file);
-								body.appendChild(createFileElement(file, fileIndex));
-							}
-						} else if (itemId.startsWith('text-item-')) {
-							const textItem = group.textItemsMap && group.textItemsMap[itemId];
-							if (textItem) {
-								const isEditing = textItem.text === '';
-								body.appendChild(createTextItemElement(textItem, group, null, isEditing));
-							}
+					const fileList = document.createElement('div');
+					fileList.style.fontSize = '11px';
+					group.fileIds.forEach(fileId => {
+						const file = files.find(item => item.id === fileId);
+						if (file) {
+							const fileItem = document.createElement('div');
+							fileItem.style.padding = '4px 0';
+							fileItem.style.borderBottom = '1px solid var(--vscode-editorWidget-border)';
+							fileItem.textContent = file.label;
+							fileList.appendChild(fileItem);
 						}
 					});
+					body.appendChild(fileList);
 				}
 				const subgroupsContainer = document.createElement('div');
 				subgroupsContainer.className = 'subgroups';
@@ -1349,9 +1058,20 @@ export class PullRequestFilesWebviewPanel {
 						subgroupsContainer.appendChild(createSubgroupElement(group, subgroup));
 					});
 				}
+				const addSubgroupButton = document.createElement('button');
+				addSubgroupButton.type = 'button';
+				addSubgroupButton.textContent = addSubgroupLabel;
+				addSubgroupButton.style.marginTop = '6px';
+				addSubgroupButton.addEventListener('click', () => {
+					subgroupCounter += 1;
+					const name = getUniqueSubgroupName(group, newSubgroupBaseName);
+					group.subgroups.push({ id: 'subgroup-' + subgroupCounter, name: name, fileIds: [], itemOrder: [] });
+					render();
+				});
 				container.appendChild(header);
 				if (!isGroupCollapsed(group.id)) {
 					container.appendChild(body);
+					container.appendChild(addSubgroupButton);
 					container.appendChild(subgroupsContainer);
 				}
 				return container;
@@ -1359,16 +1079,26 @@ export class PullRequestFilesWebviewPanel {
 
 			function render() {
 				groupsRoot.innerHTML = '';
+				filesListRoot.innerHTML = '';
+
 				if (files.length === 0) {
 					const empty = document.createElement('div');
 					empty.className = 'empty-group';
 					empty.textContent = ${serializeForScript(vscode.l10n.t('No changed files found.'))};
-					groupsRoot.appendChild(empty);
+					filesListRoot.appendChild(empty);
 					return;
 				}
+
+				// Render groups on the left
 				groups.forEach(group => {
 					groupsRoot.appendChild(createGroupElement(group));
 				});
+
+				// Render all files on the right
+				for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+					const file = files[fileIndex];
+					filesListRoot.appendChild(createFileElement(file, fileIndex));
+				}
 			}
 
 			createGroupButton.addEventListener('click', () => {
