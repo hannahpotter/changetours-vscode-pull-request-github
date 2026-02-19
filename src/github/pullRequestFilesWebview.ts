@@ -389,6 +389,74 @@ export class PullRequestFilesWebviewPanel {
 				white-space: nowrap;
 				font-size: 11px;
 			}
+			.text-item {
+				display: grid;
+				grid-template-columns: 1fr auto auto;
+				gap: 8px;
+				align-items: center;
+				padding: 6px 8px;
+				border-radius: 4px;
+				background: var(--vscode-notebook-cellTagDefault-background);
+				border: 1px solid var(--vscode-input-border, transparent);
+				font-size: 12px;
+			}
+			.text-item[draggable="true"] {
+				cursor: grab;
+			}
+			.text-label {
+				font-family: var(--vscode-editor-font-family);
+				word-break: break-word;
+			}
+			.text-item-input {
+				background: var(--vscode-input-background);
+				color: var(--vscode-input-foreground);
+				border: 1px solid var(--vscode-input-border);
+				border-radius: 3px;
+				padding: 4px 6px;
+				font-family: var(--vscode-editor-font-family);
+				font-size: 12px;
+				flex: 1;
+				grid-column: 1;
+			}
+			.text-item-input::placeholder {
+				color: var(--vscode-input-placeholderForeground);
+			}
+			.text-item-input:focus {
+				outline: none;
+				border-color: var(--vscode-focusBorder);
+			}
+			.text-item-confirm,
+			.text-item-cancel {
+				background: transparent;
+				color: var(--vscode-foreground);
+				border: none;
+				padding: 4px 8px;
+				cursor: pointer;
+				border-radius: 3px;
+				font-size: 12px;
+				line-height: 1;
+				white-space: nowrap;
+			}
+			.text-item-confirm:hover,
+			.text-item-cancel:hover {
+				background: var(--vscode-editor-lineHighlightBackground);
+			}
+			.text-item-edit,
+			.text-item-delete {
+				background: transparent;
+				color: var(--vscode-foreground);
+				border: none;
+				padding: 4px 8px;
+				cursor: pointer;
+				border-radius: 3px;
+				font-size: 12px;
+				line-height: 1;
+				white-space: nowrap;
+			}
+			.text-item-edit:hover,
+			.text-item-delete:hover {
+				background: var(--vscode-editor-lineHighlightBackground);
+			}
 			.empty-group {
 				color: var(--vscode-descriptionForeground);
 				font-size: 11px;
@@ -433,10 +501,12 @@ export class PullRequestFilesWebviewPanel {
 			const vscodeApi = acquireVsCodeApi();
 			let groupCounter = 1;
 			let subgroupCounter = 1;
+			let textItemCounter = 1;
 			const collapsedGroups = new Set();
 			const collapsedSubgroups = new Set();
+			const editingTextItems = new Set();
 			const groups = [
-				{ id: 'group-' + groupCounter, name: defaultGroupName, fileIds: files.map(file => file.id), subgroups: [] },
+				{ id: 'group-' + groupCounter, name: defaultGroupName, fileIds: files.map(file => file.id), subgroups: [], textItems: [], itemOrder: files.map(file => file.id) },
 			];
 
 			const groupsRoot = document.getElementById('groups');
@@ -495,10 +565,18 @@ export class PullRequestFilesWebviewPanel {
 					if (index !== -1) {
 						group.fileIds.splice(index, 1);
 					}
+					const orderIndex = group.itemOrder.indexOf(fileId);
+					if (orderIndex !== -1) {
+						group.itemOrder.splice(orderIndex, 1);
+					}
 					group.subgroups.forEach(subgroup => {
 						const subgroupIndex = subgroup.fileIds.indexOf(fileId);
 						if (subgroupIndex !== -1) {
 							subgroup.fileIds.splice(subgroupIndex, 1);
+						}
+						const subgroupOrderIndex = subgroup.itemOrder.indexOf(fileId);
+						if (subgroupOrderIndex !== -1) {
+							subgroup.itemOrder.splice(subgroupOrderIndex, 1);
 						}
 					});
 				});
@@ -508,13 +586,107 @@ export class PullRequestFilesWebviewPanel {
 						const targetSubgroup = targetGroup.subgroups.find(subgroup => subgroup.id === targetSubgroupId);
 						if (targetSubgroup) {
 							targetSubgroup.fileIds.push(fileId);
+							targetSubgroup.itemOrder = targetSubgroup.itemOrder || [];
+							targetSubgroup.itemOrder.push(fileId);
 						} else {
 							targetGroup.fileIds.push(fileId);
+							targetGroup.itemOrder.push(fileId);
 						}
 					} else {
 						targetGroup.fileIds.push(fileId);
+						targetGroup.itemOrder.push(fileId);
 					}
 				}
+				render();
+			}
+
+			function moveTextItemToGroup(textItemId, targetGroupId, targetSubgroupId) {
+				let sourceTextItem = null;
+				let sourceContainer = null;
+				groups.forEach(group => {
+					const index = group.textItems.indexOf(textItemId);
+					if (index !== -1) {
+						sourceTextItem = group.textItemsMap && group.textItemsMap[textItemId];
+						sourceContainer = group;
+						group.textItems.splice(index, 1);
+					}
+					const orderIndex = group.itemOrder.indexOf(textItemId);
+					if (orderIndex !== -1) {
+						group.itemOrder.splice(orderIndex, 1);
+					}
+					group.subgroups.forEach(subgroup => {
+						const subgroupIndex = subgroup.textItems.indexOf(textItemId);
+						if (subgroupIndex !== -1) {
+							sourceTextItem = subgroup.textItemsMap && subgroup.textItemsMap[textItemId];
+							sourceContainer = subgroup;
+							subgroup.textItems.splice(subgroupIndex, 1);
+						}
+						const subgroupOrderIndex = subgroup.itemOrder.indexOf(textItemId);
+						if (subgroupOrderIndex !== -1) {
+							subgroup.itemOrder.splice(subgroupOrderIndex, 1);
+						}
+					});
+				});
+				const targetGroup = groups.find(group => group.id === targetGroupId);
+				if (targetGroup && sourceTextItem && sourceContainer) {
+					if (targetSubgroupId) {
+						const targetSubgroup = targetGroup.subgroups.find(subgroup => subgroup.id === targetSubgroupId);
+						if (targetSubgroup) {
+							targetSubgroup.textItems.push(textItemId);
+							targetSubgroup.itemOrder = targetSubgroup.itemOrder || [];
+							targetSubgroup.itemOrder.push(textItemId);
+							targetSubgroup.textItemsMap = targetSubgroup.textItemsMap || {};
+							targetSubgroup.textItemsMap[textItemId] = sourceTextItem;
+							if (sourceContainer.textItemsMap && sourceContainer.textItemsMap[textItemId]) {
+								delete sourceContainer.textItemsMap[textItemId];
+							}
+						} else {
+							targetGroup.textItems.push(textItemId);
+							targetGroup.itemOrder.push(textItemId);
+							targetGroup.textItemsMap = targetGroup.textItemsMap || {};
+							targetGroup.textItemsMap[textItemId] = sourceTextItem;
+							if (sourceContainer.textItemsMap && sourceContainer.textItemsMap[textItemId]) {
+								delete sourceContainer.textItemsMap[textItemId];
+							}
+						}
+					} else {
+						targetGroup.textItems.push(textItemId);
+						targetGroup.itemOrder.push(textItemId);
+						targetGroup.textItemsMap = targetGroup.textItemsMap || {};
+						targetGroup.textItemsMap[textItemId] = sourceTextItem;
+						if (sourceContainer.textItemsMap && sourceContainer.textItemsMap[textItemId]) {
+							delete sourceContainer.textItemsMap[textItemId];
+						}
+					}
+				}
+				render();
+			}
+
+			function reorderItemWithinGroup(itemId, groupId, subgroupId, moveUp) {
+				let container = null;
+				const group = groups.find(g => g.id === groupId);
+				if (!group) {
+					return;
+				}
+				if (subgroupId) {
+					container = group.subgroups.find(sg => sg.id === subgroupId);
+				} else {
+					container = group;
+				}
+				if (!container || !container.itemOrder) {
+					return;
+				}
+				const index = container.itemOrder.indexOf(itemId);
+				if (index === -1) {
+					return;
+				}
+				const newIndex = moveUp ? index - 1 : index + 1;
+				if (newIndex < 0 || newIndex >= container.itemOrder.length) {
+					return;
+				}
+				const temp = container.itemOrder[index];
+				container.itemOrder[index] = container.itemOrder[newIndex];
+				container.itemOrder[newIndex] = temp;
 				render();
 			}
 
@@ -540,6 +712,15 @@ export class PullRequestFilesWebviewPanel {
 					collapsedSubgroups.delete(subgroupId);
 				} else {
 					collapsedSubgroups.add(subgroupId);
+				}
+				render();
+			}
+
+			function toggleTextItemEditMode(textItemId) {
+				if (editingTextItems.has(textItemId)) {
+					editingTextItems.delete(textItemId);
+				} else {
+					editingTextItems.add(textItemId);
 				}
 				render();
 			}
@@ -576,6 +757,106 @@ export class PullRequestFilesWebviewPanel {
 				return row;
 			}
 
+			function createTextItemElement(textItem, group, subgroup, isEditing) {
+				const row = document.createElement('div');
+				row.className = 'text-item';
+				const isInEditMode = isEditing || editingTextItems.has(textItem.id);
+				if (!isInEditMode) {
+					row.draggable = true;
+				}
+				row.dataset.textItemId = textItem.id;
+				if (isInEditMode) {
+					const input = document.createElement('input');
+					input.type = 'text';
+					input.className = 'text-item-input';
+					input.value = textItem.text;
+					input.placeholder = 'Enter note text...';
+					const confirmButton = document.createElement('button');
+					confirmButton.type = 'button';
+					confirmButton.className = 'text-item-confirm';
+					confirmButton.textContent = 'Save';
+					confirmButton.title = 'Save note';
+					confirmButton.addEventListener('click', () => {
+						const trimmed = input.value.trim();
+						if (trimmed) {
+							textItem.text = trimmed;
+							editingTextItems.delete(textItem.id);
+							render();
+						}
+					});
+					const cancelButton = document.createElement('button');
+					cancelButton.type = 'button';
+					cancelButton.className = 'text-item-cancel';
+					cancelButton.textContent = 'Cancel';
+					cancelButton.title = 'Cancel';
+					cancelButton.addEventListener('click', () => {
+						editingTextItems.delete(textItem.id);
+						if (textItem.text === '') {
+							if (subgroup) {
+								const index = subgroup.textItems.indexOf(textItem.id);
+								if (index !== -1) {
+									subgroup.textItems.splice(index, 1);
+								}
+							} else {
+								const index = group.textItems.indexOf(textItem.id);
+								if (index !== -1) {
+									group.textItems.splice(index, 1);
+								}
+							}
+						}
+						render();
+					});
+					row.appendChild(input);
+					row.appendChild(confirmButton);
+					row.appendChild(cancelButton);
+					setTimeout(() => input.focus(), 0);
+				} else {
+					const label = document.createElement('div');
+					label.className = 'text-label';
+					label.textContent = textItem.text;
+					const editButton = document.createElement('button');
+					editButton.type = 'button';
+					editButton.className = 'text-item-edit';
+					editButton.textContent = 'Edit';
+					editButton.title = 'Edit note';
+					editButton.addEventListener('click', () => {
+						toggleTextItemEditMode(textItem.id);
+					});
+					const deleteButton = document.createElement('button');
+					deleteButton.type = 'button';
+					deleteButton.className = 'text-item-delete';
+					deleteButton.textContent = 'Delete';
+					deleteButton.title = 'Delete note';
+					deleteButton.addEventListener('click', () => {
+						editingTextItems.delete(textItem.id);
+						if (subgroup) {
+							const index = subgroup.textItems.indexOf(textItem.id);
+							if (index !== -1) {
+								subgroup.textItems.splice(index, 1);
+							}
+						} else {
+							const index = group.textItems.indexOf(textItem.id);
+							if (index !== -1) {
+								group.textItems.splice(index, 1);
+							}
+						}
+						render();
+					});
+					row.appendChild(label);
+					row.appendChild(editButton);
+					row.appendChild(deleteButton);
+					row.addEventListener('dragstart', event => {
+						if (!event.dataTransfer) {
+							return;
+						}
+						event.dataTransfer.setData('application/x-pr-text-item-id', textItem.id);
+						event.dataTransfer.setData('text/plain', textItem.id);
+						event.dataTransfer.effectAllowed = 'move';
+					});
+				}
+				return row;
+			}
+
 			function createSubgroupElement(group, subgroup) {
 				const container = document.createElement('section');
 				container.className = 'subgroup';
@@ -608,6 +889,20 @@ export class PullRequestFilesWebviewPanel {
 				const count = document.createElement('div');
 				count.className = 'subgroup-count';
 				count.textContent = subgroup.fileIds.length + ' ' + (subgroup.fileIds.length === 1 ? 'file' : 'files');
+				const addNoteButton = document.createElement('button');
+				addNoteButton.type = 'button';
+				addNoteButton.textContent = 'Add Note';
+				addNoteButton.addEventListener('click', () => {
+					textItemCounter += 1;
+					subgroup.textItems = subgroup.textItems || [];
+					const textItemId = 'text-item-' + textItemCounter;
+					subgroup.textItems.push(textItemId);
+					subgroup.itemOrder = subgroup.itemOrder || [];
+					subgroup.itemOrder.push(textItemId);
+					subgroup.textItemsMap = subgroup.textItemsMap || {};
+					subgroup.textItemsMap[textItemId] = { id: textItemId, text: '' };
+					render();
+				});
 				const openButton = document.createElement('button');
 				openButton.type = 'button';
 				openButton.textContent = openChangesLabel;
@@ -629,6 +924,7 @@ export class PullRequestFilesWebviewPanel {
 				collapseButton.addEventListener('click', () => toggleSubgroupCollapsed(subgroup.id));
 				header.appendChild(title);
 				header.appendChild(count);
+				header.appendChild(addNoteButton);
 				header.appendChild(openButton);
 				header.appendChild(collapseButton);
 				const body = document.createElement('div');
@@ -650,21 +946,33 @@ export class PullRequestFilesWebviewPanel {
 					if (!event.dataTransfer) {
 						return;
 					}
-					const fileId = event.dataTransfer.getData('application/x-pr-file-id') || event.dataTransfer.getData('text/plain');
+					const fileId = event.dataTransfer.getData('application/x-pr-file-id');
+					const textItemId = event.dataTransfer.getData('application/x-pr-text-item-id');
 					if (fileId) {
 						moveFileToGroup(fileId, group.id, subgroup.id);
+					} else if (textItemId) {
+						moveTextItemToGroup(textItemId, group.id, subgroup.id);
 					}
 				});
-				if (subgroup.fileIds.length === 0) {
+				if (subgroup.fileIds.length === 0 && (!subgroup.textItems || subgroup.textItems.length === 0)) {
 					const empty = document.createElement('div');
 					empty.className = 'empty-group';
 					empty.textContent = emptyGroupText;
 					body.appendChild(empty);
 				} else {
-					subgroup.fileIds.forEach(fileId => {
-						const file = files.find(item => item.id === fileId);
-						if (file) {
-							body.appendChild(createFileElement(file));
+					const itemOrder = subgroup.itemOrder || [];
+					itemOrder.forEach(itemId => {
+						if (itemId.startsWith('file-')) {
+							const file = files.find(item => item.id === itemId);
+							if (file) {
+								body.appendChild(createFileElement(file));
+							}
+						} else if (itemId.startsWith('text-item-')) {
+							const textItem = subgroup.textItemsMap && subgroup.textItemsMap[itemId];
+							if (textItem) {
+								const isEditing = textItem.text === '';
+								body.appendChild(createTextItemElement(textItem, group, subgroup, isEditing));
+							}
 						}
 					});
 				}
@@ -713,7 +1021,21 @@ export class PullRequestFilesWebviewPanel {
 				addSubgroupButton.addEventListener('click', () => {
 					subgroupCounter += 1;
 					const name = getUniqueSubgroupName(group, newSubgroupBaseName);
-					group.subgroups.push({ id: 'subgroup-' + subgroupCounter, name: name, fileIds: [] });
+					group.subgroups.push({ id: 'subgroup-' + subgroupCounter, name: name, fileIds: [], textItems: [], textItemsMap: {}, itemOrder: [] });
+					render();
+				});
+				const addNoteButton = document.createElement('button');
+				addNoteButton.type = 'button';
+				addNoteButton.textContent = 'Add Note';
+				addNoteButton.addEventListener('click', () => {
+					textItemCounter += 1;
+					group.textItems = group.textItems || [];
+					group.textItemsMap = group.textItemsMap || {};
+					group.itemOrder = group.itemOrder || [];
+					const textItemId = 'text-item-' + textItemCounter;
+					group.textItems.push(textItemId);
+					group.itemOrder.push(textItemId);
+					group.textItemsMap[textItemId] = { id: textItemId, text: '' };
 					render();
 				});
 				const openButton = document.createElement('button');
@@ -735,6 +1057,7 @@ export class PullRequestFilesWebviewPanel {
 				header.appendChild(title);
 				header.appendChild(count);
 				header.appendChild(addSubgroupButton);
+				header.appendChild(addNoteButton);
 				header.appendChild(openButton);
 				header.appendChild(collapseButton);
 				const body = document.createElement('div');
@@ -756,21 +1079,33 @@ export class PullRequestFilesWebviewPanel {
 					if (!event.dataTransfer) {
 						return;
 					}
-					const fileId = event.dataTransfer.getData('application/x-pr-file-id') || event.dataTransfer.getData('text/plain');
+					const fileId = event.dataTransfer.getData('application/x-pr-file-id');
+					const textItemId = event.dataTransfer.getData('application/x-pr-text-item-id');
 					if (fileId) {
 						moveFileToGroup(fileId, group.id);
+					} else if (textItemId) {
+						moveTextItemToGroup(textItemId, group.id);
 					}
 				});
-				if (group.fileIds.length === 0) {
+				if (group.fileIds.length === 0 && (!group.textItems || group.textItems.length === 0)) {
 					const empty = document.createElement('div');
 					empty.className = 'empty-group';
 					empty.textContent = emptyGroupText;
 					body.appendChild(empty);
 				} else {
-					group.fileIds.forEach(fileId => {
-						const file = files.find(item => item.id === fileId);
-						if (file) {
-							body.appendChild(createFileElement(file));
+					const itemOrder = group.itemOrder || [];
+					itemOrder.forEach(itemId => {
+						if (itemId.startsWith('file-')) {
+							const file = files.find(item => item.id === itemId);
+							if (file) {
+								body.appendChild(createFileElement(file));
+							}
+						} else if (itemId.startsWith('text-item-')) {
+							const textItem = group.textItemsMap && group.textItemsMap[itemId];
+							if (textItem) {
+								const isEditing = textItem.text === '';
+								body.appendChild(createTextItemElement(textItem, group, null, isEditing));
+							}
 						}
 					});
 				}
