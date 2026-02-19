@@ -8,6 +8,7 @@ import * as vscode from 'vscode';
 import { FolderRepositoryManager } from './folderRepositoryManager';
 import { IRawFileChange } from './interface';
 import { PullRequestModel } from './pullRequestModel';
+import { parsePatch } from '../common/diffHunk';
 import Logger from '../common/logger';
 import { formatError } from '../common/utils';
 import { generateUuid } from '../common/uuid';
@@ -193,6 +194,23 @@ export class PullRequestFilesWebviewPanel {
 			{ additions: 0, deletions: 0 },
 		);
 		const fileItems = files.map((file, index) => {
+			const hunks = file.patch ? parsePatch(file.patch) : [];
+			const hunkItems = hunks.map((hunk, hunkIndex) => {
+				const lines = hunk.diffLines.map(diffLine => ({
+					type: diffLine.type,
+					oldLineNumber: diffLine.oldLineNumber,
+					newLineNumber: diffLine.newLineNumber,
+					text: diffLine.raw,
+				}));
+				return {
+					id: `hunk-${index}-${hunkIndex}`,
+					oldLineNumber: hunk.oldLineNumber,
+					oldLength: hunk.oldLength,
+					newLineNumber: hunk.newLineNumber,
+					newLength: hunk.newLength,
+					lines: lines,
+				};
+			});
 			return {
 				id: `file-${index}`,
 				fileName: file.filename,
@@ -200,6 +218,7 @@ export class PullRequestFilesWebviewPanel {
 				status: file.status,
 				additions: file.additions,
 				deletions: file.deletions,
+				hunks: hunkItems,
 			};
 		});
 
@@ -389,6 +408,74 @@ export class PullRequestFilesWebviewPanel {
 				white-space: nowrap;
 				font-size: 11px;
 			}
+			.file-hunks {
+				display: grid;
+				gap: 12px;
+				padding: 8px 0;
+				margin-top: 8px;
+				border-top: 1px solid var(--vscode-editorWidget-border);
+			}
+			.hunk {
+				border: 1px solid var(--vscode-editorWidget-border);
+				border-radius: 4px;
+				background: var(--vscode-editorWidget-background);
+				overflow: hidden;
+				cursor: grab;
+				transition: all 0.2s ease;
+				user-select: none;
+			}
+			.hunk:hover {
+				border-color: var(--vscode-focusBorder);
+				box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+			}
+			.hunk.dragging {
+				opacity: 0.5;
+				cursor: grabbing;
+			}
+			.hunk.drag-over {
+				border-color: var(--vscode-focusBorder);
+				background: var(--vscode-list-hoverBackground);
+				box-shadow: 0 0 0 2px var(--vscode-focusBorder);
+			}
+			.hunk-header {
+				background: var(--vscode-editorCodeLens-background);
+				color: var(--vscode-editorCodeLens-foreground);
+				padding: 4px 8px;
+				font-size: 11px;
+				font-family: var(--vscode-editor-font-family);
+				white-space: pre;
+				overflow-x: auto;
+			}
+			.hunk-lines {
+				display: grid;
+				gap: 0;
+			}
+			.diff-line {
+				padding: 2px 8px;
+				font-family: var(--vscode-editor-font-family);
+				font-size: 12px;
+				white-space: pre-wrap;
+				word-wrap: break-word;
+				margin: 0;
+			}
+			.diff-line-header {
+				background: var(--vscode-editorCodeLens-background);
+				color: var(--vscode-editorCodeLens-foreground);
+				padding: 2px 4px;
+				margin: 4px 0 0 0;
+			}
+			.diff-line-added {
+				background: var(--vscode-diffEditor-insertedLineBackground);
+				color: var(--vscode-gitDecoration-addedResourceForeground);
+			}
+			.diff-line-removed {
+				background: var(--vscode-diffEditor-removedLineBackground);
+				color: var(--vscode-gitDecoration-deletedResourceForeground);
+			}
+			.diff-line-context {
+				background: transparent;
+				color: var(--vscode-foreground);
+			}
 			.text-item {
 				display: grid;
 				grid-template-columns: 1fr auto auto;
@@ -504,7 +591,21 @@ export class PullRequestFilesWebviewPanel {
 			let textItemCounter = 1;
 			const collapsedGroups = new Set();
 			const collapsedSubgroups = new Set();
+			const collapsedFiles = new Set();
 			const editingTextItems = new Set();
+
+			// Type constants matching DiffChangeType from diffHunk.ts
+			const DiffChangeType = {
+				Context: 0,
+				Add: 1,
+				Delete: 2,
+				Control: 3,
+			};
+
+			// File tracking for hunk drag-and-drop
+			let draggedHunk = null;
+			let draggedFromFileIndex = null;
+			let draggedFromHunkIndex = null;
 			const groups = [
 				{ id: 'group-' + groupCounter, name: defaultGroupName, fileIds: files.map(file => file.id), subgroups: [], textItems: [], itemOrder: files.map(file => file.id) },
 			];
@@ -725,27 +826,129 @@ export class PullRequestFilesWebviewPanel {
 				render();
 			}
 
-			function createFileElement(file) {
+			function toggleFileCollapsed(fileId) {
+				if (collapsedFiles.has(fileId)) {
+					collapsedFiles.delete(fileId);
+				} else {
+					collapsedFiles.add(fileId);
+				}
+				render();
+			}
+
+			function isFileCollapsed(fileId) {
+				return collapsedFiles.has(fileId);
+			}
+
+			function createHunkElement(file, hunk, fileIndex, hunkIndex) {
+				const hunkContainer = document.createElement('div');
+				hunkContainer.className = 'hunk';
+				hunkContainer.draggable = true;
+				hunkContainer.dataset.fileIndex = fileIndex;
+				hunkContainer.dataset.hunkIndex = hunkIndex;
+
+				// Drag events for hunk reordering
+				hunkContainer.addEventListener('dragstart', (e) => {
+					draggedHunk = hunk;
+					draggedFromFileIndex = fileIndex;
+					draggedFromHunkIndex = hunkIndex;
+					e.dataTransfer.effectAllowed = 'move';
+					hunkContainer.classList.add('dragging');
+				});
+
+				hunkContainer.addEventListener('dragend', (e) => {
+					hunkContainer.classList.remove('dragging');
+					draggedHunk = null;
+					draggedFromFileIndex = null;
+					draggedFromHunkIndex = null;
+					document.querySelectorAll('.hunk.drag-over').forEach(el => {
+						el.classList.remove('drag-over');
+					});
+				});
+
+				hunkContainer.addEventListener('dragover', (e) => {
+					if (draggedHunk) {
+						e.preventDefault();
+						e.dataTransfer.dropEffect = 'move';
+						hunkContainer.classList.add('drag-over');
+					}
+				});
+
+				hunkContainer.addEventListener('dragleave', (e) => {
+					hunkContainer.classList.remove('drag-over');
+				});
+
+				hunkContainer.addEventListener('drop', (e) => {
+					e.preventDefault();
+					if (draggedHunk && draggedFromFileIndex === fileIndex && draggedFromHunkIndex !== hunkIndex) {
+						// Reorder hunks within the same file
+						const hunks = files[fileIndex].hunks;
+						const [removed] = hunks.splice(draggedFromHunkIndex, 1);
+						const targetIndex = draggedFromHunkIndex < hunkIndex ? hunkIndex - 1 : hunkIndex;
+						hunks.splice(targetIndex, 0, removed);
+						render();
+					}
+					hunkContainer.classList.remove('drag-over');
+				});
+
+				const header = document.createElement('div');
+				header.className = 'hunk-header';
+				header.style.pointerEvents = 'none';
+				header.textContent = '@@ -' + hunk.oldLineNumber + ',' + hunk.oldLength + ' +' + hunk.newLineNumber + ',' + hunk.newLength + ' @@';
+
+				const linesContainer = document.createElement('div');
+				linesContainer.className = 'hunk-lines';
+				linesContainer.style.pointerEvents = 'none';
+
+				for (const diffLine of hunk.lines) {
+					const lineElement = document.createElement('div');
+					lineElement.className = 'diff-line';
+
+					if (diffLine.type === DiffChangeType.Add) {
+						lineElement.className += ' diff-line-added';
+					} else if (diffLine.type === DiffChangeType.Delete) {
+						lineElement.className += ' diff-line-removed';
+					} else if (diffLine.type === DiffChangeType.Control) {
+						lineElement.className += ' diff-line-header';
+					} else {
+						lineElement.className += ' diff-line-context';
+					}
+
+					lineElement.textContent = diffLine.text;
+					linesContainer.appendChild(lineElement);
+				}
+
+				hunkContainer.appendChild(header);
+				hunkContainer.appendChild(linesContainer);
+
+				return hunkContainer;
+			}
+
+			function createFileElement(file, fileIndex) {
 				const row = document.createElement('div');
 				row.className = 'file-item';
-				row.draggable = true;
 				row.dataset.fileId = file.id;
+
 				const label = document.createElement('div');
 				label.className = 'file-label';
 				label.textContent = file.label;
+
 				const status = document.createElement('div');
 				status.className = 'file-status status-' + file.status;
 				status.textContent = file.status.toUpperCase();
+
 				const additions = document.createElement('div');
 				additions.className = 'file-count status-' + file.status;
 				additions.textContent = '+' + file.additions;
+
 				const deletions = document.createElement('div');
 				deletions.className = 'file-count status-' + file.status;
 				deletions.textContent = '-' + file.deletions;
+
 				row.appendChild(label);
 				row.appendChild(status);
 				row.appendChild(additions);
 				row.appendChild(deletions);
+
 				row.addEventListener('dragstart', event => {
 					if (!event.dataTransfer) {
 						return;
@@ -754,6 +957,34 @@ export class PullRequestFilesWebviewPanel {
 					event.dataTransfer.setData('text/plain', file.id);
 					event.dataTransfer.effectAllowed = 'move';
 				});
+
+				// Add hunks if available
+				if (file.hunks && file.hunks.length > 0) {
+					const hunksContainer = document.createElement('div');
+					hunksContainer.className = 'file-hunks';
+
+					// Toggle button for hunks
+					const toggleButton = document.createElement('button');
+					toggleButton.type = 'button';
+					toggleButton.textContent = isFileCollapsed(file.id) ? expandLabel : collapseLabel;
+					toggleButton.style.gridColumn = '1';
+					toggleButton.style.marginBottom = '-8px';
+					toggleButton.style.fontSize = '11px';
+					toggleButton.style.padding = '2px 4px';
+					toggleButton.addEventListener('click', () => toggleFileCollapsed(file.id));
+
+					hunksContainer.appendChild(toggleButton);
+
+					if (!isFileCollapsed(file.id)) {
+						for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
+							const hunk = file.hunks[hunkIndex];
+							hunksContainer.appendChild(createHunkElement(file, hunk, fileIndex, hunkIndex));
+						}
+					}
+
+					row.appendChild(hunksContainer);
+				}
+
 				return row;
 			}
 
@@ -965,7 +1196,8 @@ export class PullRequestFilesWebviewPanel {
 						if (itemId.startsWith('file-')) {
 							const file = files.find(item => item.id === itemId);
 							if (file) {
-								body.appendChild(createFileElement(file));
+								const fileIndex = files.indexOf(file);
+								body.appendChild(createFileElement(file, fileIndex));
 							}
 						} else if (itemId.startsWith('text-item-')) {
 							const textItem = subgroup.textItemsMap && subgroup.textItemsMap[itemId];
@@ -1098,7 +1330,8 @@ export class PullRequestFilesWebviewPanel {
 						if (itemId.startsWith('file-')) {
 							const file = files.find(item => item.id === itemId);
 							if (file) {
-								body.appendChild(createFileElement(file));
+								const fileIndex = files.indexOf(file);
+								body.appendChild(createFileElement(file, fileIndex));
 							}
 						} else if (itemId.startsWith('text-item-')) {
 							const textItem = group.textItemsMap && group.textItemsMap[itemId];
