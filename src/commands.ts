@@ -778,7 +778,7 @@ export function registerCommands(
 			if (!folderReposManager) {
 				return;
 			}
-			return PullRequestFilesWebviewPanel.createOrShow(pullRequestModel);
+			return PullRequestFilesWebviewPanel.createOrShow(folderReposManager, pullRequestModel);
 		}),
 	);
 
