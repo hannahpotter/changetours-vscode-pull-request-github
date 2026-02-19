@@ -26,6 +26,7 @@ import { Issue } from './github/interface';
 import { IssueModel } from './github/issueModel';
 import { IssueOverviewPanel } from './github/issueOverview';
 import { GHPRComment, GHPRCommentThread, TemporaryComment } from './github/prComment';
+import { PullRequestFilesWebviewPanel } from './github/pullRequestFilesWebview';
 import { PullRequestModel } from './github/pullRequestModel';
 import { PullRequestOverviewPanel } from './github/pullRequestOverview';
 import { chooseItem } from './github/quickPicks';
@@ -707,6 +708,38 @@ export function registerCommands(
 		);
 	}));
 
+	async function resolvePullRequestModelFromContext(
+		pr: PRNode | RepositoryChangesNode | PullRequestModel | OverviewContext | CrossChatSessionWithPR | { path: string },
+	): Promise<PullRequestModel | undefined> {
+		if (pr instanceof PRNode || pr instanceof RepositoryChangesNode) {
+			return pr.pullRequestModel;
+		}
+		if (pr instanceof PullRequestModel) {
+			return pr;
+		}
+		if (isCrossChatSessionWithPR(pr)) {
+			const resolved = await resolvePr({
+				owner: pr.pullRequestDetails.repository.owner.login,
+				repo: pr.pullRequestDetails.repository.name,
+				number: pr.pullRequestDetails.number,
+				preventDefaultContextMenuItems: true,
+			});
+			return resolved?.pr;
+		}
+		if (contextHasPath(pr)) {
+			const { path } = pr;
+			const prNumber = prNumberFromUriPath(path);
+			if (!prNumber) {
+				return undefined;
+			}
+			const folderManager = reposManager.folderManagers[0];
+			const pullRequest = await folderManager.fetchById(folderManager.gitHubRepositories[0], Number(prNumber));
+			return pullRequest;
+		}
+		const resolved = await resolvePr(pr as BaseContext);
+		return resolved?.pr;
+	}
+
 	context.subscriptions.push(
 		vscode.commands.registerCommand('pr.openChanges', async (pr: PRNode | RepositoryChangesNode | PullRequestModel | OverviewContext | CrossChatSessionWithPR | { path: string } | undefined) => {
 			if (pr === undefined) {
@@ -715,38 +748,7 @@ export function registerCommands(
 				return vscode.window.showErrorMessage(vscode.l10n.t('No pull request was selected to checkout, please try again.'));
 			}
 
-			let pullRequestModel: PullRequestModel | undefined;
-
-			if (pr instanceof PRNode || pr instanceof RepositoryChangesNode) {
-				pullRequestModel = pr.pullRequestModel;
-			} else if (pr instanceof PullRequestModel) {
-				pullRequestModel = pr;
-			} else if (isCrossChatSessionWithPR(pr)) {
-				const resolved = await resolvePr({
-					owner: pr.pullRequestDetails.repository.owner.login,
-					repo: pr.pullRequestDetails.repository.name,
-					number: pr.pullRequestDetails.number,
-					preventDefaultContextMenuItems: true,
-				});
-				pullRequestModel = resolved?.pr;
-			}
-			else if (contextHasPath(pr)) {
-				const { path } = pr;
-				const prNumber = prNumberFromUriPath(path);
-				if (!prNumber) {
-					return vscode.window.showErrorMessage(vscode.l10n.t('No pull request number found in context path.'));
-				}
-				const folderManager = reposManager.folderManagers[0];
-				const pullRequest = await folderManager.fetchById(folderManager.gitHubRepositories[0], Number(prNumber));
-				if (!pullRequest) {
-					return vscode.window.showErrorMessage(vscode.l10n.t('Unable to find pull request #{0}', prNumber.toString()));
-				}
-				pullRequestModel = pullRequest;
-			}
-			else {
-				const resolved = await resolvePr(pr as BaseContext);
-				pullRequestModel = resolved?.pr;
-			}
+			const pullRequestModel = await resolvePullRequestModelFromContext(pr);
 
 			if (!pullRequestModel) {
 				return vscode.window.showErrorMessage(vscode.l10n.t('No pull request found to open changes.'));
@@ -757,6 +759,26 @@ export function registerCommands(
 				return;
 			}
 			return PullRequestModel.openChanges(folderReposManager, pullRequestModel);
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.openChangedFiles', async (pr: PRNode | RepositoryChangesNode | PullRequestModel | OverviewContext | CrossChatSessionWithPR | { path: string } | undefined) => {
+			if (pr === undefined) {
+				Logger.error('Unexpectedly received undefined when picking a PR.', logId);
+				return vscode.window.showErrorMessage(vscode.l10n.t('No pull request was selected to open changed files.'));
+			}
+
+			const pullRequestModel = await resolvePullRequestModelFromContext(pr);
+			if (!pullRequestModel) {
+				return vscode.window.showErrorMessage(vscode.l10n.t('No pull request found to open changed files.'));
+			}
+
+			const folderReposManager = reposManager.getManagerForIssueModel(pullRequestModel);
+			if (!folderReposManager) {
+				return;
+			}
+			return PullRequestFilesWebviewPanel.createOrShow(pullRequestModel);
 		}),
 	);
 

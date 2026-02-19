@@ -965,6 +965,12 @@
 				"icon": "$(diff-multiple)"
 			},
 			{
+				"command": "pr.openChangedFiles",
+				"title": "%command.pr.openChangedFiles.title%",
+				"category": "%command.pull.request.category%",
+				"icon": "$(list-flat)"
+			},
+			{
 				"command": "pr.pickOnVscodeDev",
 				"title": "%command.pr.pickOnVscodeDev.title%",
 				"category": "%command.pull.request.category%",
@@ -2842,6 +2848,11 @@
 					"group": "2_pullrequest@1"
 				},
 				{
+					"command": "pr.openChangedFiles",
+					"when": "view =~ /(pr|prStatus):github/ && viewItem =~ /(pullrequest|description)/",
+					"group": "2_pullrequest@1.5"
+				},
+				{
 					"command": "pr.openDescriptionToTheSide",
 					"group": "2_pullrequest@2",
 					"when": "view =~ /(pr|prStatus):github/ && viewItem =~ /(pullrequest|description)/"
@@ -3592,6 +3603,11 @@
 				{
 					"command": "pr.openChanges",
 					"group": "checkout@0",
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
+				},
+				{
+					"command": "pr.openChangedFiles",
+					"group": "checkout@3",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{
