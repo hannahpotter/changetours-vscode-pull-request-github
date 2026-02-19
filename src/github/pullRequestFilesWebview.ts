@@ -5,12 +5,12 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import Logger from '../common/logger';
-import { formatError } from '../common/utils';
-import { generateUuid } from '../common/uuid';
 import { FolderRepositoryManager } from './folderRepositoryManager';
 import { IRawFileChange } from './interface';
 import { PullRequestModel } from './pullRequestModel';
+import Logger from '../common/logger';
+import { formatError } from '../common/utils';
+import { generateUuid } from '../common/uuid';
 
 const VIEW_TYPE = 'PullRequestChangedFiles';
 
@@ -208,8 +208,12 @@ export class PullRequestFilesWebviewPanel {
 		const defaultGroupName = vscode.l10n.t('Changed Files');
 		const emptyGroupText = vscode.l10n.t('Drop files here');
 		const newGroupBaseName = vscode.l10n.t('New Group');
+		const newSubgroupBaseName = vscode.l10n.t('New Subgroup');
 		const duplicateGroupMessage = vscode.l10n.t('A group with that name already exists.');
 		const openChangesLabel = vscode.l10n.t('Open Changes');
+		const addSubgroupLabel = vscode.l10n.t('Add Subgroup');
+		const collapseLabel = vscode.l10n.t('Collapse');
+		const expandLabel = vscode.l10n.t('Expand');
 
 		return `<!DOCTYPE html>
 <html lang="en">
@@ -297,6 +301,56 @@ export class PullRequestFilesWebviewPanel {
 				color: var(--vscode-descriptionForeground);
 				white-space: nowrap;
 			}
+			.subgroups {
+				display: grid;
+				gap: 8px;
+				margin-top: 8px;
+			}
+			.subgroup {
+				border: 1px dashed var(--vscode-editorWidget-border);
+				border-radius: 6px;
+				padding: 6px;
+				background: var(--vscode-editor-background);
+			}
+			.subgroup-header {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				margin-bottom: 6px;
+				gap: 8px;
+			}
+			.subgroup-title {
+				font-size: 12px;
+				font-weight: 600;
+				background: transparent;
+				border: 1px solid transparent;
+				color: inherit;
+				padding: 2px 4px;
+				border-radius: 4px;
+				width: 100%;
+			}
+			.subgroup-title:focus {
+				outline: none;
+				border-color: var(--vscode-focusBorder);
+				background: var(--vscode-input-background);
+			}
+			.subgroup-count {
+				font-size: 11px;
+				color: var(--vscode-descriptionForeground);
+				white-space: nowrap;
+			}
+			.subgroup-body {
+				display: grid;
+				gap: 6px;
+				min-height: 24px;
+			}
+			.subgroup-body.drag-over {
+				outline: 1px dashed var(--vscode-focusBorder);
+				outline-offset: 2px;
+			}
+			.subgroup-body.is-collapsed {
+				display: none;
+			}
 			.group-body {
 				display: grid;
 				gap: 6px;
@@ -305,6 +359,9 @@ export class PullRequestFilesWebviewPanel {
 			.group-body.drag-over {
 				outline: 1px dashed var(--vscode-focusBorder);
 				outline-offset: 2px;
+			}
+			.group-body.is-collapsed {
+				display: none;
 			}
 			.file-item {
 				display: grid;
@@ -369,10 +426,17 @@ export class PullRequestFilesWebviewPanel {
 			const newGroupBaseName = ${serializeForScript(newGroupBaseName)};
 			const duplicateGroupMessage = ${serializeForScript(duplicateGroupMessage)};
 			const openChangesLabel = ${serializeForScript(openChangesLabel)};
+			const newSubgroupBaseName = ${serializeForScript(newSubgroupBaseName)};
+			const addSubgroupLabel = ${serializeForScript(addSubgroupLabel)};
+			const collapseLabel = ${serializeForScript(collapseLabel)};
+			const expandLabel = ${serializeForScript(expandLabel)};
 			const vscodeApi = acquireVsCodeApi();
 			let groupCounter = 1;
+			let subgroupCounter = 1;
+			const collapsedGroups = new Set();
+			const collapsedSubgroups = new Set();
 			const groups = [
-				{ id: 'group-' + groupCounter, name: defaultGroupName, fileIds: files.map(file => file.id) },
+				{ id: 'group-' + groupCounter, name: defaultGroupName, fileIds: files.map(file => file.id), subgroups: [] },
 			];
 
 			const groupsRoot = document.getElementById('groups');
@@ -387,6 +451,11 @@ export class PullRequestFilesWebviewPanel {
 				return groups.some(group => group.id !== excludeGroupId && normalizeName(group.name) === target);
 			}
 
+			function isSubgroupNameTaken(group, name, excludeSubgroupId) {
+				const target = normalizeName(name);
+				return group.subgroups.some(subgroup => subgroup.id !== excludeSubgroupId && normalizeName(subgroup.name) === target);
+			}
+
 			function getUniqueGroupName(baseName) {
 				let suffix = groups.length + 1;
 				let candidate = baseName;
@@ -397,16 +466,80 @@ export class PullRequestFilesWebviewPanel {
 				return candidate;
 			}
 
-			function moveFileToGroup(fileId, targetGroupId) {
+			function getUniqueSubgroupName(group, baseName) {
+				let suffix = group.subgroups.length + 1;
+				let candidate = baseName;
+				while (isSubgroupNameTaken(group, candidate)) {
+					candidate = baseName + ' ' + suffix;
+					suffix += 1;
+				}
+				return candidate;
+			}
+
+			function getGroupTotalCount(group) {
+				return group.fileIds.length + group.subgroups.reduce((total, subgroup) => total + subgroup.fileIds.length, 0);
+			}
+
+			function getGroupFileNames(group) {
+				const ids = group.fileIds.slice();
+				group.subgroups.forEach(subgroup => ids.push(...subgroup.fileIds));
+				return ids
+					.map(fileId => files.find(item => item.id === fileId))
+					.filter(file => file && file.fileName)
+					.map(file => file.fileName);
+			}
+
+			function moveFileToGroup(fileId, targetGroupId, targetSubgroupId) {
 				groups.forEach(group => {
 					const index = group.fileIds.indexOf(fileId);
 					if (index !== -1) {
 						group.fileIds.splice(index, 1);
 					}
+					group.subgroups.forEach(subgroup => {
+						const subgroupIndex = subgroup.fileIds.indexOf(fileId);
+						if (subgroupIndex !== -1) {
+							subgroup.fileIds.splice(subgroupIndex, 1);
+						}
+					});
 				});
 				const targetGroup = groups.find(group => group.id === targetGroupId);
 				if (targetGroup) {
-					targetGroup.fileIds.push(fileId);
+					if (targetSubgroupId) {
+						const targetSubgroup = targetGroup.subgroups.find(subgroup => subgroup.id === targetSubgroupId);
+						if (targetSubgroup) {
+							targetSubgroup.fileIds.push(fileId);
+						} else {
+							targetGroup.fileIds.push(fileId);
+						}
+					} else {
+						targetGroup.fileIds.push(fileId);
+					}
+				}
+				render();
+			}
+
+			function isGroupCollapsed(groupId) {
+				return collapsedGroups.has(groupId);
+			}
+
+			function isSubgroupCollapsed(subgroupId) {
+				return collapsedSubgroups.has(subgroupId);
+			}
+
+			function toggleGroupCollapsed(groupId) {
+				if (collapsedGroups.has(groupId)) {
+					collapsedGroups.delete(groupId);
+				} else {
+					collapsedGroups.add(groupId);
+				}
+				render();
+			}
+
+			function toggleSubgroupCollapsed(subgroupId) {
+				if (collapsedSubgroups.has(subgroupId)) {
+					collapsedSubgroups.delete(subgroupId);
+				} else {
+					collapsedSubgroups.add(subgroupId);
 				}
 				render();
 			}
@@ -443,6 +576,105 @@ export class PullRequestFilesWebviewPanel {
 				return row;
 			}
 
+			function createSubgroupElement(group, subgroup) {
+				const container = document.createElement('section');
+				container.className = 'subgroup';
+				container.dataset.groupId = group.id;
+				container.dataset.subgroupId = subgroup.id;
+				const header = document.createElement('div');
+				header.className = 'subgroup-header';
+				const title = document.createElement('input');
+				title.className = 'subgroup-title';
+				title.type = 'text';
+				title.value = subgroup.name;
+				title.setAttribute('aria-label', 'Subgroup name');
+				title.dataset.previousName = subgroup.name;
+				title.addEventListener('change', () => {
+					const trimmed = title.value.trim();
+					const previousName = title.dataset.previousName || subgroup.name;
+					if (!trimmed) {
+						title.value = previousName;
+						return;
+					}
+					if (isSubgroupNameTaken(group, trimmed, subgroup.id)) {
+						window.alert(duplicateGroupMessage);
+						title.value = previousName;
+						return;
+					}
+					subgroup.name = trimmed;
+					title.dataset.previousName = trimmed;
+					title.value = trimmed;
+				});
+				const count = document.createElement('div');
+				count.className = 'subgroup-count';
+				count.textContent = subgroup.fileIds.length + ' ' + (subgroup.fileIds.length === 1 ? 'file' : 'files');
+				const openButton = document.createElement('button');
+				openButton.type = 'button';
+				openButton.textContent = openChangesLabel;
+				openButton.disabled = subgroup.fileIds.length === 0;
+				openButton.addEventListener('click', () => {
+					const subgroupFileNames = subgroup.fileIds
+						.map(fileId => files.find(item => item.id === fileId))
+						.filter(file => file && file.fileName)
+						.map(file => file.fileName);
+					vscodeApi.postMessage({
+						command: 'openGroupChanges',
+						fileNames: subgroupFileNames,
+						groupName: group.name + ' / ' + subgroup.name,
+					});
+				});
+				const collapseButton = document.createElement('button');
+				collapseButton.type = 'button';
+				collapseButton.textContent = isSubgroupCollapsed(subgroup.id) ? expandLabel : collapseLabel;
+				collapseButton.addEventListener('click', () => toggleSubgroupCollapsed(subgroup.id));
+				header.appendChild(title);
+				header.appendChild(count);
+				header.appendChild(openButton);
+				header.appendChild(collapseButton);
+				const body = document.createElement('div');
+				body.className = 'subgroup-body';
+				if (isSubgroupCollapsed(subgroup.id)) {
+					body.classList.add('is-collapsed');
+				}
+				body.addEventListener('dragover', event => {
+					event.preventDefault();
+					body.classList.add('drag-over');
+					if (event.dataTransfer) {
+						event.dataTransfer.dropEffect = 'move';
+					}
+				});
+				body.addEventListener('dragleave', () => body.classList.remove('drag-over'));
+				body.addEventListener('drop', event => {
+					event.preventDefault();
+					body.classList.remove('drag-over');
+					if (!event.dataTransfer) {
+						return;
+					}
+					const fileId = event.dataTransfer.getData('application/x-pr-file-id') || event.dataTransfer.getData('text/plain');
+					if (fileId) {
+						moveFileToGroup(fileId, group.id, subgroup.id);
+					}
+				});
+				if (subgroup.fileIds.length === 0) {
+					const empty = document.createElement('div');
+					empty.className = 'empty-group';
+					empty.textContent = emptyGroupText;
+					body.appendChild(empty);
+				} else {
+					subgroup.fileIds.forEach(fileId => {
+						const file = files.find(item => item.id === fileId);
+						if (file) {
+							body.appendChild(createFileElement(file));
+						}
+					});
+				}
+				container.appendChild(header);
+				if (!isSubgroupCollapsed(subgroup.id)) {
+					container.appendChild(body);
+				}
+				return container;
+			}
+
 			function createGroupElement(group) {
 				const container = document.createElement('section');
 				container.className = 'group';
@@ -473,27 +705,43 @@ export class PullRequestFilesWebviewPanel {
 				});
 				const count = document.createElement('div');
 				count.className = 'group-count';
-				count.textContent = group.fileIds.length + ' ' + (group.fileIds.length === 1 ? 'file' : 'files');
+				const totalCount = getGroupTotalCount(group);
+				count.textContent = totalCount + ' ' + (totalCount === 1 ? 'file' : 'files');
+				const addSubgroupButton = document.createElement('button');
+				addSubgroupButton.type = 'button';
+				addSubgroupButton.textContent = addSubgroupLabel;
+				addSubgroupButton.addEventListener('click', () => {
+					subgroupCounter += 1;
+					const name = getUniqueSubgroupName(group, newSubgroupBaseName);
+					group.subgroups.push({ id: 'subgroup-' + subgroupCounter, name: name, fileIds: [] });
+					render();
+				});
 				const openButton = document.createElement('button');
 				openButton.type = 'button';
 				openButton.textContent = openChangesLabel;
-				openButton.disabled = group.fileIds.length === 0;
+				openButton.disabled = totalCount === 0;
 				openButton.addEventListener('click', () => {
-					const groupFileNames = group.fileIds
-						.map(fileId => files.find(item => item.id === fileId))
-						.filter(file => file && file.fileName)
-						.map(file => file.fileName);
+					const groupFileNames = getGroupFileNames(group);
 					vscodeApi.postMessage({
 						command: 'openGroupChanges',
 						fileNames: groupFileNames,
 						groupName: group.name,
 					});
 				});
+				const collapseButton = document.createElement('button');
+				collapseButton.type = 'button';
+				collapseButton.textContent = isGroupCollapsed(group.id) ? expandLabel : collapseLabel;
+				collapseButton.addEventListener('click', () => toggleGroupCollapsed(group.id));
 				header.appendChild(title);
 				header.appendChild(count);
+				header.appendChild(addSubgroupButton);
 				header.appendChild(openButton);
+				header.appendChild(collapseButton);
 				const body = document.createElement('div');
 				body.className = 'group-body';
+				if (isGroupCollapsed(group.id)) {
+					body.classList.add('is-collapsed');
+				}
 				body.addEventListener('dragover', event => {
 					event.preventDefault();
 					body.classList.add('drag-over');
@@ -526,8 +774,18 @@ export class PullRequestFilesWebviewPanel {
 						}
 					});
 				}
+				const subgroupsContainer = document.createElement('div');
+				subgroupsContainer.className = 'subgroups';
+				if (!isGroupCollapsed(group.id)) {
+					group.subgroups.forEach(subgroup => {
+						subgroupsContainer.appendChild(createSubgroupElement(group, subgroup));
+					});
+				}
 				container.appendChild(header);
-				container.appendChild(body);
+				if (!isGroupCollapsed(group.id)) {
+					container.appendChild(body);
+					container.appendChild(subgroupsContainer);
+				}
 				return container;
 			}
 
@@ -548,7 +806,7 @@ export class PullRequestFilesWebviewPanel {
 			createGroupButton.addEventListener('click', () => {
 				groupCounter += 1;
 				const name = getUniqueGroupName(newGroupBaseName);
-				groups.push({ id: 'group-' + groupCounter, name: name, fileIds: [] });
+				groups.push({ id: 'group-' + groupCounter, name: name, fileIds: [], subgroups: [] });
 				render();
 			});
 
