@@ -114,6 +114,14 @@ export interface PullRequest extends Issue {
 	generateDescriptionTitle?: string;
 }
 
+export interface ChangedFileInfo {
+	fileName: string;
+	status: string;
+	additions?: number;
+	deletions?: number;
+	previousFileName?: string;
+}
+
 export interface ProjectItemsReply {
 	projectItems: IProjectItem[] | undefined;
 }

@@ -760,6 +760,20 @@ export function registerCommands(
 		}),
 	);
 
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.openCodeTour', async (ctx: BaseContext | undefined) => {
+			if (!ctx) {
+				return;
+			}
+			const resolved = await resolvePr(ctx);
+			if (!resolved) {
+				return;
+			}
+			const { CodeTourPanel } = await import('./github/codeTourPanel');
+			return CodeTourPanel.createOrShow(context.extensionUri, resolved.pr);
+		}),
+	);
+
 	let isCheckingOutFromReadonlyFile = false;
 	context.subscriptions.push(vscode.commands.registerCommand('pr.checkoutFromReadonlyFile', async () => {
 		const uri = vscode.window.activeTextEditor?.document.uri;

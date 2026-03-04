@@ -965,6 +965,11 @@
 				"icon": "$(diff-multiple)"
 			},
 			{
+				"command": "pr.openCodeTour",
+				"title": "%command.pr.openCodeTour.title%",
+				"category": "%command.pull.request.category%"
+			},
+			{
 				"command": "pr.pickOnVscodeDev",
 				"title": "%command.pr.pickOnVscodeDev.title%",
 				"category": "%command.pull.request.category%",
@@ -2032,6 +2037,10 @@
 				},
 				{
 					"command": "pr.openChanges",
+					"when": "false"
+				},
+				{
+					"command": "pr.openCodeTour",
 					"when": "false"
 				},
 				{
@@ -3595,13 +3604,18 @@
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{
-					"command": "pr.checkoutOnVscodeDevFromDescription",
+					"command": "pr.openCodeTour",
 					"group": "checkout@1",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{
-					"command": "pr.checkoutOnCodespacesFromDescription",
+					"command": "pr.checkoutOnVscodeDevFromDescription",
 					"group": "checkout@2",
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
+				},
+				{
+					"command": "pr.checkoutOnCodespacesFromDescription",
+					"group": "checkout@3",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{

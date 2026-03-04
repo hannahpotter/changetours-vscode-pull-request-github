@@ -38,6 +38,7 @@ import { ITelemetry } from '../common/telemetry';
 import { EventType, ReviewEvent, SessionLinkInfo, TimelineEvent } from '../common/timelineEvent';
 import { asPromise, formatError } from '../common/utils';
 import { IRequestMessage, PULL_REQUEST_OVERVIEW_VIEW_TYPE } from '../common/webview';
+import { CodeTourPanel } from './codeTourPanel';
 
 export class PullRequestOverviewPanel extends IssueOverviewPanel<PullRequestModel> {
 	public static override ID: string = 'PullRequestOverviewPanel';
@@ -529,6 +530,8 @@ export class PullRequestOverviewPanel extends IssueOverviewPanel<PullRequestMode
 				return this.cancelGenerateDescription();
 			case 'pr.change-base-branch':
 				return this.changeBaseBranch(message);
+			case 'pr.open-code-tour':
+				return this.openCodeTour(message);
 		}
 	}
 
@@ -538,6 +541,11 @@ export class PullRequestOverviewPanel extends IssueOverviewPanel<PullRequestMode
 		} else {
 			PullRequestModel.openChanges(this._folderRepositoryManager, this._item);
 		}
+		return this._replyMessage(message, {});
+	}
+
+	private async openCodeTour(message: IRequestMessage<void>): Promise<void> {
+		await CodeTourPanel.createOrShow(this._extensionUri, this._item);
 		return this._replyMessage(message, {});
 	}
 
