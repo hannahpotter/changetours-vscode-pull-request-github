@@ -79,6 +79,7 @@ export class CodeTourPanel extends WebviewBase {
 				additions: change.additions,
 				deletions: change.deletions,
 				previousFileName: change.previous_filename,
+				patch: change.patch,
 			}));
 
 			this._postMessage({

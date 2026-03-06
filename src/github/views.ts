@@ -120,6 +120,7 @@ export interface ChangedFileInfo {
 	additions?: number;
 	deletions?: number;
 	previousFileName?: string;
+	patch?: string;
 }
 
 export interface ProjectItemsReply {

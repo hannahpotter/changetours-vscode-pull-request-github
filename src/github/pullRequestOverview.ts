@@ -7,6 +7,7 @@
 import * as vscode from 'vscode';
 import { OpenCommitChangesArgs } from '../../common/views';
 import { openPullRequestOnGitHub } from '../commands';
+import { CodeTourPanel } from './codeTourPanel';
 import { getCopilotApi } from './copilotApi';
 import { SessionIdForPr } from './copilotRemoteAgent';
 import { FolderRepositoryManager } from './folderRepositoryManager';
@@ -38,7 +39,6 @@ import { ITelemetry } from '../common/telemetry';
 import { EventType, ReviewEvent, SessionLinkInfo, TimelineEvent } from '../common/timelineEvent';
 import { asPromise, formatError } from '../common/utils';
 import { IRequestMessage, PULL_REQUEST_OVERVIEW_VIEW_TYPE } from '../common/webview';
-import { CodeTourPanel } from './codeTourPanel';
 
 export class PullRequestOverviewPanel extends IssueOverviewPanel<PullRequestModel> {
 	public static override ID: string = 'PullRequestOverviewPanel';
