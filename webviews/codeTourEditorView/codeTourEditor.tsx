@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CodeTourDocument, HunkReference, TourTextNode } from '../../src/github/codeTourMarkdown';
 import { DiffTable } from '../common/DiffTable';
 import { parsePatch } from '../common/diffUtils';
-import { gripperIcon } from '../components/icon';
+import { chevronDownIcon, gripperIcon } from '../components/icon';
 
 // Editor-only node type: a pending drop zone placeholder (never serialized).
 interface TourDropZoneNode {
@@ -432,7 +432,6 @@ function DropZoneBlock({
 				onDragLeave={handleDragLeave}
 				onDrop={handleDrop}
 			>
-				<span className="codicon codicon-add" />
 				<span>Drop a hunk here</span>
 			</div>
 			<button
@@ -455,7 +454,6 @@ function HunkBlock({ node, onRemove }: { node: EditorHunkNode; onRemove: (id: st
 	return (
 		<div className="tour-hunk">
 			<div className="tour-hunk-header">
-				<span className="codicon codicon-file-code" />
 				<span className="tour-hunk-file">{file}</span>
 				<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
 				<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
@@ -641,10 +639,10 @@ function GroupBlock({
 		<div className={`tour-group tour-group-level-${node.level}`}>
 			<div className="tour-group-header">
 				<span
-					className={`expand-icon ${collapsed ? '' : 'expanded'}`}
+					className={`expand-icon icon-button ${collapsed ? 'closed' : ''}`}
 					onClick={() => setCollapsed(c => !c)}
 				>
-					&#9656;
+					{chevronDownIcon}
 				</span>
 				<input
 					className="tour-group-title-input"

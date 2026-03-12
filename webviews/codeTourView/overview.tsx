@@ -7,6 +7,7 @@ import React, { useCallback, useState } from 'react';
 import { ChangedFileInfo } from '../../src/github/views';
 import { DiffTable } from '../common/DiffTable';
 import { ParsedDiffLine, parsePatch } from '../common/diffUtils';
+import { chevronDownIcon } from '../components/icon';
 
 interface ChangedFilesOverviewProps {
 	title: string;
@@ -119,7 +120,7 @@ function FileEntry({ file }: { file: ChangedFileInfo }) {
 	return (
 		<div className="file-entry">
 			<div className="file-header" onClick={() => setExpanded(!expanded)}>
-				<span className={`expand-icon ${expanded ? 'expanded' : ''}`}>&#9656;</span>
+				<span className={`expand-icon icon-button${expanded ? '' : 'closed'}`}>{chevronDownIcon}</span>
 				<span className={`file-status ${className}`}>{text}</span>
 				<span className="file-name">
 					<span className="file-basename">{base}</span>

@@ -9,10 +9,12 @@
 	transition: transform 0.15s ease;
 	font-size: 12px;
 	color: var(--vscode-descriptionForeground);
+	width: 16px;
+	height: 16px;
 }
 
-.expand-icon.expanded {
-	transform: rotate(90deg);
+.expand-icon.closed {
+	transform: rotate(-90deg);
 }
 
 /* Diff table */
