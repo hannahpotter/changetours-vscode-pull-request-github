@@ -305,6 +305,7 @@ function TextBlock({
 function GroupBlock({
 	node,
 	onTextChange,
+	onGroupTitleChange,
 	onDropZoneDrop,
 	onAddText,
 	onAddCode,
@@ -313,6 +314,7 @@ function GroupBlock({
 }: {
 	node: EditorGroupNode;
 	onTextChange: (id: string, content: string) => void;
+	onGroupTitleChange: (id: string, title: string) => void;
 	onDropZoneDrop: (id: string, hunk: HunkReference) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
@@ -320,7 +322,10 @@ function GroupBlock({
 	onRemove: (id: string) => void;
 }) {
 	const [collapsed, setCollapsed] = useState(false);
-	const HeadingTag = `h${Math.min(node.level, 6)}` as keyof JSX.IntrinsicElements;
+
+	const handleTitleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+		onGroupTitleChange(node.id, e.target.value);
+	}, [node.id, onGroupTitleChange]);
 
 	return (
 		<div className={`tour-group tour-group-level-${node.level}`}>
@@ -331,7 +336,12 @@ function GroupBlock({
 				>
 					&#9656;
 				</span>
-				<HeadingTag className="tour-group-title">{node.title}</HeadingTag>
+				<input
+					className="tour-group-title-input"
+					value={node.title}
+					onChange={handleTitleChange}
+					placeholder="Section title"
+				/>
 				<button className="tour-remove-btn" title="Remove section" onClick={() => onRemove(node.id)}>&times;</button>
 			</div>
 			{!collapsed && (
@@ -341,6 +351,7 @@ function GroupBlock({
 							key={child.id}
 							node={child}
 							onTextChange={onTextChange}
+							onGroupTitleChange={onGroupTitleChange}
 							onDropZoneDrop={onDropZoneDrop}
 							onAddText={onAddText}
 							onAddCode={onAddCode}
@@ -366,6 +377,7 @@ function GroupBlock({
 function NodeRenderer({
 	node,
 	onTextChange,
+	onGroupTitleChange,
 	onDropZoneDrop,
 	onAddText,
 	onAddCode,
@@ -374,6 +386,7 @@ function NodeRenderer({
 }: {
 	node: EditorNode;
 	onTextChange: (id: string, content: string) => void;
+	onGroupTitleChange: (id: string, title: string) => void;
 	onDropZoneDrop: (id: string, hunk: HunkReference) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
@@ -386,6 +399,7 @@ function NodeRenderer({
 				<GroupBlock
 					node={node}
 					onTextChange={onTextChange}
+					onGroupTitleChange={onGroupTitleChange}
 					onDropZoneDrop={onDropZoneDrop}
 					onAddText={onAddText}
 					onAddCode={onAddCode}
@@ -438,6 +452,17 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeT
 	const handleTitleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
 		const value = e.target.value;
 		applyLocal(prev => ({ ...prev, title: value }));
+	}, [applyLocal]);
+
+	/* - Group title editing ------------------- */
+
+	const handleGroupTitleChange = useCallback((id: string, title: string) => {
+		applyLocal(prev => ({
+			...prev,
+			children: updateNodeInList(prev.children, id, n =>
+				n.type === 'group' ? { ...n, title } : n
+			),
+		}));
 	}, [applyLocal]);
 
 	/* - Text editing ------------------------- */
@@ -552,6 +577,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeT
 						key={node.id}
 						node={node}
 						onTextChange={handleTextChange}
+						onGroupTitleChange={handleGroupTitleChange}
 						onDropZoneDrop={handleDropZoneDrop}
 						onAddText={handleAddText}
 						onAddCode={handleAddCode}
