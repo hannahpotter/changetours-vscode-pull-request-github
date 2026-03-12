@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { ChangedFileInfo } from '../../src/github/views';
 
 interface ChangedFilesOverviewProps {
@@ -72,8 +72,58 @@ function parsePatch(patch: string): ParsedDiffLine[] {
 	return result;
 }
 
-function DiffView({ patch }: { patch: string }) {
+/**
+ * Compute the line range covered by each hunk section so we can attach
+ * drag data to hunk-header rows.
+ */
+function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: number; endLine: number }> {
+	const ranges = new Map<number, { startLine: number; endLine: number }>();
+	let currentHeaderIdx = -1;
+	let startLine = 0;
+	let endLine = 0;
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (line.type === 'hunk-header') {
+			// Close previous hunk
+			if (currentHeaderIdx >= 0) {
+				ranges.set(currentHeaderIdx, { startLine, endLine });
+			}
+			currentHeaderIdx = i;
+			const match = /^@@ -(?<start>\d+)/.exec(line.content);
+			startLine = match ? parseInt(match.groups!.start, 10) : 0;
+			endLine = startLine;
+		} else {
+			const ln = line.oldLine ?? line.newLine ?? endLine;
+			if (ln > endLine) {
+				endLine = ln;
+			}
+		}
+	}
+	if (currentHeaderIdx >= 0) {
+		ranges.set(currentHeaderIdx, { startLine, endLine });
+	}
+	return ranges;
+}
+
+function DiffView({ patch, fileName }: { patch: string; fileName: string }) {
 	const lines = parsePatch(patch);
+	const hunkRanges = computeHunkRanges(lines);
+
+	const handleHunkDragStart = useCallback((e: React.DragEvent, headerIdx: number) => {
+		const range = hunkRanges.get(headerIdx);
+		if (!range) {
+			return;
+		}
+		const payload = JSON.stringify({
+			file: fileName,
+			startLine: range.startLine,
+			endLine: range.endLine,
+			ref: 'HEAD',
+		});
+		e.dataTransfer.setData('application/vnd.codetour.hunk+json', payload);
+		e.dataTransfer.effectAllowed = 'copy';
+	}, [hunkRanges, fileName]);
 
 	return (
 		<table className="diff-table">
@@ -81,7 +131,13 @@ function DiffView({ patch }: { patch: string }) {
 				{lines.map((line, i) => {
 					if (line.type === 'hunk-header') {
 						return (
-							<tr key={i} className="diff-line diff-hunk-header">
+							<tr
+								key={i}
+								className="diff-line diff-hunk-header draggable-hunk"
+								draggable
+								onDragStart={e => handleHunkDragStart(e, i)}
+								title="Drag this hunk into a Code Tour editor"
+							>
 								<td className="diff-line-num"></td>
 								<td className="diff-line-num"></td>
 								<td className="diff-line-content">{line.content}</td>
@@ -133,7 +189,7 @@ function FileEntry({ file }: { file: ChangedFileInfo }) {
 			</div>
 			{expanded && file.patch && (
 				<div className="file-diff">
-					<DiffView patch={file.patch} />
+					<DiffView patch={file.patch} fileName={file.fileName} />
 				</div>
 			)}
 			{expanded && !file.patch && (

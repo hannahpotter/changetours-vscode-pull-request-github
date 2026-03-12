@@ -88,6 +88,18 @@
 				"displayName": "GitHub Issues"
 			}
 		],
+		"customEditors": [
+			{
+				"viewType": "codeTourEditor",
+				"displayName": "Code Tour Editor",
+				"selector": [
+					{
+						"filenamePattern": "*.codetour.md"
+					}
+				],
+				"priority": "default"
+			}
+		],
 		"configuration": {
 			"type": "object",
 			"title": "GitHub Pull Requests",
