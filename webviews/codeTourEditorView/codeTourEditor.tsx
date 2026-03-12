@@ -33,6 +33,13 @@ interface EditorGroupNode {
 
 type EditorNode = EditorGroupNode | TourTextNode | EditorHunkNode | TourDropZoneNode;
 
+type DropPosition = 'before' | 'after';
+
+interface ReorderDragState {
+	nodeId: string;
+	parentGroupId?: string;
+}
+
 marked.setOptions({ breaks: true });
 
 // Editor-local document mirrors CodeTourDocument but allows EditorNode children.
@@ -46,6 +53,8 @@ interface CodeTourEditorProps {
 	onDocumentChange: (markdown: string) => void;
 	onInsertHunk: (hunk: HunkReference) => void;
 }
+
+const HUNK_MIME_TYPE = 'application/vnd.codetour.hunk+json';
 
 /* - Helpers: deep-clone & mutate the node tree ------------ */
 
@@ -101,6 +110,49 @@ function appendToGroup(nodes: EditorNode[], groupId: string, node: EditorNode): 
 	});
 }
 
+function moveNodeInList(nodes: EditorNode[], draggedId: string, targetId: string, position: DropPosition): EditorNode[] {
+	const draggedIndex = nodes.findIndex(node => node.id === draggedId);
+	const targetIndex = nodes.findIndex(node => node.id === targetId);
+	if (draggedIndex === -1 || targetIndex === -1 || draggedId === targetId) {
+		return nodes;
+	}
+
+	const nextNodes = [...nodes];
+	const [draggedNode] = nextNodes.splice(draggedIndex, 1);
+	const adjustedTargetIndex = nextNodes.findIndex(node => node.id === targetId);
+	const insertIndex = position === 'before' ? adjustedTargetIndex : adjustedTargetIndex + 1;
+	nextNodes.splice(insertIndex, 0, draggedNode);
+	return nextNodes;
+}
+
+function reorderNodesInContainer(
+	nodes: EditorNode[],
+	parentGroupId: string | undefined,
+	draggedId: string,
+	targetId: string,
+	position: DropPosition,
+): EditorNode[] {
+	if (!parentGroupId) {
+		return moveNodeInList(nodes, draggedId, targetId, position);
+	}
+
+	return nodes.map(node => {
+		if (node.type !== 'group') {
+			return node;
+		}
+		if (node.id === parentGroupId) {
+			return {
+				...node,
+				children: moveNodeInList(node.children, draggedId, targetId, position),
+			};
+		}
+		return {
+			...node,
+			children: reorderNodesInContainer(node.children, parentGroupId, draggedId, targetId, position),
+		};
+	});
+}
+
 /* - Serializer (local, mirrors codeTourMarkdown.ts) -------- */
 
 function serializeDoc(doc: EditorDocument): string {
@@ -148,6 +200,105 @@ interface HunkPayload extends HunkReference {
 	patch?: string;
 }
 
+function getDropPosition(event: React.DragEvent<HTMLElement>): DropPosition {
+	const rect = event.currentTarget.getBoundingClientRect();
+	return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+}
+
+function NodeShell({
+	node,
+	parentGroupId,
+	dragState,
+	onDragStart,
+	onDragEnd,
+	onReorder,
+	children,
+}: {
+	node: EditorNode;
+	parentGroupId?: string;
+	dragState: ReorderDragState | null;
+	onDragStart: (nodeId: string, parentGroupId?: string) => void;
+	onDragEnd: () => void;
+	onReorder: (draggedId: string, targetId: string, parentGroupId: string | undefined, position: DropPosition) => void;
+	children: React.ReactNode;
+}) {
+	const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
+	const isDraggable = node.type !== 'group';
+	const canAcceptDrop = !!dragState && dragState.nodeId !== node.id && dragState.parentGroupId === parentGroupId;
+
+	useEffect(() => {
+		if (!dragState) {
+			setDropPosition(null);
+		}
+	}, [dragState]);
+
+	const handleDragStart = useCallback((event: React.DragEvent<HTMLButtonElement>) => {
+		event.stopPropagation();
+		onDragStart(node.id, parentGroupId);
+		event.dataTransfer.effectAllowed = 'move';
+	}, [node.id, onDragStart, parentGroupId]);
+
+	const handleDragEnd = useCallback(() => {
+		setDropPosition(null);
+		onDragEnd();
+	}, [onDragEnd]);
+
+	const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+		if (!canAcceptDrop) {
+			return;
+		}
+		event.preventDefault();
+		event.dataTransfer.dropEffect = 'move';
+		setDropPosition(getDropPosition(event));
+	}, [canAcceptDrop]);
+
+	const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+		const relatedTarget = event.relatedTarget;
+		if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+			return;
+		}
+		setDropPosition(null);
+	}, []);
+
+	const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+		if (!canAcceptDrop || !dragState) {
+			return;
+		}
+		event.preventDefault();
+		const nextDropPosition = dropPosition ?? getDropPosition(event);
+		onReorder(dragState.nodeId, node.id, parentGroupId, nextDropPosition);
+		setDropPosition(null);
+		onDragEnd();
+	}, [canAcceptDrop, dragState, dropPosition, node.id, onDragEnd, onReorder, parentGroupId]);
+
+	return (
+		<div
+			className={[
+				'tour-node-shell',
+				isDraggable ? 'tour-node-shell-draggable' : '',
+				dropPosition ? `tour-node-shell-drop-${dropPosition}` : '',
+			].filter(Boolean).join(' ')}
+			onDragOver={handleDragOver}
+			onDragLeave={handleDragLeave}
+			onDrop={handleDrop}
+		>
+			{isDraggable && (
+				<button
+					className="tour-node-drag-handle"
+					type="button"
+					title="Drag to reorder"
+					draggable
+					onDragStart={handleDragStart}
+					onDragEnd={handleDragEnd}
+				>
+					<span className="codicon codicon-gripper" aria-hidden="true" />
+				</button>
+			)}
+			{children}
+		</div>
+	);
+}
+
 function DropZoneBlock({
 	node,
 	onDrop,
@@ -160,6 +311,9 @@ function DropZoneBlock({
 	const [over, setOver] = useState(false);
 
 	const handleDragOver = useCallback((e: React.DragEvent) => {
+		if (!e.dataTransfer.types.includes(HUNK_MIME_TYPE)) {
+			return;
+		}
 		e.preventDefault();
 		e.dataTransfer.dropEffect = 'copy';
 		setOver(true);
@@ -170,9 +324,12 @@ function DropZoneBlock({
 	}, []);
 
 	const handleDrop = useCallback((e: React.DragEvent) => {
+		if (!e.dataTransfer.types.includes(HUNK_MIME_TYPE)) {
+			return;
+		}
 		e.preventDefault();
 		setOver(false);
-		const raw = e.dataTransfer.getData('application/vnd.codetour.hunk+json');
+		const raw = e.dataTransfer.getData(HUNK_MIME_TYPE);
 		if (raw) {
 			try {
 				const payload: HunkPayload = JSON.parse(raw);
@@ -329,6 +486,10 @@ function TextBlock({
 
 function GroupBlock({
 	node,
+	dragState,
+	onNodeDragStart,
+	onNodeDragEnd,
+	onReorder,
 	onTextChange,
 	onGroupTitleChange,
 	onDropZoneDrop,
@@ -338,6 +499,10 @@ function GroupBlock({
 	onRemove,
 }: {
 	node: EditorGroupNode;
+	dragState: ReorderDragState | null;
+	onNodeDragStart: (nodeId: string, parentGroupId?: string) => void;
+	onNodeDragEnd: () => void;
+	onReorder: (draggedId: string, targetId: string, parentGroupId: string | undefined, position: DropPosition) => void;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleChange: (id: string, title: string) => void;
 	onDropZoneDrop: (id: string, hunk: HunkReference, patch?: string) => void;
@@ -375,6 +540,11 @@ function GroupBlock({
 						<NodeRenderer
 							key={child.id}
 							node={child}
+							parentGroupId={node.id}
+							dragState={dragState}
+							onNodeDragStart={onNodeDragStart}
+							onNodeDragEnd={onNodeDragEnd}
+							onReorder={onReorder}
 							onTextChange={onTextChange}
 							onGroupTitleChange={onGroupTitleChange}
 							onDropZoneDrop={onDropZoneDrop}
@@ -401,6 +571,11 @@ function GroupBlock({
 
 function NodeRenderer({
 	node,
+	parentGroupId,
+	dragState,
+	onNodeDragStart,
+	onNodeDragEnd,
+	onReorder,
 	onTextChange,
 	onGroupTitleChange,
 	onDropZoneDrop,
@@ -410,6 +585,11 @@ function NodeRenderer({
 	onRemove,
 }: {
 	node: EditorNode;
+	parentGroupId?: string;
+	dragState: ReorderDragState | null;
+	onNodeDragStart: (nodeId: string, parentGroupId?: string) => void;
+	onNodeDragEnd: () => void;
+	onReorder: (draggedId: string, targetId: string, parentGroupId: string | undefined, position: DropPosition) => void;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleChange: (id: string, title: string) => void;
 	onDropZoneDrop: (id: string, hunk: HunkReference, patch?: string) => void;
@@ -423,6 +603,10 @@ function NodeRenderer({
 			return (
 				<GroupBlock
 					node={node}
+					dragState={dragState}
+					onNodeDragStart={onNodeDragStart}
+					onNodeDragEnd={onNodeDragEnd}
+					onReorder={onReorder}
 					onTextChange={onTextChange}
 					onGroupTitleChange={onGroupTitleChange}
 					onDropZoneDrop={onDropZoneDrop}
@@ -433,11 +617,44 @@ function NodeRenderer({
 				/>
 			);
 		case 'text':
-			return <TextBlock node={node as TourTextNode} onChange={onTextChange} onRemove={onRemove} />;
+			return (
+				<NodeShell
+					node={node}
+					parentGroupId={parentGroupId}
+					dragState={dragState}
+					onDragStart={onNodeDragStart}
+					onDragEnd={onNodeDragEnd}
+					onReorder={onReorder}
+				>
+					<TextBlock node={node as TourTextNode} onChange={onTextChange} onRemove={onRemove} />
+				</NodeShell>
+			);
 		case 'hunk':
-			return <HunkBlock node={node as EditorHunkNode} onRemove={onRemove} />;
+			return (
+				<NodeShell
+					node={node}
+					parentGroupId={parentGroupId}
+					dragState={dragState}
+					onDragStart={onNodeDragStart}
+					onDragEnd={onNodeDragEnd}
+					onReorder={onReorder}
+				>
+					<HunkBlock node={node as EditorHunkNode} onRemove={onRemove} />
+				</NodeShell>
+			);
 		case 'dropzone':
-			return <DropZoneBlock node={node} onDrop={onDropZoneDrop} onRemove={onRemove} />;
+			return (
+				<NodeShell
+					node={node}
+					parentGroupId={parentGroupId}
+					dragState={dragState}
+					onDragStart={onNodeDragStart}
+					onDragEnd={onNodeDragEnd}
+					onReorder={onReorder}
+				>
+					<DropZoneBlock node={node} onDrop={onDropZoneDrop} onRemove={onRemove} />
+				</NodeShell>
+			);
 	}
 }
 
@@ -445,6 +662,7 @@ function NodeRenderer({
 
 export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
+	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
 	const isLocalEdit = useRef(false);
 
 	// When the extension host sends an updated document (undo/redo), accept it
@@ -561,6 +779,22 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeT
 		applyLocal(prev => ({ ...prev, children: removeNodeFromList(prev.children, id) }));
 	}, [applyLocal]);
 
+	const handleNodeDragStart = useCallback((nodeId: string, parentGroupId?: string) => {
+		setDragState({ nodeId, parentGroupId });
+	}, []);
+
+	const handleNodeDragEnd = useCallback(() => {
+		setDragState(null);
+	}, []);
+
+	const handleReorder = useCallback((draggedId: string, targetId: string, parentGroupId: string | undefined, position: DropPosition) => {
+		applyLocal(prev => ({
+			...prev,
+			children: reorderNodesInContainer(prev.children, parentGroupId, draggedId, targetId, position),
+		}));
+		setDragState(null);
+	}, [applyLocal]);
+
 	/* - Add code drop zone -------------------- */
 
 	const handleAddCode = useCallback((groupId?: string) => {
@@ -601,6 +835,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeT
 					<NodeRenderer
 						key={node.id}
 						node={node}
+						dragState={dragState}
+						onNodeDragStart={handleNodeDragStart}
+						onNodeDragEnd={handleNodeDragEnd}
+						onReorder={handleReorder}
 						onTextChange={handleTextChange}
 						onGroupTitleChange={handleGroupTitleChange}
 						onDropZoneDrop={handleDropZoneDrop}
