@@ -37,7 +37,6 @@ type DropPosition = 'before' | 'after';
 
 interface ReorderDragState {
 	nodeId: string;
-	parentGroupId?: string;
 }
 
 marked.setOptions({ breaks: true });
@@ -110,45 +109,130 @@ function appendToGroup(nodes: EditorNode[], groupId: string, node: EditorNode): 
 	});
 }
 
-function moveNodeInList(nodes: EditorNode[], draggedId: string, targetId: string, position: DropPosition): EditorNode[] {
-	const draggedIndex = nodes.findIndex(node => node.id === draggedId);
-	const targetIndex = nodes.findIndex(node => node.id === targetId);
-	if (draggedIndex === -1 || targetIndex === -1 || draggedId === targetId) {
+function extractNodeById(nodes: EditorNode[], nodeId: string): { nodes: EditorNode[]; extracted?: EditorNode } {
+	let extracted: EditorNode | undefined;
+	const nextNodes: EditorNode[] = [];
+
+	for (const node of nodes) {
+		if (node.id === nodeId) {
+			extracted = node;
+			continue;
+		}
+
+		if (node.type === 'group') {
+			const childResult = extractNodeById(node.children, nodeId);
+			if (childResult.extracted) {
+				extracted = childResult.extracted;
+				nextNodes.push({ ...node, children: childResult.nodes });
+			} else {
+				nextNodes.push(node);
+			}
+		} else {
+			nextNodes.push(node);
+		}
+	}
+
+	return { nodes: nextNodes, extracted };
+}
+
+function insertNodeRelative(
+	nodes: EditorNode[],
+	targetId: string,
+	nodeToInsert: EditorNode,
+	position: DropPosition,
+): { nodes: EditorNode[]; inserted: boolean } {
+	const nextNodes: EditorNode[] = [];
+	let inserted = false;
+
+	for (const node of nodes) {
+		if (!inserted && node.id === targetId && position === 'before') {
+			nextNodes.push(nodeToInsert);
+			inserted = true;
+		}
+
+		if (node.type === 'group' && !inserted) {
+			const childResult = insertNodeRelative(node.children, targetId, nodeToInsert, position);
+			if (childResult.inserted) {
+				nextNodes.push({ ...node, children: childResult.nodes });
+				inserted = true;
+			} else {
+				nextNodes.push(node);
+			}
+		} else {
+			nextNodes.push(node);
+		}
+
+		if (!inserted && node.id === targetId && position === 'after') {
+			nextNodes.push(nodeToInsert);
+			inserted = true;
+		}
+	}
+
+	return { nodes: nextNodes, inserted };
+}
+
+function appendNodeToGroupEnd(
+	nodes: EditorNode[],
+	targetGroupId: string,
+	nodeToInsert: EditorNode,
+): { nodes: EditorNode[]; inserted: boolean } {
+	let inserted = false;
+	const nextNodes = nodes.map(node => {
+		if (node.type !== 'group') {
+			return node;
+		}
+		if (node.id === targetGroupId) {
+			inserted = true;
+			return { ...node, children: [...node.children, nodeToInsert] };
+		}
+
+		const childResult = appendNodeToGroupEnd(node.children, targetGroupId, nodeToInsert);
+		if (childResult.inserted) {
+			inserted = true;
+			return { ...node, children: childResult.nodes };
+		}
+		return node;
+	});
+
+	return { nodes: nextNodes, inserted };
+}
+
+function moveNodeRelative(nodes: EditorNode[], draggedId: string, targetId: string, position: DropPosition): EditorNode[] {
+	if (draggedId === targetId) {
 		return nodes;
 	}
 
-	const nextNodes = [...nodes];
-	const [draggedNode] = nextNodes.splice(draggedIndex, 1);
-	const adjustedTargetIndex = nextNodes.findIndex(node => node.id === targetId);
-	const insertIndex = position === 'before' ? adjustedTargetIndex : adjustedTargetIndex + 1;
-	nextNodes.splice(insertIndex, 0, draggedNode);
-	return nextNodes;
+	const extracted = extractNodeById(nodes, draggedId);
+	if (!extracted.extracted) {
+		return nodes;
+	}
+
+	const inserted = insertNodeRelative(extracted.nodes, targetId, extracted.extracted, position);
+	return inserted.inserted ? inserted.nodes : nodes;
 }
 
-function reorderNodesInContainer(
-	nodes: EditorNode[],
-	parentGroupId: string | undefined,
-	draggedId: string,
-	targetId: string,
-	position: DropPosition,
-): EditorNode[] {
-	if (!parentGroupId) {
-		return moveNodeInList(nodes, draggedId, targetId, position);
+function moveNodeToGroupEnd(nodes: EditorNode[], draggedId: string, targetGroupId: string): EditorNode[] {
+	const extracted = extractNodeById(nodes, draggedId);
+	if (!extracted.extracted) {
+		return nodes;
 	}
+
+	const inserted = appendNodeToGroupEnd(extracted.nodes, targetGroupId, extracted.extracted);
+	return inserted.inserted ? inserted.nodes : nodes;
+}
+
+function normalizeGroupLevels(nodes: EditorNode[], parentLevel?: number): EditorNode[] {
+	const normalizedLevel = parentLevel === undefined ? 2 : Math.min(parentLevel + 1, 6);
 
 	return nodes.map(node => {
 		if (node.type !== 'group') {
 			return node;
 		}
-		if (node.id === parentGroupId) {
-			return {
-				...node,
-				children: moveNodeInList(node.children, draggedId, targetId, position),
-			};
-		}
+
 		return {
 			...node,
-			children: reorderNodesInContainer(node.children, parentGroupId, draggedId, targetId, position),
+			level: normalizedLevel,
+			children: normalizeGroupLevels(node.children, normalizedLevel),
 		};
 	});
 }
@@ -207,7 +291,6 @@ function getDropPosition(event: React.DragEvent<HTMLElement>): DropPosition {
 
 function NodeShell({
 	node,
-	parentGroupId,
 	dragState,
 	onDragStart,
 	onDragEnd,
@@ -215,16 +298,15 @@ function NodeShell({
 	children,
 }: {
 	node: EditorNode;
-	parentGroupId?: string;
 	dragState: ReorderDragState | null;
-	onDragStart: (nodeId: string, parentGroupId?: string) => void;
+	onDragStart: (nodeId: string) => void;
 	onDragEnd: () => void;
-	onReorder: (draggedId: string, targetId: string, parentGroupId: string | undefined, position: DropPosition) => void;
+	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
 	children: React.ReactNode;
 }) {
 	const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
-	const isDraggable = node.type !== 'group';
-	const canAcceptDrop = !!dragState && dragState.nodeId !== node.id && dragState.parentGroupId === parentGroupId;
+	const isDraggable = true;
+	const canAcceptDrop = !!dragState && dragState.nodeId !== node.id;
 
 	useEffect(() => {
 		if (!dragState) {
@@ -234,9 +316,9 @@ function NodeShell({
 
 	const handleDragStart = useCallback((event: React.DragEvent<HTMLButtonElement>) => {
 		event.stopPropagation();
-		onDragStart(node.id, parentGroupId);
+		onDragStart(node.id);
 		event.dataTransfer.effectAllowed = 'move';
-	}, [node.id, onDragStart, parentGroupId]);
+	}, [node.id, onDragStart]);
 
 	const handleDragEnd = useCallback(() => {
 		setDropPosition(null);
@@ -265,11 +347,12 @@ function NodeShell({
 			return;
 		}
 		event.preventDefault();
+		event.stopPropagation();
 		const nextDropPosition = dropPosition ?? getDropPosition(event);
-		onReorder(dragState.nodeId, node.id, parentGroupId, nextDropPosition);
+		onReorder(dragState.nodeId, node.id, nextDropPosition);
 		setDropPosition(null);
 		onDragEnd();
-	}, [canAcceptDrop, dragState, dropPosition, node.id, onDragEnd, onReorder, parentGroupId]);
+	}, [canAcceptDrop, dragState, dropPosition, node.id, onDragEnd, onReorder]);
 
 	return (
 		<div
@@ -490,6 +573,7 @@ function GroupBlock({
 	onNodeDragStart,
 	onNodeDragEnd,
 	onReorder,
+	onMoveToGroupEnd,
 	onTextChange,
 	onGroupTitleChange,
 	onDropZoneDrop,
@@ -500,9 +584,10 @@ function GroupBlock({
 }: {
 	node: EditorGroupNode;
 	dragState: ReorderDragState | null;
-	onNodeDragStart: (nodeId: string, parentGroupId?: string) => void;
+	onNodeDragStart: (nodeId: string) => void;
 	onNodeDragEnd: () => void;
-	onReorder: (draggedId: string, targetId: string, parentGroupId: string | undefined, position: DropPosition) => void;
+	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
+	onMoveToGroupEnd: (draggedId: string, groupId: string) => void;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleChange: (id: string, title: string) => void;
 	onDropZoneDrop: (id: string, hunk: HunkReference, patch?: string) => void;
@@ -512,10 +597,45 @@ function GroupBlock({
 	onRemove: (id: string) => void;
 }) {
 	const [collapsed, setCollapsed] = useState(false);
+	const [groupDropActive, setGroupDropActive] = useState(false);
 
 	const handleTitleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
 		onGroupTitleChange(node.id, e.target.value);
 	}, [node.id, onGroupTitleChange]);
+
+	const handleGroupBodyDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+		if (!dragState || collapsed) {
+			return;
+		}
+		e.preventDefault();
+		e.dataTransfer.dropEffect = 'move';
+		setGroupDropActive(true);
+	}, [collapsed, dragState]);
+
+	const handleGroupBodyDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+		const relatedTarget = e.relatedTarget;
+		if (relatedTarget instanceof Node && e.currentTarget.contains(relatedTarget)) {
+			return;
+		}
+		setGroupDropActive(false);
+	}, []);
+
+	const handleGroupBodyDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+		if (!dragState || collapsed) {
+			return;
+		}
+		e.preventDefault();
+		e.stopPropagation();
+		onMoveToGroupEnd(dragState.nodeId, node.id);
+		setGroupDropActive(false);
+		onNodeDragEnd();
+	}, [collapsed, dragState, node.id, onMoveToGroupEnd, onNodeDragEnd]);
+
+	useEffect(() => {
+		if (!dragState) {
+			setGroupDropActive(false);
+		}
+	}, [dragState]);
 
 	return (
 		<div className={`tour-group tour-group-level-${node.level}`}>
@@ -535,16 +655,21 @@ function GroupBlock({
 				<button className="tour-remove-btn" title="Remove section" onClick={() => onRemove(node.id)}>&times;</button>
 			</div>
 			{!collapsed && (
-				<div className="tour-group-body">
+				<div
+					className={`tour-group-body${groupDropActive ? ' tour-group-body-drop-active' : ''}`}
+					onDragOver={handleGroupBodyDragOver}
+					onDragLeave={handleGroupBodyDragLeave}
+					onDrop={handleGroupBodyDrop}
+				>
 					{node.children.map(child => (
 						<NodeRenderer
 							key={child.id}
 							node={child}
-							parentGroupId={node.id}
 							dragState={dragState}
 							onNodeDragStart={onNodeDragStart}
 							onNodeDragEnd={onNodeDragEnd}
 							onReorder={onReorder}
+							onMoveToGroupEnd={onMoveToGroupEnd}
 							onTextChange={onTextChange}
 							onGroupTitleChange={onGroupTitleChange}
 							onDropZoneDrop={onDropZoneDrop}
@@ -571,11 +696,11 @@ function GroupBlock({
 
 function NodeRenderer({
 	node,
-	parentGroupId,
 	dragState,
 	onNodeDragStart,
 	onNodeDragEnd,
 	onReorder,
+	onMoveToGroupEnd,
 	onTextChange,
 	onGroupTitleChange,
 	onDropZoneDrop,
@@ -585,11 +710,11 @@ function NodeRenderer({
 	onRemove,
 }: {
 	node: EditorNode;
-	parentGroupId?: string;
 	dragState: ReorderDragState | null;
-	onNodeDragStart: (nodeId: string, parentGroupId?: string) => void;
+	onNodeDragStart: (nodeId: string) => void;
 	onNodeDragEnd: () => void;
-	onReorder: (draggedId: string, targetId: string, parentGroupId: string | undefined, position: DropPosition) => void;
+	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
+	onMoveToGroupEnd: (draggedId: string, groupId: string) => void;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleChange: (id: string, title: string) => void;
 	onDropZoneDrop: (id: string, hunk: HunkReference, patch?: string) => void;
@@ -601,26 +726,34 @@ function NodeRenderer({
 	switch (node.type) {
 		case 'group':
 			return (
-				<GroupBlock
+				<NodeShell
 					node={node}
 					dragState={dragState}
-					onNodeDragStart={onNodeDragStart}
-					onNodeDragEnd={onNodeDragEnd}
+					onDragStart={onNodeDragStart}
+					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
-					onTextChange={onTextChange}
-					onGroupTitleChange={onGroupTitleChange}
-					onDropZoneDrop={onDropZoneDrop}
-					onAddText={onAddText}
-					onAddCode={onAddCode}
-					onAddGroup={onAddGroup}
-					onRemove={onRemove}
-				/>
+				>
+					<GroupBlock
+						node={node}
+						dragState={dragState}
+						onNodeDragStart={onNodeDragStart}
+						onNodeDragEnd={onNodeDragEnd}
+						onReorder={onReorder}
+						onMoveToGroupEnd={onMoveToGroupEnd}
+						onTextChange={onTextChange}
+						onGroupTitleChange={onGroupTitleChange}
+						onDropZoneDrop={onDropZoneDrop}
+						onAddText={onAddText}
+						onAddCode={onAddCode}
+						onAddGroup={onAddGroup}
+						onRemove={onRemove}
+					/>
+				</NodeShell>
 			);
 		case 'text':
 			return (
 				<NodeShell
 					node={node}
-					parentGroupId={parentGroupId}
 					dragState={dragState}
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
@@ -633,7 +766,6 @@ function NodeRenderer({
 			return (
 				<NodeShell
 					node={node}
-					parentGroupId={parentGroupId}
 					dragState={dragState}
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
@@ -646,7 +778,6 @@ function NodeRenderer({
 			return (
 				<NodeShell
 					node={node}
-					parentGroupId={parentGroupId}
 					dragState={dragState}
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
@@ -779,18 +910,26 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeT
 		applyLocal(prev => ({ ...prev, children: removeNodeFromList(prev.children, id) }));
 	}, [applyLocal]);
 
-	const handleNodeDragStart = useCallback((nodeId: string, parentGroupId?: string) => {
-		setDragState({ nodeId, parentGroupId });
+	const handleNodeDragStart = useCallback((nodeId: string) => {
+		setDragState({ nodeId });
 	}, []);
 
 	const handleNodeDragEnd = useCallback(() => {
 		setDragState(null);
 	}, []);
 
-	const handleReorder = useCallback((draggedId: string, targetId: string, parentGroupId: string | undefined, position: DropPosition) => {
+	const handleReorder = useCallback((draggedId: string, targetId: string, position: DropPosition) => {
 		applyLocal(prev => ({
 			...prev,
-			children: reorderNodesInContainer(prev.children, parentGroupId, draggedId, targetId, position),
+			children: normalizeGroupLevels(moveNodeRelative(prev.children, draggedId, targetId, position)),
+		}));
+		setDragState(null);
+	}, [applyLocal]);
+
+	const handleMoveToGroupEnd = useCallback((draggedId: string, groupId: string) => {
+		applyLocal(prev => ({
+			...prev,
+			children: normalizeGroupLevels(moveNodeToGroupEnd(prev.children, draggedId, groupId)),
 		}));
 		setDragState(null);
 	}, [applyLocal]);
@@ -839,6 +978,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeT
 						onNodeDragStart={handleNodeDragStart}
 						onNodeDragEnd={handleNodeDragEnd}
 						onReorder={handleReorder}
+						onMoveToGroupEnd={handleMoveToGroupEnd}
 						onTextChange={handleTextChange}
 						onGroupTitleChange={handleGroupTitleChange}
 						onDropZoneDrop={handleDropZoneDrop}
