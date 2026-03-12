@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import React, { useCallback, useState } from 'react';
-import { DiffTable } from '../common/DiffTable';
-import { parsePatch, ParsedDiffLine } from '../common/diffUtils';
 import { ChangedFileInfo } from '../../src/github/views';
+import { DiffTable } from '../common/DiffTable';
+import { ParsedDiffLine, parsePatch } from '../common/diffUtils';
 
 interface ChangedFilesOverviewProps {
 	title: string;
