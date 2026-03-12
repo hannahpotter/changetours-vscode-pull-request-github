@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CodeTourDocument, HunkReference, TourTextNode } from '../../src/github/codeTourMarkdown';
 import { DiffTable } from '../common/DiffTable';
 import { parsePatch } from '../common/diffUtils';
+import { gripperIcon } from '../components/icon';
 
 // Editor-only node type: a pending drop zone placeholder (never serialized).
 interface TourDropZoneNode {
@@ -366,16 +367,15 @@ function NodeShell({
 			onDrop={handleDrop}
 		>
 			{isDraggable && (
-				<button
-					className="tour-node-drag-handle"
-					type="button"
+				<span
+					className="tour-node-drag-handle icon-button"
 					title="Drag to reorder"
 					draggable
 					onDragStart={handleDragStart}
 					onDragEnd={handleDragEnd}
 				>
-					<span className="codicon codicon-gripper" aria-hidden="true" />
-				</button>
+					{gripperIcon}
+				</span>
 			)}
 			{children}
 		</div>

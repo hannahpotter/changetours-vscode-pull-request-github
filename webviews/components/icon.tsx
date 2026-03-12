@@ -31,6 +31,7 @@ export const gitMergeIcon = <Icon src={require('../../resources/icons/codicons/g
 export const gitPullRequestClosedIcon = <Icon src={require('../../resources/icons/codicons/git-pull-request-closed.svg')} />;
 export const gitPullRequestDraftIcon = <Icon src={require('../../resources/icons/codicons/git-pull-request-draft.svg')} />;
 export const gitPullRequestIcon = <Icon src={require('../../resources/icons/codicons/git-pull-request.svg')} />;
+export const gripperIcon = <Icon src={require('../../resources/icons/codicons/gripper.svg')} />;
 export const issuescon = <Icon src={require('../../resources/icons/codicons/issues.svg')} />;
 export const loadingIcon = <Icon className='loading' src={require('../../resources/icons/codicons/loading.svg')} />;
 export const milestoneIcon = <Icon src={require('../../resources/icons/codicons/milestone.svg')} />;
