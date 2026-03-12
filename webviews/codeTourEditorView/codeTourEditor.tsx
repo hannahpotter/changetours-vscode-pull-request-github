@@ -3,8 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import * as marked from 'marked';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CodeTourDocument, HunkReference, TourGroupNode, TourHunkNode, TourNode, TourTextNode } from '../../src/github/codeTourMarkdown';
+
+marked.setOptions({ breaks: true });
 
 interface CodeTourEditorProps {
 	document: CodeTourDocument;
@@ -172,16 +175,24 @@ function TextBlock({
 	onChange: (id: string, content: string) => void;
 	onRemove: (id: string) => void;
 }) {
-	const ref = useRef<HTMLTextAreaElement>(null);
+	const [editing, setEditing] = useState(!node.content);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
 	// Auto-resize textarea to fit content
 	const resize = useCallback(() => {
-		const el = ref.current;
+		const el = textareaRef.current;
 		if (el) {
 			el.style.height = 'auto';
 			el.style.height = `${el.scrollHeight}px`;
 		}
 	}, []);
+
+	useEffect(() => {
+		if (editing) {
+			resize();
+			textareaRef.current?.focus();
+		}
+	}, [editing, resize]);
 
 	useEffect(() => {
 		resize();
@@ -192,15 +203,48 @@ function TextBlock({
 		resize();
 	}, [node.id, onChange, resize]);
 
+	const handleBlur = useCallback(() => {
+		if (node.content.trim()) {
+			setEditing(false);
+		}
+	}, [node.content]);
+
+	const renderedHtml = useMemo(() => {
+		if (editing || !node.content) {
+			return '';
+		}
+		return marked.parse(node.content) as string;
+	}, [editing, node.content]);
+
+	if (editing) {
+		return (
+			<div className="tour-text-wrapper">
+				<textarea
+					ref={textareaRef}
+					className="tour-text"
+					value={node.content}
+					onChange={handleChange}
+					onBlur={handleBlur}
+					placeholder="Type markdown text here…"
+					rows={1}
+				/>
+				<button
+					className="tour-remove-btn tour-text-remove"
+					title="Remove text block"
+					onMouseDown={e => { e.preventDefault(); onRemove(node.id); }}
+				>
+					&times;
+				</button>
+			</div>
+		);
+	}
+
 	return (
 		<div className="tour-text-wrapper">
-			<textarea
-				ref={ref}
-				className="tour-text"
-				value={node.content}
-				onChange={handleChange}
-				placeholder="Type markdown text here…"
-				rows={1}
+			<div
+				className="tour-text-rendered"
+				onClick={() => setEditing(true)}
+				dangerouslySetInnerHTML={{ __html: renderedHtml }}
 			/>
 			<button
 				className="tour-remove-btn tour-text-remove"

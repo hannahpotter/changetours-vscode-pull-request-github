@@ -95,6 +95,41 @@
 	background: var(--vscode-input-background);
 }
 
+.tour-text-rendered {
+	padding: 8px 12px;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	line-height: 1.6;
+	cursor: text;
+	color: var(--vscode-editor-foreground);
+}
+
+.tour-text-rendered:hover {
+	border-color: var(--vscode-input-border, var(--vscode-panel-border, #444));
+}
+
+.tour-text-rendered p:first-child {
+	margin-top: 0;
+}
+
+.tour-text-rendered p:last-child {
+	margin-bottom: 0;
+}
+
+.tour-text-rendered code {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 0.9em;
+	background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
+	padding: 1px 4px;
+	border-radius: 3px;
+}
+
+.tour-text-rendered pre code {
+	display: block;
+	padding: 8px 12px;
+	overflow-x: auto;
+}
+
 /* - Hunk blocks --------------------------- */
 
 .tour-hunk {
