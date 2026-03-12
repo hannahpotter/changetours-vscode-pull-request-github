@@ -6,13 +6,17 @@
 
 /**
  * Represents a diff hunk reference embedded in a code tour document.
- * Stored in the markdown as: :::hunk file=<path> lines=<start>-<end> ref=<commitish>:::
+ * Stored in the markdown as a fenced block:
+ *   :::hunk file=<path> lines=<start>-<end> ref=<commitish>
+ *   <patch content>
+ *   :::
  */
 export interface HunkReference {
 	file: string;
 	startLine: number;
 	endLine: number;
 	ref: string;
+	patch?: string;
 }
 
 export type TourNodeType = 'group' | 'text' | 'hunk';
@@ -44,7 +48,8 @@ export interface CodeTourDocument {
 	children: TourNode[];
 }
 
-const HUNK_PATTERN = /^:::hunk\s+file=(?<file>\S+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>\S+):::$/;
+const HUNK_PATTERN = /^:::hunk\s+file=(?<file>\S+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>\S+)$/;
+const HUNK_END_PATTERN = /^:::$/;
 
 let nextId = 0;
 function genId(): string {
@@ -74,6 +79,11 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 	const groupStack: TourGroupNode[] = [];
 	let pendingTextLines: string[] = [];
 
+	// State for multi-line hunk parsing
+	let inHunk = false;
+	let pendingHunk: { file: string; startLine: number; endLine: number; ref: string } | null = null;
+	let pendingPatchLines: string[] = [];
+
 	function currentContainer(): TourNode[] {
 		return groupStack.length > 0 ? groupStack[groupStack.length - 1].children : rootChildren;
 	}
@@ -90,7 +100,36 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		pendingTextLines = [];
 	}
 
+	function flushHunk(): void {
+		if (!pendingHunk) {
+			return;
+		}
+		const patch = pendingPatchLines.join('\n').trim();
+		const hunkNode: TourHunkNode = {
+			type: 'hunk',
+			id: genId(),
+			hunk: {
+				...pendingHunk,
+				patch: patch || undefined,
+			},
+		};
+		currentContainer().push(hunkNode);
+		pendingHunk = null;
+		pendingPatchLines = [];
+		inHunk = false;
+	}
+
 	for (const line of lines) {
+		// If we're inside a multi-line hunk, look for the closing :::
+		if (inHunk) {
+			if (HUNK_END_PATTERN.test(line)) {
+				flushHunk();
+			} else {
+				pendingPatchLines.push(line);
+			}
+			continue;
+		}
+
 		// Detect headings
 		const headingMatch = /^(?<hashes>#{1,6})\s+(?<text>.+)$/.exec(line);
 		if (headingMatch) {
@@ -128,17 +167,16 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		const hunkMatch = HUNK_PATTERN.exec(line);
 		if (hunkMatch) {
 			flushText();
-			const hunkNode: TourHunkNode = {
-				type: 'hunk',
-				id: genId(),
-				hunk: {
-					file: hunkMatch.groups!.file,
-					startLine: parseInt(hunkMatch.groups!.start, 10),
-					endLine: parseInt(hunkMatch.groups!.end, 10),
-					ref: hunkMatch.groups!.ref,
-				},
+
+			// Multi-line hunk, start accumulating patch content
+			inHunk = true;
+			pendingHunk = {
+				file: hunkMatch.groups!.file,
+				startLine: parseInt(hunkMatch.groups!.start, 10),
+				endLine: parseInt(hunkMatch.groups!.end, 10),
+				ref: hunkMatch.groups!.ref,
 			};
-			currentContainer().push(hunkNode);
+			pendingPatchLines = [];
 			continue;
 		}
 
@@ -147,6 +185,10 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 	}
 
 	flushText();
+	// Handle unclosed hunk at end of file
+	if (inHunk) {
+		flushHunk();
+	}
 
 	return { title: title || 'Untitled Code Tour', children: rootChildren };
 }
@@ -174,7 +216,11 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 					lines.push('');
 					break;
 				case 'hunk':
-					lines.push(`:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}:::`);
+					lines.push(`:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`);
+					if (node.hunk.patch) {
+						lines.push(node.hunk.patch);
+					}
+					lines.push(':::');
 					lines.push('');
 					break;
 			}
@@ -191,5 +237,9 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
  * Create a hunk directive string suitable for inserting into a document.
  */
 export function createHunkDirective(hunk: HunkReference): string {
-	return `:::hunk file=${hunk.file} lines=${hunk.startLine}-${hunk.endLine} ref=${hunk.ref}:::`;
+	const header = `:::hunk file=${hunk.file} lines=${hunk.startLine}-${hunk.endLine} ref=${hunk.ref}`;
+	if (hunk.patch) {
+		return `${header}\n${hunk.patch}\n:::`;
+	}
+	return `${header}\n:::`;
 }

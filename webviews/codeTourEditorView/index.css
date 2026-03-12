@@ -244,17 +244,6 @@
 	margin-left: 36px;
 }
 
-.expand-icon {
-	display: inline-block;
-	transition: transform 0.15s ease;
-	font-size: 12px;
-	color: var(--vscode-descriptionForeground);
-}
-
-.expand-icon.expanded {
-	transform: rotate(90deg);
-}
-
 /* - Drop zone ---------------------------- */
 
 .drop-zone {
@@ -318,3 +307,4 @@
 	left: 50%;
 	transform: translate(-50%, -50%);
 }
+

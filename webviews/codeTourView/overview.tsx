@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import React, { useCallback, useState } from 'react';
+import { DiffTable } from '../common/DiffTable';
+import { parsePatch, ParsedDiffLine } from '../common/diffUtils';
 import { ChangedFileInfo } from '../../src/github/views';
 
 interface ChangedFilesOverviewProps {
@@ -32,44 +34,6 @@ function splitPath(fileName: string): { dir: string; base: string } {
 		dir: fileName.substring(0, lastSlash + 1),
 		base: fileName.substring(lastSlash + 1),
 	};
-}
-
-interface ParsedDiffLine {
-	type: 'context' | 'add' | 'delete' | 'hunk-header';
-	content: string;
-	oldLine?: number;
-	newLine?: number;
-}
-
-function parsePatch(patch: string): ParsedDiffLine[] {
-	const lines = patch.split('\n');
-	const result: ParsedDiffLine[] = [];
-	let oldLine = 0;
-	let newLine = 0;
-
-	for (const line of lines) {
-		if (line.startsWith('@@')) {
-			const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/.exec(line);
-			if (match) {
-				oldLine = parseInt(match[1], 10);
-				newLine = parseInt(match[2], 10);
-			}
-			result.push({ type: 'hunk-header', content: line });
-		} else if (line.startsWith('+')) {
-			result.push({ type: 'add', content: line.substring(1), newLine });
-			newLine++;
-		} else if (line.startsWith('-')) {
-			result.push({ type: 'delete', content: line.substring(1), oldLine });
-			oldLine++;
-		} else if (line.startsWith(' ')) {
-			result.push({ type: 'context', content: line.substring(1), oldLine, newLine });
-			oldLine++;
-			newLine++;
-		} else if (line.startsWith('\\')) {
-			result.push({ type: 'context', content: line });
-		}
-	}
-	return result;
 }
 
 /**
@@ -108,58 +72,43 @@ function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: nu
 
 function DiffView({ patch, fileName }: { patch: string; fileName: string }) {
 	const lines = parsePatch(patch);
+	const rawLines = patch.split('\n');
 	const hunkRanges = computeHunkRanges(lines);
+
+	// Find the raw patch indices for each hunk header so we can extract hunk content
+	const hunkRawIndices: number[] = [];
+	for (let i = 0; i < rawLines.length; i++) {
+		if (rawLines[i].startsWith('@@')) {
+			hunkRawIndices.push(i);
+		}
+	}
 
 	const handleHunkDragStart = useCallback((e: React.DragEvent, headerIdx: number) => {
 		const range = hunkRanges.get(headerIdx);
 		if (!range) {
 			return;
 		}
+
+		// Extract the raw patch content for just this hunk
+		const parsedHunkIdx = lines.slice(0, headerIdx + 1).filter(l => l.type === 'hunk-header').length - 1;
+		const rawStart = hunkRawIndices[parsedHunkIdx];
+		const rawEnd = parsedHunkIdx + 1 < hunkRawIndices.length
+			? hunkRawIndices[parsedHunkIdx + 1]
+			: rawLines.length;
+		const hunkPatch = rawLines.slice(rawStart, rawEnd).join('\n');
+
 		const payload = JSON.stringify({
 			file: fileName,
 			startLine: range.startLine,
 			endLine: range.endLine,
 			ref: 'HEAD',
+			patch: hunkPatch,
 		});
 		e.dataTransfer.setData('application/vnd.codetour.hunk+json', payload);
 		e.dataTransfer.effectAllowed = 'copy';
-	}, [hunkRanges, fileName]);
+	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices]);
 
-	return (
-		<table className="diff-table">
-			<tbody>
-				{lines.map((line, i) => {
-					if (line.type === 'hunk-header') {
-						return (
-							<tr
-								key={i}
-								className="diff-line diff-hunk-header draggable-hunk"
-								draggable
-								onDragStart={e => handleHunkDragStart(e, i)}
-								title="Drag this hunk into a Code Tour editor"
-							>
-								<td className="diff-line-num"></td>
-								<td className="diff-line-num"></td>
-								<td className="diff-line-content">{line.content}</td>
-							</tr>
-						);
-					}
-					return (
-						<tr key={i} className={`diff-line diff-${line.type}`}>
-							<td className="diff-line-num">{line.type !== 'add' && line.oldLine !== undefined ? line.oldLine : ''}</td>
-							<td className="diff-line-num">{line.type !== 'delete' && line.newLine !== undefined ? line.newLine : ''}</td>
-							<td className="diff-line-content">
-								<span className="diff-line-prefix">
-									{line.type === 'add' ? '+' : line.type === 'delete' ? '-' : ' '}
-								</span>
-								{line.content}
-							</td>
-						</tr>
-					);
-				})}
-			</tbody>
-		</table>
-	);
+	return <DiffTable lines={lines} onHunkHeaderDragStart={handleHunkDragStart} />;
 }
 
 function FileEntry({ file }: { file: ChangedFileInfo }) {

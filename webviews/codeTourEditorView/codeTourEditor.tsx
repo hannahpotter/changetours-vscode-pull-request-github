@@ -5,12 +5,21 @@
 
 import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CodeTourDocument, HunkReference, TourHunkNode, TourTextNode } from '../../src/github/codeTourMarkdown';
+import type { CodeTourDocument, HunkReference, TourTextNode } from '../../src/github/codeTourMarkdown';
+import { DiffTable } from '../common/DiffTable';
+import { parsePatch } from '../common/diffUtils';
 
 // Editor-only node type: a pending drop zone placeholder (never serialized).
 interface TourDropZoneNode {
 	type: 'dropzone';
 	id: string;
+}
+
+// Editor-local hunk node extends TourHunkNode with optional patch content (now serialized in hunk.patch).
+interface EditorHunkNode {
+	type: 'hunk';
+	id: string;
+	hunk: HunkReference;
 }
 
 // Editor-local group node mirrors TourGroupNode but allows EditorNode children.
@@ -22,7 +31,7 @@ interface EditorGroupNode {
 	children: EditorNode[];
 }
 
-type EditorNode = EditorGroupNode | TourTextNode | TourHunkNode | TourDropZoneNode;
+type EditorNode = EditorGroupNode | TourTextNode | EditorHunkNode | TourDropZoneNode;
 
 marked.setOptions({ breaks: true });
 
@@ -114,7 +123,11 @@ function serializeDoc(doc: EditorDocument): string {
 					lines.push('');
 					break;
 				case 'hunk':
-					lines.push(`:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}:::`);
+					lines.push(`:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`);
+					if (node.hunk.patch) {
+						lines.push(node.hunk.patch);
+					}
+					lines.push(':::');
 					lines.push('');
 					break;
 				case 'dropzone':
@@ -130,13 +143,18 @@ function serializeDoc(doc: EditorDocument): string {
 
 /* - Drop zone block (pending hunk placeholder) ----------- */
 
+// Extended payload from drag that may include patch content
+interface HunkPayload extends HunkReference {
+	patch?: string;
+}
+
 function DropZoneBlock({
 	node,
 	onDrop,
 	onRemove,
 }: {
 	node: TourDropZoneNode;
-	onDrop: (id: string, hunk: HunkReference) => void;
+	onDrop: (id: string, hunk: HunkReference, patch?: string) => void;
 	onRemove: (id: string) => void;
 }) {
 	const [over, setOver] = useState(false);
@@ -157,8 +175,9 @@ function DropZoneBlock({
 		const raw = e.dataTransfer.getData('application/vnd.codetour.hunk+json');
 		if (raw) {
 			try {
-				const hunk: HunkReference = JSON.parse(raw);
-				onDrop(node.id, hunk);
+				const payload: HunkPayload = JSON.parse(raw);
+				const { patch, ...hunk } = payload;
+				onDrop(node.id, hunk, patch);
 			} catch {
 				// ignore malformed data
 			}
@@ -189,8 +208,10 @@ function DropZoneBlock({
 
 /* - Hunk display component ---------------------- */
 
-function HunkBlock({ node, onRemove }: { node: TourHunkNode; onRemove: (id: string) => void }) {
-	const { file, startLine, endLine, ref } = node.hunk;
+function HunkBlock({ node, onRemove }: { node: EditorHunkNode; onRemove: (id: string) => void }) {
+	const { file, startLine, endLine, ref, patch } = node.hunk;
+	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
+
 	return (
 		<div className="tour-hunk">
 			<div className="tour-hunk-header">
@@ -200,9 +221,13 @@ function HunkBlock({ node, onRemove }: { node: TourHunkNode; onRemove: (id: stri
 				<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
 				<button className="tour-remove-btn" title="Remove hunk" onClick={() => onRemove(node.id)}>&times;</button>
 			</div>
-			<div className="tour-hunk-placeholder">
-				Diff hunk from <strong>{file}</strong> lines {startLine}&ndash;{endLine}
-			</div>
+			{lines.length > 0 ? (
+				<DiffTable lines={lines} />
+			) : (
+				<div className="tour-hunk-placeholder">
+					Diff hunk from <strong>{file}</strong> lines {startLine}&ndash;{endLine}
+				</div>
+			)}
 		</div>
 	);
 }
@@ -315,7 +340,7 @@ function GroupBlock({
 	node: EditorGroupNode;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleChange: (id: string, title: string) => void;
-	onDropZoneDrop: (id: string, hunk: HunkReference) => void;
+	onDropZoneDrop: (id: string, hunk: HunkReference, patch?: string) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
@@ -387,7 +412,7 @@ function NodeRenderer({
 	node: EditorNode;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleChange: (id: string, title: string) => void;
-	onDropZoneDrop: (id: string, hunk: HunkReference) => void;
+	onDropZoneDrop: (id: string, hunk: HunkReference, patch?: string) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
@@ -410,7 +435,7 @@ function NodeRenderer({
 		case 'text':
 			return <TextBlock node={node as TourTextNode} onChange={onTextChange} onRemove={onRemove} />;
 		case 'hunk':
-			return <HunkBlock node={node as TourHunkNode} onRemove={onRemove} />;
+			return <HunkBlock node={node as EditorHunkNode} onRemove={onRemove} />;
 		case 'dropzone':
 			return <DropZoneBlock node={node} onDrop={onDropZoneDrop} onRemove={onRemove} />;
 	}
@@ -552,13 +577,13 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeT
 
 	/* - Drop zone receives a hunk (replaces the dropzone node) --- */
 
-	const handleDropZoneDrop = useCallback((dropZoneId: string, hunk: HunkReference) => {
+	const handleDropZoneDrop = useCallback((dropZoneId: string, hunk: HunkReference, patch?: string) => {
 		applyLocal(prev => ({
 			...prev,
 			children: updateNodeInList(prev.children, dropZoneId, () => ({
 				type: 'hunk' as const,
 				id: dropZoneId,
-				hunk,
+				hunk: { ...hunk, patch },
 			})),
 		}));
 	}, [applyLocal]);
