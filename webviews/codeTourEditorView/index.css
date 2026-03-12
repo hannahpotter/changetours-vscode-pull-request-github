@@ -264,16 +264,16 @@
 
 .tour-add-btn {
 	padding: 4px 12px;
-	border: 1px solid var(--vscode-button-secondaryBackground, var(--vscode-panel-border, #555));
+	border: 1px solid var(--vscode-button-background, var(--vscode-panel-border, #555));
 	border-radius: 4px;
-	background: var(--vscode-button-secondaryBackground, transparent);
-	color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+	background: var(--vscode-button-background, transparent);
+	color: var(--vscode-button-foreground, var(--vscode-editor-foreground));
 	font-size: 12px;
 	cursor: pointer;
 }
 
 .tour-add-btn:hover {
-	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+	background: var(--vscode-button-hoverBackground, var(--vscode-list-hoverBackground));
 }
 
 .tour-remove-btn {
@@ -281,17 +281,12 @@
 	padding: 0 6px;
 	border: none;
 	background: transparent;
-	color: var(--vscode-descriptionForeground);
+	color: var(--vscode-button-foreground);
 	font-size: 16px;
 	cursor: pointer;
 	line-height: 1;
 	border-radius: 4px;
 	flex-shrink: 0;
-}
-
-.tour-remove-btn:hover {
-	color: var(--vscode-errorForeground, #d73a49);
-	background: var(--vscode-list-hoverBackground);
 }
 
 .loading-indicator {
