@@ -44,6 +44,13 @@ function Root() {
 		});
 	}, [handler]);
 
+	const onOpenDiff = useCallback((hunk: any) => {
+		handler?.postMessage({
+			command: 'codeTourEditor.openDiff',
+			args: { hunk },
+		});
+	}, [handler]);
+
 	if (!doc) {
 		return <div className="loading-indicator">Loading...</div>;
 	}
@@ -53,6 +60,7 @@ function Root() {
 			document={doc}
 			onDocumentChange={onDocumentChange}
 			onInsertHunk={onInsertHunk}
+			onOpenDiff={onOpenDiff}
 		/>
 	);
 }

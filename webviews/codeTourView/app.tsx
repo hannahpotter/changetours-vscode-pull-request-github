@@ -12,6 +12,9 @@ import { getMessageHandler } from '../common/message';
 interface ChangedFilesData {
 	title: string;
 	number: number;
+	owner: string;
+	repo: string;
+	baseRef: string;
 	files: ChangedFileInfo[];
 }
 

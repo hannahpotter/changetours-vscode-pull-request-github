@@ -101,6 +101,12 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				return;
 			}
 
+			case 'codeTourEditor.openDiff': {
+				const { hunk } = message.args as { hunk: HunkReference };
+				vscode.commands.executeCommand('codetour.openDiff', hunk);
+				return;
+			}
+
 			default:
 				return;
 		}

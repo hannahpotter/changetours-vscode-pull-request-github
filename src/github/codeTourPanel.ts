@@ -87,6 +87,9 @@ export class CodeTourPanel extends WebviewBase {
 				data: {
 					title: this._pullRequest.title,
 					number: this._pullRequest.number,
+					owner: this._pullRequest.remote.owner,
+					repo: this._pullRequest.remote.repositoryName,
+					baseRef: this._pullRequest.base.sha,
 					files,
 				},
 			});

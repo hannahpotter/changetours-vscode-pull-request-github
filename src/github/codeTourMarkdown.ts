@@ -17,6 +17,12 @@ export interface HunkReference {
 	endLine: number;
 	ref: string;
 	patch?: string;
+	previousFile?: string;
+	isPR?: boolean;
+	baseRef?: string;
+	prNumber?: number;
+	prOwner?: string;
+	prRepo?: string;
 }
 
 export type TourNodeType = 'group' | 'text' | 'hunk';
@@ -48,7 +54,7 @@ export interface CodeTourDocument {
 	children: TourNode[];
 }
 
-const HUNK_PATTERN = /^:::hunk\s+file=(?<file>\S+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>\S+)$/;
+const HUNK_PATTERN = /^:::hunk\s+file=(?<file>[^\s]+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>[^\s]+)(?:\s+previousFile=(?<previousFile>[^\s]+))?(?:\s+baseRef=(?<baseRef>[^\s]+))?(?:\s+isPR=(?<isPR>true|false))?(?:\s+prNumber=(?<prNumber>\d+))?(?:\s+prOwner=(?<prOwner>[^\s]+))?(?:\s+prRepo=(?<prRepo>[^\s]+))?\s*$/;
 const HUNK_END_PATTERN = /^:::$/;
 
 let nextId = 0;
@@ -81,7 +87,7 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 
 	// State for multi-line hunk parsing
 	let inHunk = false;
-	let pendingHunk: { file: string; startLine: number; endLine: number; ref: string } | null = null;
+	let pendingHunk: HunkReference | null = null;
 	let pendingPatchLines: string[] = [];
 
 	function currentContainer(): TourNode[] {
@@ -175,6 +181,12 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 				startLine: parseInt(hunkMatch.groups!.start, 10),
 				endLine: parseInt(hunkMatch.groups!.end, 10),
 				ref: hunkMatch.groups!.ref,
+				previousFile: hunkMatch.groups!.previousFile,
+				baseRef: hunkMatch.groups!.baseRef,
+				isPR: hunkMatch.groups!.isPR ? hunkMatch.groups!.isPR === 'true' : undefined,
+				prNumber: hunkMatch.groups!.prNumber ? parseInt(hunkMatch.groups!.prNumber, 10) : undefined,
+				prOwner: hunkMatch.groups!.prOwner,
+				prRepo: hunkMatch.groups!.prRepo
 			};
 			pendingPatchLines = [];
 			continue;
@@ -215,14 +227,19 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 					lines.push(node.content);
 					lines.push('');
 					break;
-				case 'hunk':
-					lines.push(`:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`);
+				case 'hunk': {
+					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
+					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
+					if (node.hunk.baseRef) hunkHeader += ` baseRef=${node.hunk.baseRef}`;
+					if (node.hunk.isPR !== undefined) hunkHeader += ` isPR=${node.hunk.isPR}`;
+					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
 					}
 					lines.push(':::');
 					lines.push('');
 					break;
+				}
 			}
 		}
 	}
@@ -237,7 +254,14 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
  * Create a hunk directive string suitable for inserting into a document.
  */
 export function createHunkDirective(hunk: HunkReference): string {
-	const header = `:::hunk file=${hunk.file} lines=${hunk.startLine}-${hunk.endLine} ref=${hunk.ref}`;
+	let header = `:::hunk file=${hunk.file} lines=${hunk.startLine}-${hunk.endLine} ref=${hunk.ref}`;
+	if (hunk.previousFile) header += ` previousFile=${hunk.previousFile}`;
+	if (hunk.baseRef) header += ` baseRef=${hunk.baseRef}`;
+	if (hunk.isPR !== undefined) header += ` isPR=${hunk.isPR}`;
+	if (hunk.prNumber !== undefined) header += ` prNumber=${hunk.prNumber}`;
+	if (hunk.prOwner) header += ` prOwner=${hunk.prOwner}`;
+	if (hunk.prRepo) header += ` prRepo=${hunk.prRepo}`;
+
 	if (hunk.patch) {
 		return `${header}\n${hunk.patch}\n:::`;
 	}

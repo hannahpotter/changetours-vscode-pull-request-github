@@ -12,6 +12,9 @@ import { chevronDownIcon } from '../components/icon';
 interface ChangedFilesOverviewProps {
 	title: string;
 	number: number;
+	owner: string;
+	repo: string;
+	baseRef: string;
 	files: ChangedFileInfo[];
 }
 
@@ -71,7 +74,7 @@ function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: nu
 	return ranges;
 }
 
-function DiffView({ patch, fileName }: { patch: string; fileName: string }) {
+function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, baseRef }: { patch: string; fileName: string; previousFile?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string }) {
 	const lines = parsePatch(patch);
 	const rawLines = patch.split('\n');
 	const hunkRanges = computeHunkRanges(lines);
@@ -104,15 +107,21 @@ function DiffView({ patch, fileName }: { patch: string; fileName: string }) {
 			endLine: range.endLine,
 			ref: 'HEAD',
 			patch: hunkPatch,
+			previousFile,
+			isPR: true,
+			baseRef,
+			prNumber,
+			prOwner,
+			prRepo
 		});
 		e.dataTransfer.setData('application/vnd.codetour.hunk+json', payload);
 		e.dataTransfer.effectAllowed = 'copy';
-	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices]);
+	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, baseRef, prNumber, prOwner, prRepo]);
 
 	return <DiffTable lines={lines} onHunkHeaderDragStart={handleHunkDragStart} />;
 }
 
-function FileEntry({ file }: { file: ChangedFileInfo }) {
+function FileEntry({ file, prNumber, prOwner, prRepo, baseRef }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string }) {
 	const [expanded, setExpanded] = useState(true);
 	const { text, className } = statusLabel(file.status);
 	const { dir, base } = splitPath(file.fileName);
@@ -139,7 +148,15 @@ function FileEntry({ file }: { file: ChangedFileInfo }) {
 			</div>
 			{expanded && file.patch && (
 				<div className="file-diff">
-					<DiffView patch={file.patch} fileName={file.fileName} />
+					<DiffView
+						patch={file.patch}
+						fileName={file.fileName}
+						previousFile={file.previousFileName}
+						prNumber={prNumber}
+						prOwner={prOwner}
+						prRepo={prRepo}
+						baseRef={baseRef}
+					/>
 				</div>
 			)}
 			{expanded && !file.patch && (
@@ -149,7 +166,7 @@ function FileEntry({ file }: { file: ChangedFileInfo }) {
 	);
 }
 
-export const ChangedFilesOverview = ({ title, number, files }: ChangedFilesOverviewProps) => {
+export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, files }: ChangedFilesOverviewProps) => {
 	const totalAdditions = files.reduce((sum, f) => sum + (f.additions ?? 0), 0);
 	const totalDeletions = files.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
 
@@ -163,7 +180,14 @@ export const ChangedFilesOverview = ({ title, number, files }: ChangedFilesOverv
 			</div>
 			<div className="changed-files-list">
 				{files.map(file => (
-					<FileEntry key={file.fileName} file={file} />
+					<FileEntry
+						key={file.fileName}
+						file={file}
+						prNumber={number}
+						prOwner={owner}
+						prRepo={repo}
+						baseRef={baseRef}
+					/>
 				))}
 			</div>
 		</>

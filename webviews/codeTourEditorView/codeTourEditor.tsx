@@ -52,6 +52,7 @@ interface CodeTourEditorProps {
 	document: CodeTourDocument;
 	onDocumentChange: (markdown: string) => void;
 	onInsertHunk: (hunk: HunkReference) => void;
+	onOpenDiff?: (hunk: HunkReference) => void;
 }
 
 const HUNK_MIME_TYPE = 'application/vnd.codetour.hunk+json';
@@ -259,14 +260,22 @@ function serializeDoc(doc: EditorDocument): string {
 					lines.push(node.content);
 					lines.push('');
 					break;
-				case 'hunk':
-					lines.push(`:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`);
+				case 'hunk': {
+					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
+					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
+					if (node.hunk.baseRef) hunkHeader += ` baseRef=${node.hunk.baseRef}`;
+					if (node.hunk.isPR !== undefined) hunkHeader += ` isPR=${node.hunk.isPR}`;
+					if (node.hunk.prNumber !== undefined) hunkHeader += ` prNumber=${node.hunk.prNumber}`;
+					if (node.hunk.prOwner) hunkHeader += ` prOwner=${node.hunk.prOwner}`;
+					if (node.hunk.prRepo) hunkHeader += ` prRepo=${node.hunk.prRepo}`;
+					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
 					}
 					lines.push(':::');
 					lines.push('');
 					break;
+				}
 				case 'dropzone':
 					// Ephemeral UI-only node, not serialized
 					break;
@@ -447,7 +456,7 @@ function DropZoneBlock({
 
 /* - Hunk display component ---------------------- */
 
-function HunkBlock({ node, onRemove }: { node: EditorHunkNode; onRemove: (id: string) => void }) {
+function HunkBlock({ node, onRemove, onOpenDiff }: { node: EditorHunkNode; onRemove: (id: string) => void; onOpenDiff?: (hunk: HunkReference) => void; }) {
 	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 
@@ -457,7 +466,10 @@ function HunkBlock({ node, onRemove }: { node: EditorHunkNode; onRemove: (id: st
 				<span className="tour-hunk-file">{file}</span>
 				<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
 				<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
-				<button className="tour-remove-btn" title="Remove hunk" onClick={() => onRemove(node.id)}>&times;</button>
+				<div className="tour-hunk-actions">
+					{onOpenDiff && <button className="tour-action-btn" title="Open Diff" onClick={() => onOpenDiff(node.hunk)}>Open Diff</button>}
+					<button className="tour-remove-btn" title="Remove hunk" onClick={() => onRemove(node.id)}>&times;</button>
+				</div>
 			</div>
 			{lines.length > 0 ? (
 				<DiffTable lines={lines} />
@@ -579,6 +591,7 @@ function GroupBlock({
 	onAddCode,
 	onAddGroup,
 	onRemove,
+	onOpenDiff,
 }: {
 	node: EditorGroupNode;
 	dragState: ReorderDragState | null;
@@ -593,6 +606,7 @@ function GroupBlock({
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
 	onRemove: (id: string) => void;
+	onOpenDiff?: (hunk: HunkReference) => void;
 }) {
 	const [collapsed, setCollapsed] = useState(false);
 	const [groupDropActive, setGroupDropActive] = useState(false);
@@ -675,6 +689,7 @@ function GroupBlock({
 							onAddCode={onAddCode}
 							onAddGroup={onAddGroup}
 							onRemove={onRemove}
+							onOpenDiff={onOpenDiff}
 						/>
 					))}
 					<div className="tour-group-actions">
@@ -706,6 +721,7 @@ function NodeRenderer({
 	onAddCode,
 	onAddGroup,
 	onRemove,
+	onOpenDiff,
 }: {
 	node: EditorNode;
 	dragState: ReorderDragState | null;
@@ -720,6 +736,7 @@ function NodeRenderer({
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
 	onRemove: (id: string) => void;
+	onOpenDiff?: (hunk: HunkReference) => void;
 }) {
 	switch (node.type) {
 		case 'group':
@@ -745,6 +762,7 @@ function NodeRenderer({
 						onAddCode={onAddCode}
 						onAddGroup={onAddGroup}
 						onRemove={onRemove}
+						onOpenDiff={onOpenDiff}
 					/>
 				</NodeShell>
 			);
@@ -769,7 +787,7 @@ function NodeRenderer({
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
 				>
-					<HunkBlock node={node as EditorHunkNode} onRemove={onRemove} />
+					<HunkBlock node={node as EditorHunkNode} onRemove={onRemove} onOpenDiff={onOpenDiff} />
 				</NodeShell>
 			);
 		case 'dropzone':
@@ -789,7 +807,7 @@ function NodeRenderer({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
 	const isLocalEdit = useRef(false);
@@ -984,6 +1002,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange }: CodeT
 						onAddCode={handleAddCode}
 						onAddGroup={handleAddGroup}
 						onRemove={handleRemove}
+						onOpenDiff={onOpenDiff}
 					/>
 				))}
 				<div className="tour-root-actions">

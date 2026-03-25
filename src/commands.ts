@@ -18,6 +18,7 @@ import { SessionLinkInfo } from './common/timelineEvent';
 import { asTempStorageURI, fromPRUri, fromReviewUri, Schemes, toPRUri } from './common/uri';
 import { formatError } from './common/utils';
 import { EXTENSION_ID } from './constants';
+import { HunkReference } from './github/codeTourMarkdown';
 import { CrossChatSessionWithPR } from './github/copilotApi';
 import { CopilotRemoteAgentManager, SessionIdForPr } from './github/copilotRemoteAgent';
 import { FolderRepositoryManager } from './github/folderRepositoryManager';
@@ -143,6 +144,55 @@ export function registerCommands(
 	const logId = 'RegisterCommands';
 
 	PullRequestOverviewPanel.registerGlobalCommands(context, telemetry);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			'codetour.openDiff',
+			async (hunk: HunkReference) => {
+				const folderManager = reposManager.folderManagers[0];
+				if (!folderManager) {
+					return;
+				}
+
+				const activePR = folderManager.activePullRequest;
+
+				// If the hunk is associated with a PR but that PR is not active, offer to check out the PR so the diff can be properly displayed with comments.
+				if (hunk.isPR && hunk.prNumber && hunk.prOwner && hunk.prRepo && activePR && (hunk.prNumber !== activePR.number || hunk.prOwner !== activePR.remote.owner || hunk.prRepo !== activePR.remote.repositoryName)) {
+					const checkoutAction = await vscode.window.showInformationMessage(
+						vscode.l10n.t('There is no active pull request. Would you like to check out the related pull request to view the diff and add comments?'),
+						{ modal: true },
+						'Yes'
+					);
+					if (checkoutAction === 'Yes') {
+						await vscode.commands.executeCommand('pr.checkoutFromDescription', {
+							owner: hunk.prOwner,
+							repo: hunk.prRepo,
+							number: hunk.prNumber
+						});
+					}
+				}
+
+				// If the hunk is associated with a PR and that PR is currently active, open the diff view through the PR to ensure comments are properly loaded and linked.
+				if (activePR && hunk.isPR && hunk.prNumber === activePR.number && hunk.prOwner === activePR.remote.owner && hunk.prRepo === activePR.remote.repositoryName) {
+					const changes = await activePR.getFileChangesInfo();
+					const changeModel = changes.find(c => c.fileName === hunk.file);
+
+					if (changeModel) {
+						await PullRequestModel.openDiff(folderManager, activePR, changeModel, hunk.file, hunk.startLine);
+						return;
+					}
+				}
+
+
+				// Otherwise, open a simple diff view without comments.
+				const leftUri = vscode.Uri.file(pathLib.resolve(folderManager.repository.rootUri.fsPath, hunk.previousFile || hunk.file));
+				const rightUri = vscode.Uri.file(pathLib.resolve(folderManager.repository.rootUri.fsPath, hunk.file));
+
+				const options = { selection: { start: { line: hunk.startLine, character: 0 }, end: { line: hunk.endLine, character: 0 } } };
+				await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, `${hunk.file} (Tour Diff)`, options);
+			}
+		)
+	);
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
