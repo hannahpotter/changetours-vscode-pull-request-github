@@ -16,6 +16,7 @@ export function main() {
 
 function Root() {
 	const [doc, setDoc] = useState<CodeTourDocument | undefined>(undefined);
+	const [activePR, setActivePR] = useState<{ number: number; owner: string; repo: string } | undefined>(undefined);
 	const [handler, setHandler] = useState<MessageHandler | undefined>(undefined);
 
 	useEffect(() => {
@@ -23,6 +24,10 @@ function Root() {
 			switch (message.command) {
 				case 'codeTourEditor.initialize':
 					setDoc(message.data);
+					setActivePR(message.activePR);
+					return;
+				case 'codeTourEditor.updateActivePR':
+					setActivePR(message.activePR);
 					return;
 			}
 		});
@@ -58,6 +63,7 @@ function Root() {
 	return (
 		<CodeTourEditor
 			document={doc}
+			activePR={activePR}
 			onDocumentChange={onDocumentChange}
 			onInsertHunk={onInsertHunk}
 			onOpenDiff={onOpenDiff}

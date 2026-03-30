@@ -6,10 +6,12 @@
 
 import * as vscode from 'vscode';
 import { createHunkDirective, HunkReference, parseCodeTourMarkdown } from './codeTourMarkdown';
+import { RepositoriesManager } from './repositoriesManager';
 import Logger from '../common/logger';
 import { formatError } from '../common/utils';
 import { generateUuid } from '../common/uuid';
 import { IRequestMessage, WebviewBase } from '../common/webview';
+
 
 export const CODE_TOUR_EDITOR_VIEW_TYPE = 'codeTourEditor';
 
@@ -18,12 +20,12 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	private static readonly _webviewPanels = new Map<string, vscode.WebviewPanel>();
 	private _pendingWebviewEdits = new Map<string, number>();
 
-	constructor(private readonly _extensionUri: vscode.Uri) {
+	constructor(private readonly _extensionUri: vscode.Uri, private readonly _reposManager: RepositoriesManager) {
 		super();
 	}
 
-	public static register(context: vscode.ExtensionContext): vscode.Disposable {
-		const provider = new CodeTourEditorProvider(context.extensionUri);
+	public static register(context: vscode.ExtensionContext, reposManager: RepositoriesManager): vscode.Disposable {
+		const provider = new CodeTourEditorProvider(context.extensionUri, reposManager);
 		return vscode.window.registerCustomEditorProvider(
 			CODE_TOUR_EDITOR_VIEW_TYPE,
 			provider,
@@ -69,10 +71,30 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			}
 		});
 
+		let prChangeDisposable: vscode.Disposable | undefined;
+		const folderManager = this._reposManager.folderManagers[0];
+		if (folderManager) {
+			prChangeDisposable = folderManager.onDidChangeActivePullRequest(e => {
+				const activePR = e.new;
+				const prInfo = activePR ? {
+					number: activePR.number,
+					owner: activePR.remote.owner,
+					repo: activePR.remote.repositoryName
+				} : undefined;
+				webviewPanel.webview.postMessage({
+					res: {
+						command: 'codeTourEditor.updateActivePR',
+						activePR: prInfo
+					}
+				});
+			});
+		}
+
 		webviewPanel.onDidDispose(() => {
 			CodeTourEditorProvider._webviewPanels.delete(key);
 			messageDisposable.dispose();
 			changeDisposable.dispose();
+			prChangeDisposable?.dispose();
 		});
 	}
 
@@ -115,10 +137,18 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	private _sendDocumentToWebview(webview: vscode.Webview, document: vscode.TextDocument): void {
 		try {
 			const parsed = parseCodeTourMarkdown(document.getText());
+			const activePR = this._reposManager.folderManagers[0]?.activePullRequest;
+			const prInfo = activePR ? {
+				number: activePR.number,
+				owner: activePR.remote.owner,
+				repo: activePR.remote.repositoryName
+			} : undefined;
+
 			webview.postMessage({
 				res: {
 					command: 'codeTourEditor.initialize',
 					data: parsed,
+					activePR: prInfo
 				},
 			});
 		} catch (e) {

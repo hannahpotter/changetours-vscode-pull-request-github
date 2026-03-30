@@ -50,6 +50,7 @@ interface EditorDocument {
 
 interface CodeTourEditorProps {
 	document: CodeTourDocument;
+	activePR?: { number: number; owner: string; repo: string };
 	onDocumentChange: (markdown: string) => void;
 	onInsertHunk: (hunk: HunkReference) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
@@ -456,9 +457,15 @@ function DropZoneBlock({
 
 /* - Hunk display component ---------------------- */
 
-function HunkBlock({ node, onRemove, onOpenDiff }: { node: EditorHunkNode; onRemove: (id: string) => void; onOpenDiff?: (hunk: HunkReference) => void; }) {
-	const { file, startLine, endLine, ref, patch } = node.hunk;
+function HunkBlock({ node, onRemove, onOpenDiff, activePR }: { node: EditorHunkNode; onRemove: (id: string) => void; onOpenDiff?: (hunk: HunkReference) => void; activePR?: { number: number; owner: string; repo: string } }) {
+	const { file, startLine, endLine, ref, patch, isPR, prNumber, prOwner, prRepo } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
+
+	const isMismatch = isPR && (
+		prNumber !== activePR?.number ||
+		prOwner !== activePR?.owner ||
+		prRepo !== activePR?.repo
+	);
 
 	return (
 		<div className="tour-hunk">
@@ -467,7 +474,16 @@ function HunkBlock({ node, onRemove, onOpenDiff }: { node: EditorHunkNode; onRem
 				<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
 				<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
 				<div className="tour-hunk-actions">
-					{onOpenDiff && <button className="tour-action-btn" title="Open Diff" onClick={() => onOpenDiff(node.hunk)}>Open Diff</button>}
+					{onOpenDiff && (
+						<button
+							className="tour-action-btn"
+							style={isMismatch ? { opacity: 0.5 } : {}}
+							title={isMismatch ? 'Checkout the associated PR to view the diff' : 'Open Diff'}
+							onClick={() => onOpenDiff(node.hunk)}
+						>
+							Open Diff
+						</button>
+					)}
 					<button className="tour-remove-btn" title="Remove hunk" onClick={() => onRemove(node.id)}>&times;</button>
 				</div>
 			</div>
@@ -592,6 +608,7 @@ function GroupBlock({
 	onAddGroup,
 	onRemove,
 	onOpenDiff,
+	activePR,
 }: {
 	node: EditorGroupNode;
 	dragState: ReorderDragState | null;
@@ -607,6 +624,7 @@ function GroupBlock({
 	onAddGroup: (parentGroupId?: string) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
+	activePR?: { number: number; owner: string; repo: string };
 }) {
 	const [collapsed, setCollapsed] = useState(false);
 	const [groupDropActive, setGroupDropActive] = useState(false);
@@ -690,6 +708,7 @@ function GroupBlock({
 							onAddGroup={onAddGroup}
 							onRemove={onRemove}
 							onOpenDiff={onOpenDiff}
+							activePR={activePR}
 						/>
 					))}
 					<div className="tour-group-actions">
@@ -722,6 +741,7 @@ function NodeRenderer({
 	onAddGroup,
 	onRemove,
 	onOpenDiff,
+	activePR,
 }: {
 	node: EditorNode;
 	dragState: ReorderDragState | null;
@@ -737,6 +757,7 @@ function NodeRenderer({
 	onAddGroup: (parentGroupId?: string) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
+	activePR?: { number: number; owner: string; repo: string };
 }) {
 	switch (node.type) {
 		case 'group':
@@ -763,6 +784,7 @@ function NodeRenderer({
 						onAddGroup={onAddGroup}
 						onRemove={onRemove}
 						onOpenDiff={onOpenDiff}
+						activePR={activePR}
 					/>
 				</NodeShell>
 			);
@@ -787,7 +809,7 @@ function NodeRenderer({
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
 				>
-					<HunkBlock node={node as EditorHunkNode} onRemove={onRemove} onOpenDiff={onOpenDiff} />
+					<HunkBlock node={node as EditorHunkNode} onRemove={onRemove} onOpenDiff={onOpenDiff} activePR={activePR} />
 				</NodeShell>
 			);
 		case 'dropzone':
@@ -807,7 +829,7 @@ function NodeRenderer({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, activePR }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
 	const isLocalEdit = useRef(false);
@@ -1003,6 +1025,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 						onAddGroup={handleAddGroup}
 						onRemove={handleRemove}
 						onOpenDiff={onOpenDiff}
+						activePR={activePR}
 					/>
 				))}
 				<div className="tour-root-actions">

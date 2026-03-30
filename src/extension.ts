@@ -485,7 +485,7 @@ async function deferredActivate(context: vscode.ExtensionContext, showPRControll
 	const githubFilesystemProvider = new GitHubCommitFileSystemProvider(reposManager, apiImpl, credentialStore);
 	context.subscriptions.push(vscode.workspace.registerFileSystemProvider(Schemes.GitHubCommit, githubFilesystemProvider, { isReadonly: new vscode.MarkdownString(vscode.l10n.t('GitHub commits cannot be edited')) }));
 
-	context.subscriptions.push(CodeTourEditorProvider.register(context));
+	context.subscriptions.push(CodeTourEditorProvider.register(context, reposManager));
 
 	await init(context, apiImpl, credentialStore, repositories, prTree, liveshareApiPromise, showPRController, reposManager, createPrHelper, copilotRemoteAgentManager, themeWatcher, prsTreeModel);
 	return apiImpl;

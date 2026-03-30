@@ -156,22 +156,6 @@ export function registerCommands(
 
 				const activePR = folderManager.activePullRequest;
 
-				// If the hunk is associated with a PR but that PR is not active, offer to check out the PR so the diff can be properly displayed with comments.
-				if (hunk.isPR && hunk.prNumber && hunk.prOwner && hunk.prRepo && activePR && (hunk.prNumber !== activePR.number || hunk.prOwner !== activePR.remote.owner || hunk.prRepo !== activePR.remote.repositoryName)) {
-					const checkoutAction = await vscode.window.showInformationMessage(
-						vscode.l10n.t('There is no active pull request. Would you like to check out the related pull request to view the diff and add comments?'),
-						{ modal: true },
-						'Yes'
-					);
-					if (checkoutAction === 'Yes') {
-						await vscode.commands.executeCommand('pr.checkoutFromDescription', {
-							owner: hunk.prOwner,
-							repo: hunk.prRepo,
-							number: hunk.prNumber
-						});
-					}
-				}
-
 				// If the hunk is associated with a PR and that PR is currently active, open the diff view through the PR to ensure comments are properly loaded and linked.
 				if (activePR && hunk.isPR && hunk.prNumber === activePR.number && hunk.prOwner === activePR.remote.owner && hunk.prRepo === activePR.remote.repositoryName) {
 					const changes = await activePR.getFileChangesInfo();
