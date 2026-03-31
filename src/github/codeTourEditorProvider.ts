@@ -24,6 +24,27 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		super();
 	}
 
+	public static toggleEditMode(uri?: vscode.Uri) {
+		if (uri) {
+			const panel = CodeTourEditorProvider._webviewPanels.get(uri.toString());
+			if (panel) {
+				panel.webview.postMessage({
+					res: { command: 'codeTourEditor.toggleEditMode' }
+				});
+				return;
+			}
+		}
+
+		for (const panel of CodeTourEditorProvider._webviewPanels.values()) {
+			if (panel.active || panel.visible) {
+				panel.webview.postMessage({
+					res: { command: 'codeTourEditor.toggleEditMode' }
+				});
+				return;
+			}
+		}
+	}
+
 	public static register(context: vscode.ExtensionContext, reposManager: RepositoriesManager): vscode.Disposable {
 		const provider = new CodeTourEditorProvider(context.extensionUri, reposManager);
 		return vscode.window.registerCustomEditorProvider(

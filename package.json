@@ -999,6 +999,12 @@
 				"icon": "$(diff-multiple)"
 			},
 			{
+				"command": "pr.codeTourEditor.toggleEditMode",
+				"title": "%command.pr.codeTourEditor.toggleEditMode.title%",
+				"category": "%command.pull.request.category%",
+				"icon": "$(edit)"
+			},
+			{
 				"command": "pr.pickOnVscodeDev",
 				"title": "%command.pr.pickOnVscodeDev.title%",
 				"category": "%command.pull.request.category%",
@@ -3167,6 +3173,11 @@
 				},
 				{
 					"command": "pr.openCodeTourViewFromEditor",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.codetour\\.md$/"
+				},
+				{
+					"command": "pr.codeTourEditor.toggleEditMode",
 					"group": "navigation",
 					"when": "resourceFilename =~ /\\.codetour\\.md$/"
 				},

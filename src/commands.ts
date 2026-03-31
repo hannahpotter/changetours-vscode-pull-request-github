@@ -18,6 +18,7 @@ import { SessionLinkInfo } from './common/timelineEvent';
 import { asTempStorageURI, fromPRUri, fromReviewUri, Schemes, toPRUri } from './common/uri';
 import { formatError } from './common/utils';
 import { EXTENSION_ID } from './constants';
+import { CodeTourEditorProvider } from './github/codeTourEditorProvider';
 import { parseCodeTourMarkdown } from './github/codeTourMarkdown';
 import { CodeTourPanel } from './github/codeTourPanel';
 import { CrossChatSessionWithPR } from './github/copilotApi';
@@ -897,6 +898,26 @@ export function registerCommands(
 			} catch (e) {
 				vscode.window.showErrorMessage(vscode.l10n.t('Failed to read code tour: {0}', e instanceof Error ? e.message : 'Unknown error'));
 			}
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.codeTourEditor.toggleEditMode', (uri?: unknown) => {
+			let docUri: vscode.Uri | undefined;
+			if (uri instanceof vscode.Uri) {
+				docUri = uri;
+			} else if (uri && typeof uri === 'object') {
+				const obj = uri as { uri?: unknown };
+				if (obj.uri instanceof vscode.Uri) {
+					docUri = obj.uri;
+				}
+			}
+
+			if (!docUri) {
+				docUri = vscode.window.activeTextEditor?.document.uri;
+			}
+			console.log('Toggling edit mode for:', docUri);
+			CodeTourEditorProvider.toggleEditMode(docUri);
 		})
 	);
 

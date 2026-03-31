@@ -56,6 +56,7 @@ interface EditorDocument {
 interface CodeTourEditorProps {
 	document: CodeTourDocument;
 	activePR?: { number: number; owner: string; repo: string };
+	isEditMode?: boolean;
 	onDocumentChange: (markdown: string) => void;
 	onInsertHunk: (hunk: HunkReference) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
@@ -322,6 +323,7 @@ function NodeShell({
 	onDragStart,
 	onDragEnd,
 	onReorder,
+	isEditMode,
 	children,
 }: {
 	node: EditorNode;
@@ -329,11 +331,12 @@ function NodeShell({
 	onDragStart: (nodeId: string) => void;
 	onDragEnd: () => void;
 	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
+	isEditMode: boolean;
 	children: React.ReactNode;
 }) {
 	const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
-	const isDraggable = true;
-	const canAcceptDrop = !!dragState && dragState.nodeId !== node.id;
+	const isDraggable = isEditMode;
+	const canAcceptDrop = isEditMode && !!dragState && dragState.nodeId !== node.id;
 
 	useEffect(() => {
 		if (!dragState) {
@@ -493,7 +496,7 @@ function DropZoneBlock({
 
 /* - Hunk display component ---------------------- */
 
-function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR }: { node: EditorHunkNode; doc: EditorDocument; onRemove: (id: string) => void; onOpenDiff?: (hunk: HunkReference) => void; activePR?: { number: number; owner: string; repo: string } }) {
+function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { node: EditorHunkNode; doc: EditorDocument; onRemove: (id: string) => void; onOpenDiff?: (hunk: HunkReference) => void; activePR?: { number: number; owner: string; repo: string }; isEditMode: boolean }) {
 	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 
@@ -520,7 +523,9 @@ function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR }: { node: Editor
 							Open Diff
 						</button>
 					)}
-					<button className="tour-remove-btn" title="Remove hunk" onClick={() => onRemove(node.id)}>&times;</button>
+					{isEditMode && (
+						<button className="tour-remove-btn" title="Remove hunk" onClick={() => onRemove(node.id)}>&times;</button>
+					)}
 				</div>
 			</div>
 			{lines.length > 0 ? (
@@ -540,12 +545,14 @@ function TextBlock({
 	node,
 	onChange,
 	onRemove,
+	isEditMode,
 }: {
 	node: TourTextNode;
 	onChange: (id: string, content: string) => void;
 	onRemove: (id: string) => void;
+	isEditMode: boolean;
 }) {
-	const [editing, setEditing] = useState(!node.content);
+	const [editing, setEditing] = useState(isEditMode && !node.content);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
 	// Auto-resize textarea to fit content
@@ -586,7 +593,7 @@ function TextBlock({
 		return marked.parse(node.content) as string;
 	}, [editing, node.content]);
 
-	if (editing) {
+	if (editing && isEditMode) {
 		return (
 			<div className="tour-text-wrapper">
 				<textarea
@@ -613,16 +620,18 @@ function TextBlock({
 		<div className="tour-text-wrapper">
 			<div
 				className="tour-text-rendered"
-				onClick={() => setEditing(true)}
+				onClick={() => isEditMode && setEditing(true)}
 				dangerouslySetInnerHTML={{ __html: renderedHtml }}
 			/>
-			<button
-				className="tour-remove-btn tour-text-remove"
-				title="Remove text block"
-				onClick={() => onRemove(node.id)}
-			>
-				&times;
-			</button>
+			{isEditMode && (
+				<button
+					className="tour-remove-btn tour-text-remove"
+					title="Remove text block"
+					onClick={() => onRemove(node.id)}
+				>
+					&times;
+				</button>
+			)}
 		</div>
 	);
 }
@@ -646,6 +655,7 @@ function GroupBlock({
 	onRemove,
 	onOpenDiff,
 	activePR,
+	isEditMode,
 	onError,
 }: {
 	node: EditorGroupNode;
@@ -663,6 +673,7 @@ function GroupBlock({
 	onAddGroup: (parentGroupId?: string) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
+	isEditMode: boolean;
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
 }) {
@@ -716,20 +727,26 @@ function GroupBlock({
 				>
 					{chevronDownIcon}
 				</span>
-				<input
-					className="tour-group-title-input"
-					value={node.title}
-					onChange={handleTitleChange}
-					placeholder="Section title"
-				/>
-				<button className="tour-remove-btn" title="Remove section" onClick={() => onRemove(node.id)}>&times;</button>
+				{isEditMode ? (
+					<input
+						className="tour-group-title-input"
+						value={node.title}
+						onChange={handleTitleChange}
+						placeholder="Section title"
+					/>
+				) : (
+					<span className="tour-group-title-readonly">{node.title || 'Untitled Section'}</span>
+				)}
+				{isEditMode && (
+					<button className="tour-remove-btn" title="Remove section" onClick={() => onRemove(node.id)}>&times;</button>
+				)}
 			</div>
 			{!collapsed && (
 				<div
-					className={`tour-group-body${groupDropActive ? ' tour-group-body-drop-active' : ''}`}
-					onDragOver={handleGroupBodyDragOver}
-					onDragLeave={handleGroupBodyDragLeave}
-					onDrop={handleGroupBodyDrop}
+					className={`tour-group-body${groupDropActive && isEditMode ? ' tour-group-body-drop-active' : ''}`}
+					onDragOver={isEditMode ? handleGroupBodyDragOver : undefined}
+					onDragLeave={isEditMode ? handleGroupBodyDragLeave : undefined}
+					onDrop={isEditMode ? handleGroupBodyDrop : undefined}
 				>
 					{node.children.map(child => (
 						<NodeRenderer
@@ -750,16 +767,19 @@ function GroupBlock({
 							onRemove={onRemove}
 							onOpenDiff={onOpenDiff}
 							activePR={activePR}
+							isEditMode={isEditMode}
 							onError={onError}
 						/>
 					))}
-					<div className="tour-group-actions">
-						<button className="tour-add-btn" onClick={() => onAddText(node.id)}>+ Text</button>
-						<button className="tour-add-btn" onClick={() => onAddCode(node.id)}>+ Code</button>
-						{node.level < 6 && (
-							<button className="tour-add-btn" onClick={() => onAddGroup(node.id)}>+ Sub-section</button>
-						)}
-					</div>
+					{isEditMode && (
+						<div className="tour-group-actions">
+							<button className="tour-add-btn" onClick={() => onAddText(node.id)}>+ Text</button>
+							<button className="tour-add-btn" onClick={() => onAddCode(node.id)}>+ Code</button>
+							{node.level < 6 && (
+								<button className="tour-add-btn" onClick={() => onAddGroup(node.id)}>+ Sub-section</button>
+							)}
+						</div>
+					)}
 				</div>
 			)}
 		</div>
@@ -785,6 +805,7 @@ function NodeRenderer({
 	onRemove,
 	onOpenDiff,
 	activePR,
+	isEditMode,
 	onError,
 }: {
 	node: EditorNode;
@@ -802,6 +823,7 @@ function NodeRenderer({
 	onAddGroup: (parentGroupId?: string) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
+	isEditMode: boolean;
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
 }) {
@@ -814,6 +836,7 @@ function NodeRenderer({
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
+					isEditMode={isEditMode}
 				>
 					<GroupBlock
 						node={node}
@@ -832,6 +855,7 @@ function NodeRenderer({
 						onRemove={onRemove}
 						onOpenDiff={onOpenDiff}
 						activePR={activePR}
+						isEditMode={isEditMode}
 						onError={onError}
 					/>
 				</NodeShell>
@@ -844,8 +868,9 @@ function NodeRenderer({
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
+					isEditMode={isEditMode}
 				>
-					<TextBlock node={node as TourTextNode} onChange={onTextChange} onRemove={onRemove} />
+					<TextBlock node={node as TourTextNode} onChange={onTextChange} onRemove={onRemove} isEditMode={isEditMode} />
 				</NodeShell>
 			);
 		case 'hunk':
@@ -856,11 +881,13 @@ function NodeRenderer({
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
+					isEditMode={isEditMode}
 				>
-					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} activePR={activePR} />
+					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} activePR={activePR} isEditMode={isEditMode} />
 				</NodeShell>
 			);
 		case 'dropzone':
+			if (!isEditMode) return null;
 			return (
 				<NodeShell
 					node={node}
@@ -868,6 +895,7 @@ function NodeRenderer({
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
+					isEditMode={isEditMode}
 				>
 					<DropZoneBlock node={node} doc={doc} onDrop={onDropZoneDrop} onRemove={onRemove} onError={onError} />
 				</NodeShell>
@@ -877,7 +905,7 @@ function NodeRenderer({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, activePR, onError }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, activePR, isEditMode = true, onError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
 	const isLocalEdit = useRef(false);
@@ -1069,12 +1097,16 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 
 	return (
 		<div className="code-tour-editor">
-			<input
-				className="tour-title-input"
-				value={doc.title}
-				onChange={handleTitleChange}
-				placeholder="Code Tour Title"
-			/>
+			{isEditMode ? (
+				<input
+					className="tour-title-input"
+					value={doc.title}
+					onChange={handleTitleChange}
+					placeholder="Code Tour Title"
+				/>
+			) : (
+				<h1 className="tour-title-readonly">{doc.title || 'Untitled Code Tour'}</h1>
+			)}
 			<div className="tour-body">
 				{doc.children.map(node => (
 					<NodeRenderer
@@ -1095,14 +1127,17 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 						onRemove={handleRemove}
 						onOpenDiff={onOpenDiff}
 						activePR={activePR}
+						isEditMode={isEditMode}
 						onError={onError}
 					/>
 				))}
-				<div className="tour-root-actions">
-					<button className="tour-add-btn" onClick={() => handleAddText()}>+ Text</button>
-					<button className="tour-add-btn" onClick={() => handleAddCode()}>+ Code</button>
-					<button className="tour-add-btn" onClick={() => handleAddGroup()}>+ Section</button>
-				</div>
+				{isEditMode && (
+					<div className="tour-root-actions">
+						<button className="tour-add-btn" onClick={() => handleAddText()}>+ Text</button>
+						<button className="tour-add-btn" onClick={() => handleAddCode()}>+ Code</button>
+						<button className="tour-add-btn" onClick={() => handleAddGroup()}>+ Section</button>
+					</div>
+				)}
 			</div>
 		</div>
 	);

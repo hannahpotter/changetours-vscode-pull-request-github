@@ -17,6 +17,7 @@ export function main() {
 function Root() {
 	const [doc, setDoc] = useState<CodeTourDocument | undefined>(undefined);
 	const [activePR, setActivePR] = useState<{ number: number; owner: string; repo: string } | undefined>(undefined);
+	const [isEditMode, setIsEditMode] = useState(true);
 	const [handler, setHandler] = useState<MessageHandler | undefined>(undefined);
 
 	useEffect(() => {
@@ -28,6 +29,9 @@ function Root() {
 					return;
 				case 'codeTourEditor.updateActivePR':
 					setActivePR(message.activePR);
+					return;
+				case 'codeTourEditor.toggleEditMode':
+					setIsEditMode(prev => !prev);
 					return;
 			}
 		});
@@ -81,6 +85,7 @@ function Root() {
 		<CodeTourEditor
 			document={doc}
 			activePR={activePR}
+			isEditMode={isEditMode}
 			onDocumentChange={onDocumentChange}
 			onInsertHunk={onInsertHunk}
 			onOpenDiff={onOpenDiff}
