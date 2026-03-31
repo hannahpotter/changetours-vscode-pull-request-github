@@ -129,6 +129,12 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				return;
 			}
 
+			case 'codeTourEditor.showError': {
+				const { message: errMsg } = message.args as { message: string };
+				vscode.window.showErrorMessage(errMsg);
+				return;
+			}
+
 			default:
 				return;
 		}

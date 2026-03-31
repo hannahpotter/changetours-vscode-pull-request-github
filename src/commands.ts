@@ -18,7 +18,8 @@ import { SessionLinkInfo } from './common/timelineEvent';
 import { asTempStorageURI, fromPRUri, fromReviewUri, Schemes, toPRUri } from './common/uri';
 import { formatError } from './common/utils';
 import { EXTENSION_ID } from './constants';
-import { HunkReference } from './github/codeTourMarkdown';
+import { parseCodeTourMarkdown } from './github/codeTourMarkdown';
+import { CodeTourPanel } from './github/codeTourPanel';
 import { CrossChatSessionWithPR } from './github/copilotApi';
 import { CopilotRemoteAgentManager, SessionIdForPr } from './github/copilotRemoteAgent';
 import { FolderRepositoryManager } from './github/folderRepositoryManager';
@@ -148,7 +149,7 @@ export function registerCommands(
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
 			'codetour.openDiff',
-			async (hunk: HunkReference) => {
+			async (hunk: any) => {
 				const folderManager = reposManager.folderManagers[0];
 				if (!folderManager) {
 					return;
@@ -795,7 +796,25 @@ export function registerCommands(
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pr.openCodeTour', async (ctx: BaseContext | undefined) => {
+		vscode.commands.registerCommand('pr.openCodeTour', async () => {
+			const uris = await vscode.window.showOpenDialog({
+				canSelectFiles: true,
+				canSelectFolders: false,
+				canSelectMany: false,
+				filters: {
+					'Code Tours': ['codetour.md']
+				},
+				defaultUri: vscode.workspace.workspaceFolders?.[0].uri
+			});
+
+			if (uris && uris.length > 0) {
+				await vscode.commands.executeCommand('vscode.open', uris[0]);
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.newCodeTour', async (ctx: BaseContext | undefined) => {
 			if (!ctx) {
 				return;
 			}
@@ -803,9 +822,141 @@ export function registerCommands(
 			if (!resolved) {
 				return;
 			}
-			const { CodeTourPanel } = await import('./github/codeTourPanel');
-			return CodeTourPanel.createOrShow(context.extensionUri, resolved.pr);
+
+			const defaultUri = vscode.workspace.workspaceFolders?.[0].uri
+				? vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'new-tour.codetour.md')
+				: undefined;
+
+			const uri = await vscode.window.showSaveDialog({
+				filters: {
+					'Code Tours': ['codetour.md']
+				},
+				defaultUri
+			});
+
+			if (uri) {
+				const content = `---\nisPR: true\nprNumber: ${resolved.pr.number}\nprOwner: ${resolved.pr.remote.owner}\nprRepo: ${resolved.pr.remote.repositoryName}\nbaseRef: ${resolved.pr.base.ref}\n---\n\n# New Code Tour for PR #${resolved.pr.number}\n\n`;
+				await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+				await vscode.commands.executeCommand('vscode.open', uri);
+			}
 		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.openOverviewFromCodeTour', async (uri?: unknown) => {
+			let docUri: vscode.Uri | undefined;
+			if (uri instanceof vscode.Uri) {
+				docUri = uri;
+			} else if (uri && typeof uri === 'object') {
+				// sometimes passed as { uri: vscode.Uri }
+				const obj = uri as { uri?: unknown };
+				if (obj.uri instanceof vscode.Uri) {
+					docUri = obj.uri;
+				}
+			}
+
+			if (!docUri) {
+				docUri = vscode.window.activeTextEditor?.document.uri;
+			}
+			if (!docUri) {
+				vscode.window.showErrorMessage(vscode.l10n.t('No active Code Tour document found.'));
+				return;
+			}
+			if (!docUri.path.endsWith('.codetour.md')) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Current document is not a .codetour.md file.'));
+				return;
+			}
+
+			try {
+				let text = '';
+				if (docUri.scheme === 'file') {
+					const data = await vscode.workspace.fs.readFile(docUri);
+					text = new TextDecoder().decode(data);
+				} else {
+					const document = await vscode.workspace.openTextDocument(docUri);
+					text = document.getText();
+				}
+
+				const parsed = parseCodeTourMarkdown(text);
+				if (parsed.isPR && parsed.prOwner && parsed.prRepo && parsed.prNumber) {
+					const { prOwner, prRepo, prNumber } = parsed;
+					const folderManager = reposManager.getManagerForRepository(prOwner, prRepo);
+					if (folderManager) {
+						await PullRequestOverviewPanel.createOrShow(
+							telemetry,
+							context.extensionUri,
+							folderManager,
+							{ owner: prOwner, repo: prRepo, number: Number(prNumber) }
+						);
+					} else {
+						vscode.window.showErrorMessage(vscode.l10n.t('Could not find repository {0}/{1}', prOwner, prRepo));
+					}
+				} else {
+					vscode.window.showErrorMessage(vscode.l10n.t('Code tour does not contain valid pull request metadata.'));
+				}
+			} catch (e) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to read code tour: {0}', e instanceof Error ? e.message : 'Unknown error'));
+			}
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.openCodeTourViewFromEditor', async (uri?: unknown) => {
+			let docUri: vscode.Uri | undefined;
+			if (uri instanceof vscode.Uri) {
+				docUri = uri;
+			} else if (uri && typeof uri === 'object') {
+				const obj = uri as { uri?: unknown };
+				if (obj.uri instanceof vscode.Uri) {
+					docUri = obj.uri;
+				}
+			}
+
+			if (!docUri) {
+				docUri = vscode.window.activeTextEditor?.document.uri;
+			}
+			if (!docUri) {
+				vscode.window.showErrorMessage(vscode.l10n.t('No active Code Tour document found.'));
+				return;
+			}
+			if (!docUri.path.endsWith('.codetour.md')) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Current document is not a .codetour.md file.'));
+				return;
+			}
+
+			try {
+				let text = '';
+				if (docUri.scheme === 'file') {
+					const data = await vscode.workspace.fs.readFile(docUri);
+					text = new TextDecoder().decode(data);
+				} else {
+					const document = await vscode.workspace.openTextDocument(docUri);
+					text = document.getText();
+				}
+
+				const parsed = parseCodeTourMarkdown(text);
+				if (parsed.isPR && parsed.prOwner && parsed.prRepo && parsed.prNumber) {
+					const { prOwner, prRepo, prNumber } = parsed;
+					const folderManager = reposManager.getManagerForRepository(prOwner, prRepo);
+					if (folderManager) {
+						vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Loading Code Tour Pull Request') }, async () => {
+							const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+							if (prModel) {
+								await CodeTourPanel.createOrShow(context.extensionUri, prModel, vscode.ViewColumn.Beside);
+							} else {
+								vscode.window.showErrorMessage(vscode.l10n.t('Pull Request not found.'));
+							}
+						});
+					} else {
+						vscode.window.showErrorMessage(vscode.l10n.t('Could not find repository {0}/{1}', prOwner, prRepo));
+					}
+				} else {
+					vscode.window.showErrorMessage(vscode.l10n.t('Code tour does not contain valid pull request metadata.'));
+				}
+			} catch (e) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to read code tour: {0}', e instanceof Error ? e.message : 'Unknown error'));
+			}
+		})
 	);
 
 	let isCheckingOutFromReadonlyFile = false;

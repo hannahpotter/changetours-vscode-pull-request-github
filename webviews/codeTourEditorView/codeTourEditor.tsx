@@ -45,6 +45,11 @@ marked.setOptions({ breaks: true });
 // Editor-local document mirrors CodeTourDocument but allows EditorNode children.
 interface EditorDocument {
 	title: string;
+	prNumber?: number;
+	prOwner?: string;
+	prRepo?: string;
+	isPR?: boolean;
+	baseRef?: string;
 	children: EditorNode[];
 }
 
@@ -54,6 +59,7 @@ interface CodeTourEditorProps {
 	onDocumentChange: (markdown: string) => void;
 	onInsertHunk: (hunk: HunkReference) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
+	onError?: (message: string) => void;
 }
 
 const HUNK_MIME_TYPE = 'application/vnd.codetour.hunk+json';
@@ -244,6 +250,17 @@ function normalizeGroupLevels(nodes: EditorNode[], parentLevel?: number): Editor
 
 function serializeDoc(doc: EditorDocument): string {
 	const lines: string[] = [];
+
+	if (doc.isPR !== undefined || doc.prNumber !== undefined || doc.prOwner || doc.prRepo || doc.baseRef) {
+		lines.push('---');
+		if (doc.isPR !== undefined) lines.push(`isPR: ${doc.isPR}`);
+		if (doc.prNumber !== undefined) lines.push(`prNumber: ${doc.prNumber}`);
+		if (doc.prOwner) lines.push(`prOwner: ${doc.prOwner}`);
+		if (doc.prRepo) lines.push(`prRepo: ${doc.prRepo}`);
+		if (doc.baseRef) lines.push(`baseRef: ${doc.baseRef}`);
+		lines.push('---');
+	}
+
 	lines.push(`# ${doc.title}`);
 	lines.push('');
 
@@ -264,11 +281,6 @@ function serializeDoc(doc: EditorDocument): string {
 				case 'hunk': {
 					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
 					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
-					if (node.hunk.baseRef) hunkHeader += ` baseRef=${node.hunk.baseRef}`;
-					if (node.hunk.isPR !== undefined) hunkHeader += ` isPR=${node.hunk.isPR}`;
-					if (node.hunk.prNumber !== undefined) hunkHeader += ` prNumber=${node.hunk.prNumber}`;
-					if (node.hunk.prOwner) hunkHeader += ` prOwner=${node.hunk.prOwner}`;
-					if (node.hunk.prRepo) hunkHeader += ` prRepo=${node.hunk.prRepo}`;
 					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
@@ -292,7 +304,11 @@ function serializeDoc(doc: EditorDocument): string {
 
 // Extended payload from drag that may include patch content
 interface HunkPayload extends HunkReference {
-	patch?: string;
+	isPR?: boolean;
+	baseRef?: string;
+	prNumber?: number;
+	prOwner?: string;
+	prRepo?: string;
 }
 
 function getDropPosition(event: React.DragEvent<HTMLElement>): DropPosition {
@@ -394,11 +410,15 @@ function NodeShell({
 
 function DropZoneBlock({
 	node,
+	doc,
+	onError,
 	onDrop,
 	onRemove,
 }: {
 	node: TourDropZoneNode;
-	onDrop: (id: string, hunk: HunkReference, patch?: string) => void;
+	doc: EditorDocument;
+	onError?: (message: string) => void;
+	onDrop: (id: string, payload: HunkPayload) => void;
 	onRemove: (id: string) => void;
 }) {
 	const [over, setOver] = useState(false);
@@ -426,13 +446,29 @@ function DropZoneBlock({
 		if (raw) {
 			try {
 				const payload: HunkPayload = JSON.parse(raw);
-				const { patch, ...hunk } = payload;
-				onDrop(node.id, hunk, patch);
+
+				if (doc.isPR) {
+					const prNumberMatches = !doc.prNumber || !payload.prNumber || String(doc.prNumber) === String(payload.prNumber);
+					const prOwnerMatches = !doc.prOwner || !payload.prOwner || doc.prOwner === payload.prOwner;
+					const prRepoMatches = !doc.prRepo || !payload.prRepo || doc.prRepo === payload.prRepo;
+
+					if (!prNumberMatches || !prOwnerMatches || !prRepoMatches) {
+						const msg = `Cannot drop a hunk from a different pull request. Expected PR #${doc.prNumber} (${doc.prOwner}/${doc.prRepo}), but got PR #${payload.prNumber} (${payload.prOwner}/${payload.prRepo})`;
+						if (onError) {
+							onError(msg);
+						} else {
+							window.alert(msg);
+						}
+						return;
+					}
+				}
+
+				onDrop(node.id, payload);
 			} catch {
 				// ignore malformed data
 			}
 		}
-	}, [node.id, onDrop]);
+	}, [node.id, onDrop, doc, onError]);
 
 	return (
 		<div className="tour-text-wrapper">
@@ -457,14 +493,14 @@ function DropZoneBlock({
 
 /* - Hunk display component ---------------------- */
 
-function HunkBlock({ node, onRemove, onOpenDiff, activePR }: { node: EditorHunkNode; onRemove: (id: string) => void; onOpenDiff?: (hunk: HunkReference) => void; activePR?: { number: number; owner: string; repo: string } }) {
-	const { file, startLine, endLine, ref, patch, isPR, prNumber, prOwner, prRepo } = node.hunk;
+function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR }: { node: EditorHunkNode; doc: EditorDocument; onRemove: (id: string) => void; onOpenDiff?: (hunk: HunkReference) => void; activePR?: { number: number; owner: string; repo: string } }) {
+	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 
-	const isMismatch = isPR && (
-		prNumber !== activePR?.number ||
-		prOwner !== activePR?.owner ||
-		prRepo !== activePR?.repo
+	const isMismatch = doc.isPR && (
+		doc.prNumber !== activePR?.number ||
+		doc.prOwner !== activePR?.owner ||
+		doc.prRepo !== activePR?.repo
 	);
 
 	return (
@@ -595,6 +631,7 @@ function TextBlock({
 
 function GroupBlock({
 	node,
+	doc,
 	dragState,
 	onNodeDragStart,
 	onNodeDragEnd,
@@ -609,8 +646,10 @@ function GroupBlock({
 	onRemove,
 	onOpenDiff,
 	activePR,
+	onError,
 }: {
 	node: EditorGroupNode;
+	doc: EditorDocument;
 	dragState: ReorderDragState | null;
 	onNodeDragStart: (nodeId: string) => void;
 	onNodeDragEnd: () => void;
@@ -618,12 +657,13 @@ function GroupBlock({
 	onMoveToGroupEnd: (draggedId: string, groupId: string) => void;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleChange: (id: string, title: string) => void;
-	onDropZoneDrop: (id: string, hunk: HunkReference, patch?: string) => void;
+	onDropZoneDrop: (id: string, payload: HunkPayload) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
+	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
 }) {
 	const [collapsed, setCollapsed] = useState(false);
@@ -695,6 +735,7 @@ function GroupBlock({
 						<NodeRenderer
 							key={child.id}
 							node={child}
+							doc={doc}
 							dragState={dragState}
 							onNodeDragStart={onNodeDragStart}
 							onNodeDragEnd={onNodeDragEnd}
@@ -709,6 +750,7 @@ function GroupBlock({
 							onRemove={onRemove}
 							onOpenDiff={onOpenDiff}
 							activePR={activePR}
+							onError={onError}
 						/>
 					))}
 					<div className="tour-group-actions">
@@ -728,6 +770,7 @@ function GroupBlock({
 
 function NodeRenderer({
 	node,
+	doc,
 	dragState,
 	onNodeDragStart,
 	onNodeDragEnd,
@@ -742,8 +785,10 @@ function NodeRenderer({
 	onRemove,
 	onOpenDiff,
 	activePR,
+	onError,
 }: {
 	node: EditorNode;
+	doc: EditorDocument;
 	dragState: ReorderDragState | null;
 	onNodeDragStart: (nodeId: string) => void;
 	onNodeDragEnd: () => void;
@@ -751,12 +796,13 @@ function NodeRenderer({
 	onMoveToGroupEnd: (draggedId: string, groupId: string) => void;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleChange: (id: string, title: string) => void;
-	onDropZoneDrop: (id: string, hunk: HunkReference, patch?: string) => void;
+	onDropZoneDrop: (id: string, payload: HunkPayload) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
+	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
 }) {
 	switch (node.type) {
@@ -771,6 +817,7 @@ function NodeRenderer({
 				>
 					<GroupBlock
 						node={node}
+						doc={doc}
 						dragState={dragState}
 						onNodeDragStart={onNodeDragStart}
 						onNodeDragEnd={onNodeDragEnd}
@@ -785,6 +832,7 @@ function NodeRenderer({
 						onRemove={onRemove}
 						onOpenDiff={onOpenDiff}
 						activePR={activePR}
+						onError={onError}
 					/>
 				</NodeShell>
 			);
@@ -809,7 +857,7 @@ function NodeRenderer({
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
 				>
-					<HunkBlock node={node as EditorHunkNode} onRemove={onRemove} onOpenDiff={onOpenDiff} activePR={activePR} />
+					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} activePR={activePR} />
 				</NodeShell>
 			);
 		case 'dropzone':
@@ -821,7 +869,7 @@ function NodeRenderer({
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
 				>
-					<DropZoneBlock node={node} onDrop={onDropZoneDrop} onRemove={onRemove} />
+					<DropZoneBlock node={node} doc={doc} onDrop={onDropZoneDrop} onRemove={onRemove} onError={onError} />
 				</NodeShell>
 			);
 	}
@@ -829,7 +877,7 @@ function NodeRenderer({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, activePR }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, activePR, onError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
 	const isLocalEdit = useRef(false);
@@ -988,15 +1036,35 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 
 	/* - Drop zone receives a hunk (replaces the dropzone node) --- */
 
-	const handleDropZoneDrop = useCallback((dropZoneId: string, hunk: HunkReference, patch?: string) => {
-		applyLocal(prev => ({
-			...prev,
-			children: updateNodeInList(prev.children, dropZoneId, () => ({
-				type: 'hunk' as const,
-				id: dropZoneId,
-				hunk: { ...hunk, patch },
-			})),
-		}));
+	const handleDropZoneDrop = useCallback((dropZoneId: string, payload: HunkPayload) => {
+		applyLocal(prev => {
+			const updated = {
+				...prev,
+				children: updateNodeInList(prev.children, dropZoneId, () => ({
+					type: 'hunk' as const,
+					id: dropZoneId,
+					hunk: {
+						file: payload.file,
+						startLine: payload.startLine,
+						endLine: payload.endLine,
+						ref: payload.ref,
+						patch: payload.patch,
+						previousFile: payload.previousFile
+					},
+				})),
+			};
+
+			// Bring over PR properties if the document doesn't have them yet
+			if (updated.isPR === undefined && payload.isPR !== undefined) {
+				updated.isPR = payload.isPR;
+				updated.prNumber = payload.prNumber;
+				updated.prOwner = payload.prOwner;
+				updated.prRepo = payload.prRepo;
+				updated.baseRef = payload.baseRef;
+			}
+
+			return updated;
+		});
 	}, [applyLocal]);
 
 	return (
@@ -1012,6 +1080,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 					<NodeRenderer
 						key={node.id}
 						node={node}
+						doc={doc}
 						dragState={dragState}
 						onNodeDragStart={handleNodeDragStart}
 						onNodeDragEnd={handleNodeDragEnd}
@@ -1026,6 +1095,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 						onRemove={handleRemove}
 						onOpenDiff={onOpenDiff}
 						activePR={activePR}
+						onError={onError}
 					/>
 				))}
 				<div className="tour-root-actions">

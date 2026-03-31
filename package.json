@@ -982,6 +982,23 @@
 				"category": "%command.pull.request.category%"
 			},
 			{
+				"command": "pr.newCodeTour",
+				"title": "%command.pr.newCodeTour.title%",
+				"category": "%command.pull.request.category%"
+			},
+			{
+				"command": "pr.openOverviewFromCodeTour",
+				"title": "%command.pr.openOverviewFromCodeTour.title%",
+				"category": "%command.pull.request.category%",
+				"icon": "$(git-pull-request)"
+			},
+			{
+				"command": "pr.openCodeTourViewFromEditor",
+				"title": "%command.pr.openCodeTourViewFromEditor.title%",
+				"category": "%command.pull.request.category%",
+				"icon": "$(diff-multiple)"
+			},
+			{
 				"command": "pr.pickOnVscodeDev",
 				"title": "%command.pr.pickOnVscodeDev.title%",
 				"category": "%command.pull.request.category%",
@@ -2053,6 +2070,10 @@
 				},
 				{
 					"command": "pr.openCodeTour",
+					"when": "false"
+				},
+				{
+					"command": "pr.newCodeTour",
 					"when": "false"
 				},
 				{
@@ -3140,6 +3161,16 @@
 			],
 			"editor/title": [
 				{
+					"command": "pr.openOverviewFromCodeTour",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.codetour\\.md$/"
+				},
+				{
+					"command": "pr.openCodeTourViewFromEditor",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.codetour\\.md$/"
+				},
+				{
 					"command": "review.openFile",
 					"group": "navigation",
 					"when": "resourceScheme =~ /^review$/ && isInDiffEditor"
@@ -3611,23 +3642,28 @@
 					"when": "(webviewId == 'github:activePullRequest') && github:readyForReviewMenu && github:readyForReviewMenuWithMerge"
 				},
 				{
-					"command": "pr.openChanges",
+					"command": "pr.openCodeTour",
 					"group": "checkout@0",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{
-					"command": "pr.openCodeTour",
+					"command": "pr.newCodeTour",
 					"group": "checkout@1",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{
-					"command": "pr.checkoutOnVscodeDevFromDescription",
+					"command": "pr.openChanges",
 					"group": "checkout@2",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{
-					"command": "pr.checkoutOnCodespacesFromDescription",
+					"command": "pr.checkoutOnVscodeDevFromDescription",
 					"group": "checkout@3",
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
+				},
+				{
+					"command": "pr.checkoutOnCodespacesFromDescription",
+					"group": "checkout@4",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{

@@ -25,11 +25,12 @@ export class CodeTourPanel extends WebviewBase {
 	public static async createOrShow(
 		extensionUri: vscode.Uri,
 		pullRequest: PullRequestModel,
+		viewColumn?: vscode.ViewColumn
 	) {
 		const key = `${pullRequest.remote.owner}/${pullRequest.remote.repositoryName}#${pullRequest.number}`;
-		const activeColumn = vscode.window.activeTextEditor
+		const activeColumn = viewColumn ?? (vscode.window.activeTextEditor
 			? vscode.window.activeTextEditor.viewColumn
-			: vscode.ViewColumn.One;
+			: vscode.ViewColumn.One);
 
 		let panel = this._panels.get(key);
 		if (panel) {

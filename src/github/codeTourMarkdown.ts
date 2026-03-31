@@ -7,7 +7,7 @@
 /**
  * Represents a diff hunk reference embedded in a code tour document.
  * Stored in the markdown as a fenced block:
- *   :::hunk file=<path> lines=<start>-<end> ref=<commitish>
+ *   :::hunk file=<path> lines=<start>-<end> ref=<commitish> previousFile=<optional previous file path>
  *   <patch content>
  *   :::
  */
@@ -18,11 +18,6 @@ export interface HunkReference {
 	ref: string;
 	patch?: string;
 	previousFile?: string;
-	isPR?: boolean;
-	baseRef?: string;
-	prNumber?: number;
-	prOwner?: string;
-	prRepo?: string;
 }
 
 export type TourNodeType = 'group' | 'text' | 'hunk';
@@ -51,10 +46,15 @@ export type TourNode = TourGroupNode | TourTextNode | TourHunkNode;
 
 export interface CodeTourDocument {
 	title: string;
+	prNumber?: number;
+	prOwner?: string;
+	prRepo?: string;
+	isPR?: boolean;
+	baseRef?: string;
 	children: TourNode[];
 }
 
-const HUNK_PATTERN = /^:::hunk\s+file=(?<file>[^\s]+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>[^\s]+)(?:\s+previousFile=(?<previousFile>[^\s]+))?(?:\s+baseRef=(?<baseRef>[^\s]+))?(?:\s+isPR=(?<isPR>true|false))?(?:\s+prNumber=(?<prNumber>\d+))?(?:\s+prOwner=(?<prOwner>[^\s]+))?(?:\s+prRepo=(?<prRepo>[^\s]+))?\s*$/;
+const HUNK_PATTERN = /^:::hunk\s+file=(?<file>[^\s]+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>[^\s]+)(?:\s+previousFile=(?<previousFile>[^\s]+))?\s*$/;
 const HUNK_END_PATTERN = /^:::$/;
 
 let nextId = 0;
@@ -80,6 +80,12 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 	const lines = text.split('\n');
 
 	let title = '';
+	let prNumber: number | undefined;
+	let prOwner: string | undefined;
+	let prRepo: string | undefined;
+	let isPR: boolean | undefined;
+	let baseRef: string | undefined;
+
 	const rootChildren: TourNode[] = [];
 	// Stack tracks the current nesting of groups - element 0 is shallowest.
 	const groupStack: TourGroupNode[] = [];
@@ -89,6 +95,8 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 	let inHunk = false;
 	let pendingHunk: HunkReference | null = null;
 	let pendingPatchLines: string[] = [];
+
+	let parseState: 'frontmatter-start' | 'frontmatter-body' | 'body' = 'frontmatter-start';
 
 	function currentContainer(): TourNode[] {
 		return groupStack.length > 0 ? groupStack[groupStack.length - 1].children : rootChildren;
@@ -126,6 +134,31 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 	}
 
 	for (const line of lines) {
+		if (parseState === 'frontmatter-start') {
+			if (line.trim() === '---') {
+				parseState = 'frontmatter-body';
+				continue;
+			} else {
+				parseState = 'body';
+			}
+		} else if (parseState === 'frontmatter-body') {
+			if (line.trim() === '---') {
+				parseState = 'body';
+			} else {
+				const match = /^([a-zA-Z0-9_]+)\s*:\s*(.+)$/.exec(line);
+				if (match) {
+					const key = match[1];
+					const value = match[2].trim();
+					if (key === 'prNumber') prNumber = parseInt(value, 10);
+					else if (key === 'prOwner') prOwner = value;
+					else if (key === 'prRepo') prRepo = value;
+					else if (key === 'isPR') isPR = value === 'true';
+					else if (key === 'baseRef') baseRef = value;
+				}
+			}
+			continue;
+		}
+
 		// If we're inside a multi-line hunk, look for the closing :::
 		if (inHunk) {
 			if (HUNK_END_PATTERN.test(line)) {
@@ -181,12 +214,7 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 				startLine: parseInt(hunkMatch.groups!.start, 10),
 				endLine: parseInt(hunkMatch.groups!.end, 10),
 				ref: hunkMatch.groups!.ref,
-				previousFile: hunkMatch.groups!.previousFile,
-				baseRef: hunkMatch.groups!.baseRef,
-				isPR: hunkMatch.groups!.isPR ? hunkMatch.groups!.isPR === 'true' : undefined,
-				prNumber: hunkMatch.groups!.prNumber ? parseInt(hunkMatch.groups!.prNumber, 10) : undefined,
-				prOwner: hunkMatch.groups!.prOwner,
-				prRepo: hunkMatch.groups!.prRepo
+				previousFile: hunkMatch.groups!.previousFile
 			};
 			pendingPatchLines = [];
 			continue;
@@ -202,7 +230,7 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		flushHunk();
 	}
 
-	return { title: title || 'Untitled Code Tour', children: rootChildren };
+	return { title: title || 'Untitled Code Tour', prNumber, prOwner, prRepo, isPR, baseRef, children: rootChildren };
 }
 
 /**
@@ -210,6 +238,17 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
  */
 export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 	const lines: string[] = [];
+
+	if (doc.isPR !== undefined || doc.prNumber !== undefined || doc.prOwner || doc.prRepo || doc.baseRef) {
+		lines.push('---');
+		if (doc.isPR !== undefined) lines.push(`isPR: ${doc.isPR}`);
+		if (doc.prNumber !== undefined) lines.push(`prNumber: ${doc.prNumber}`);
+		if (doc.prOwner) lines.push(`prOwner: ${doc.prOwner}`);
+		if (doc.prRepo) lines.push(`prRepo: ${doc.prRepo}`);
+		if (doc.baseRef) lines.push(`baseRef: ${doc.baseRef}`);
+		lines.push('---');
+	}
+
 	lines.push(`# ${doc.title}`);
 	lines.push('');
 
@@ -230,8 +269,6 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 				case 'hunk': {
 					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
 					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
-					if (node.hunk.baseRef) hunkHeader += ` baseRef=${node.hunk.baseRef}`;
-					if (node.hunk.isPR !== undefined) hunkHeader += ` isPR=${node.hunk.isPR}`;
 					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
@@ -256,11 +293,6 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 export function createHunkDirective(hunk: HunkReference): string {
 	let header = `:::hunk file=${hunk.file} lines=${hunk.startLine}-${hunk.endLine} ref=${hunk.ref}`;
 	if (hunk.previousFile) header += ` previousFile=${hunk.previousFile}`;
-	if (hunk.baseRef) header += ` baseRef=${hunk.baseRef}`;
-	if (hunk.isPR !== undefined) header += ` isPR=${hunk.isPR}`;
-	if (hunk.prNumber !== undefined) header += ` prNumber=${hunk.prNumber}`;
-	if (hunk.prOwner) header += ` prOwner=${hunk.prOwner}`;
-	if (hunk.prRepo) header += ` prRepo=${hunk.prRepo}`;
 
 	if (hunk.patch) {
 		return `${header}\n${hunk.patch}\n:::`;
