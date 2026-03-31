@@ -500,10 +500,11 @@ function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { 
 	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 
-	const isMismatch = doc.isPR && (
-		doc.prNumber !== activePR?.number ||
-		doc.prOwner !== activePR?.owner ||
-		doc.prRepo !== activePR?.repo
+	const isMismatch = !!doc.isPR && (
+		!activePR ||
+		doc.prNumber !== activePR.number ||
+		doc.prOwner?.toLowerCase() !== activePR.owner?.toLowerCase() ||
+		doc.prRepo?.toLowerCase() !== activePR.repo?.toLowerCase()
 	);
 
 	return (
@@ -517,6 +518,7 @@ function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { 
 						<button
 							className="tour-action-btn"
 							style={isMismatch ? { opacity: 0.5 } : {}}
+							disabled={isMismatch}
 							title={isMismatch ? 'Checkout the associated PR to view the diff' : 'Open Diff'}
 							onClick={() => onOpenDiff(node.hunk)}
 						>

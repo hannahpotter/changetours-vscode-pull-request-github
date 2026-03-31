@@ -92,30 +92,60 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			}
 		});
 
-		let prChangeDisposable: vscode.Disposable | undefined;
-		const folderManager = this._reposManager.folderManagers[0];
-		if (folderManager) {
-			prChangeDisposable = folderManager.onDidChangeActivePullRequest(e => {
+		const disposables: vscode.Disposable[] = [];
+		const folderManager = this._reposManager.getManagerForFile(document.uri) ?? this._reposManager.folderManagers[0];
+
+		const bindActivePRListener = (manager: typeof folderManager) => {
+			if (!manager) return;
+			disposables.push(manager.onDidChangeActivePullRequest(e => {
 				const activePR = e.new;
 				const prInfo = activePR ? {
 					number: activePR.number,
 					owner: activePR.remote.owner,
 					repo: activePR.remote.repositoryName
 				} : undefined;
+
+				console.log('Sending codeTourEditor.updateActivePR with:', prInfo);
+
 				webviewPanel.webview.postMessage({
 					res: {
 						command: 'codeTourEditor.updateActivePR',
 						activePR: prInfo
 					}
 				});
-			});
+			}));
+		};
+
+		if (folderManager) {
+			bindActivePRListener(folderManager);
+		} else {
+			// If it hasn't initialized yet, listen for the folder repository to be added
+			disposables.push(this._reposManager.onDidChangeFolderRepositories(e => {
+				if (e.added) {
+					bindActivePRListener(e.added);
+					// Check if there's already an active PR upon adding
+					if (e.added.activePullRequest) {
+						const activePR = e.added.activePullRequest;
+						webviewPanel.webview.postMessage({
+							res: {
+								command: 'codeTourEditor.updateActivePR',
+								activePR: {
+									number: activePR.number,
+									owner: activePR.remote.owner,
+									repo: activePR.remote.repositoryName
+								}
+							}
+						});
+					}
+				}
+			}));
 		}
 
 		webviewPanel.onDidDispose(() => {
 			CodeTourEditorProvider._webviewPanels.delete(key);
 			messageDisposable.dispose();
 			changeDisposable.dispose();
-			prChangeDisposable?.dispose();
+			disposables.forEach(d => d.dispose());
 		});
 	}
 
@@ -164,7 +194,8 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	private _sendDocumentToWebview(webview: vscode.Webview, document: vscode.TextDocument): void {
 		try {
 			const parsed = parseCodeTourMarkdown(document.getText());
-			const activePR = this._reposManager.folderManagers[0]?.activePullRequest;
+			const folderManager = this._reposManager.getManagerForFile(document.uri) ?? this._reposManager.folderManagers[0];
+			const activePR = folderManager?.activePullRequest;
 			const prInfo = activePR ? {
 				number: activePR.number,
 				owner: activePR.remote.owner,
