@@ -172,7 +172,7 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 
 	return (
 		<>
-			<h2>Code Tour &mdash; {title} <a>#{number}</a></h2>
+			<h2>All Changes for Code Tour &mdash; {title} <a>#{number}</a></h2>
 			<div className="summary">
 				{files.length} changed file{files.length !== 1 ? 's' : ''} with{' '}
 				<span className="additions">+{totalAdditions}</span> and{' '}
