@@ -60,6 +60,7 @@ interface CodeTourEditorProps {
 	onDocumentChange: (markdown: string) => void;
 	onInsertHunk: (hunk: HunkReference) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
+	onCheckoutPR?: () => void;
 	onError?: (message: string) => void;
 }
 
@@ -519,10 +520,10 @@ function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { 
 							className="tour-action-btn"
 							style={isMismatch ? { opacity: 0.5 } : {}}
 							disabled={isMismatch}
-							title={isMismatch ? 'Checkout the associated PR to view the diff' : 'Open Diff'}
+							title={isMismatch ? 'Checkout the associated PR to view the diff' : 'GoTo Diff'}
 							onClick={() => onOpenDiff(node.hunk)}
 						>
-							Open Diff
+							GoTo Diff
 						</button>
 					)}
 					{isEditMode && (
@@ -907,10 +908,17 @@ function NodeRenderer({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, activePR, isEditMode = true, onError }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, onError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
 	const isLocalEdit = useRef(false);
+
+	const isMismatch = !!doc.isPR && (
+		!activePR ||
+		doc.prNumber !== activePR.number ||
+		doc.prOwner?.toLowerCase() !== activePR.owner?.toLowerCase() ||
+		doc.prRepo?.toLowerCase() !== activePR.repo?.toLowerCase()
+	);
 
 	// When the extension host sends an updated document (undo/redo), accept it
 	// - unless we just pushed a change ourselves.
@@ -1099,6 +1107,16 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 
 	return (
 		<div className="code-tour-editor">
+			{isMismatch && (
+				<div className="tour-pr-warning">
+					<span>This Code Tour belongs to PR #{doc.prNumber}. "GoTo Diff" is unavailable until the PR is checked out.</span>
+					{onCheckoutPR && (
+						<button className="tour-action-btn" onClick={onCheckoutPR}>
+							Checkout PR
+						</button>
+					)}
+				</div>
+			)}
 			{isEditMode ? (
 				<input
 					className="tour-title-input"

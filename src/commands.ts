@@ -2018,6 +2018,48 @@ ${contents}
 			}
 		}));
 
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.checkoutFromCodeTour', async (prNumber: number, owner: string, repo: string, docUri: vscode.Uri) => {
+			const folderManager = reposManager.getManagerForFile(docUri) ?? reposManager.folderManagers[0];
+			if (!folderManager || folderManager.gitHubRepositories.length === 0) {
+				return vscode.window.showErrorMessage(vscode.l10n.t('No repository found for this Code Tour.'));
+			}
+
+			// Try to find the exact PullRequestModel from cache first, prioritizing the already properly loaded upstream PR.
+			let targetPR: PullRequestModel | undefined;
+
+			for (const githubRepo of folderManager.gitHubRepositories) {
+				targetPR = githubRepo.pullRequestModels.find(model => model.number === prNumber);
+				if (targetPR) {
+					break;
+				}
+			}
+
+			// If not cached, attempt resolving from the primary workspace repository (upstream)
+			if (!targetPR) {
+				const primaryRepo = folderManager.gitHubRepositories.find(r => r.remote.owner.toLowerCase() !== owner?.toLowerCase()) || folderManager.gitHubRepositories[0];
+				targetPR = await folderManager.resolvePullRequest(
+					primaryRepo.remote.owner,
+					primaryRepo.remote.repositoryName,
+					prNumber,
+					true
+				);
+			}
+
+			// Fallback exactly to what CodeTour provided just in case it truly lives on the fork or another repository
+			if (!targetPR) {
+				targetPR = await folderManager.resolvePullRequest(owner, repo, prNumber, true);
+			}
+
+			if (targetPR) {
+				// Use pr.pick to precisely checkout the PullRequestModel
+				return vscode.commands.executeCommand('pr.pick', targetPR);
+			}
+
+			return vscode.window.showErrorMessage(vscode.l10n.t('Unable to resolve pull request for Code Tour checkout.'));
+		})
+	);
+
 	function chooseRepoToOpen() {
 		const githubRepositories: GitHubRepository[] = [];
 		reposManager.folderManagers.forEach(manager => {

@@ -70,6 +70,15 @@ function Root() {
 		});
 	}, [handler, doc]);
 
+	const onCheckoutPR = useCallback(() => {
+		if (doc && doc.prNumber) {
+			handler?.postMessage({
+				command: 'codeTourEditor.checkoutPR',
+				args: { prNumber: doc.prNumber, owner: doc.prOwner, repo: doc.prRepo }
+			});
+		}
+	}, [handler, doc]);
+
 	const onError = useCallback((message: string) => {
 		handler?.postMessage({
 			command: 'codeTourEditor.showError',
@@ -89,6 +98,7 @@ function Root() {
 			onDocumentChange={onDocumentChange}
 			onInsertHunk={onInsertHunk}
 			onOpenDiff={onOpenDiff}
+			onCheckoutPR={onCheckoutPR}
 			onError={onError}
 		/>
 	);

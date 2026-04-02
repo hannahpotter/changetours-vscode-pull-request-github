@@ -186,6 +186,12 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				return;
 			}
 
+			case 'codeTourEditor.checkoutPR': {
+				const { prNumber, owner, repo } = message.args as { prNumber: number, owner: string, repo: string };
+				vscode.commands.executeCommand('pr.checkoutFromCodeTour', prNumber, owner, repo, document.uri);
+				return;
+			}
+
 			default:
 				return;
 		}

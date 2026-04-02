@@ -242,6 +242,21 @@
 	text-align: center;
 }
 
+/* - PR Warning Banner ---------------------- */
+
+.tour-pr-warning {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px 16px;
+	background-color: var(--vscode-inputValidation-warningBackground, rgba(255, 140, 0, 0.2));
+	border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(255, 140, 0, 0.4));
+	color: var(--vscode-editorForeground);
+	border-radius: 4px;
+	margin-bottom: 20px;
+	font-size: 13px;
+}
+
 /* - Group blocks --------------------------- */
 
 .tour-group {
