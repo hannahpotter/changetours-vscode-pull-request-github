@@ -510,10 +510,18 @@ function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { 
 		doc.prRepo?.toLowerCase() !== activePR.repo?.toLowerCase()
 	);
 
+	const [collapsed, setCollapsed] = useState(false);
+
 	return (
 		<div className="tour-hunk">
 			<div className="tour-hunk-header">
 				<div className="tour-hunk-info">
+					<span
+						className={`expand-icon icon-button ${collapsed ? 'closed' : ''}`}
+						onClick={() => setCollapsed(c => !c)}
+					>
+						{chevronDownIcon}
+					</span>
 					<span className="tour-hunk-file">{file}</span>
 					<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
 					<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
@@ -535,12 +543,14 @@ function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { 
 					)}
 				</div>
 			</div>
-			{lines.length > 0 ? (
-				<DiffTable lines={lines} />
-			) : (
-				<div className="tour-hunk-placeholder">
-					Diff hunk from <strong>{file}</strong> lines {startLine}&ndash;{endLine}
-				</div>
+			{!collapsed && (
+				lines.length > 0 ? (
+					<DiffTable lines={lines} />
+				) : (
+					<div className="tour-hunk-placeholder">
+						Diff hunk from <strong>{file}</strong> lines {startLine}&ndash;{endLine}
+					</div>
+				)
 			)}
 		</div>
 	);
