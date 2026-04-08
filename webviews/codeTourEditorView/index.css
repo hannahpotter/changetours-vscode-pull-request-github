@@ -211,6 +211,7 @@
 .tour-hunk-header {
 	display: flex;
 	align-items: center;
+	justify-content: space-between;
 	gap: 8px;
 	padding: 6px 10px;
 	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
@@ -218,6 +219,19 @@
 	color: var(--vscode-descriptionForeground);
 	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
 }
+
+.tour-hunk-info {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.tour-hunk-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
 
 .tour-hunk-file {
 	font-weight: 600;
@@ -381,6 +395,7 @@
 
 .tour-remove-btn {
 	margin-left: auto;
+	height:fit-content;
 	padding: 0 6px;
 	border: none;
 	background: transparent;

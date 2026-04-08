@@ -511,9 +511,11 @@ function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { 
 	return (
 		<div className="tour-hunk">
 			<div className="tour-hunk-header">
-				<span className="tour-hunk-file">{file}</span>
-				<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
-				<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
+				<div className="tour-hunk-info">
+					<span className="tour-hunk-file">{file}</span>
+					<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
+					<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
+				</div>
 				<div className="tour-hunk-actions">
 					{onOpenDiff && (
 						<button
