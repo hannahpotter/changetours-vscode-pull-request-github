@@ -488,8 +488,21 @@ async function deferredActivate(context: vscode.ExtensionContext, showPRControll
 
 	context.subscriptions.push(CodeTourEditorProvider.register(context, reposManager));
 
-	context.subscriptions.push(vscode.window.registerTreeDataProvider('codetour:steps', new CodeTourStepsTreeView()));
+	const codeTourStepsTreeView = new CodeTourStepsTreeView(reposManager);
+	context.subscriptions.push(codeTourStepsTreeView);
 	context.subscriptions.push(vscode.commands.registerCommand('codetour.scrollToSection', (uri, id) => CodeTourEditorProvider.scrollToNode(uri, id)));
+	context.subscriptions.push(vscode.commands.registerCommand('codetour.treeItem.openDiff', (node) => {
+		if (node && node.hunk) {
+			vscode.commands.executeCommand('codetour.openDiff', node.hunk);
+		}
+	}));
+	context.subscriptions.push(vscode.commands.registerCommand('codetour.treeItem.checkoutPR', () => {
+		const CodeTourStepsTreeView = require('./github/codeTourStepsTreeView').CodeTourStepsTreeView;
+		const node = CodeTourStepsTreeView.currentPRParams;
+		if (node && node.prNumber && node.prOwner && node.prRepo && CodeTourEditorProvider.activeDocumentTracker) {
+			vscode.commands.executeCommand('pr.checkoutFromCodeTour', node.prNumber, node.prOwner, node.prRepo, CodeTourEditorProvider.activeDocumentTracker.uri);
+		}
+	}));
 
 	await init(context, apiImpl, credentialStore, repositories, prTree, liveshareApiPromise, showPRController, reposManager, createPrHelper, copilotRemoteAgentManager, themeWatcher, prsTreeModel);
 	return apiImpl;

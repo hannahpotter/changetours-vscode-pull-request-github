@@ -208,6 +208,7 @@
 	"command.pr.openOverviewFromCodeTour.title": "Open Pull Request Overview",
 	"command.pr.openCodeTourViewFromEditor.title": "Open Changes",
 	"command.pr.codeTourEditor.toggleEditMode.title": "Toggle Edit/Show Mode",
+	"codetour.checkoutPR": "Checkout PR",
 	"command.pr.pickOnVscodeDev.title": "Checkout Pull Request on vscode.dev",
 	"command.pr.pickOnCodespaces.title": "Checkout Pull Request on Codespaces",
 	"command.pr.exit.title": "Checkout Default Branch",

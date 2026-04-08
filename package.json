@@ -873,12 +873,6 @@
 					"icon": "$(github-inverted)",
 					"accessibilityHelpContent": "%view.pr.github.accessibilityHelpContent%"
 				},
-								{
-					"id": "codetour:steps",
-					"name": "Code Tour Steps",
-					"when": "activeCodeTour",
-					"icon": "$(list-tree)"
-				},
 				{
 					"id": "issues:github",
 					"name": "%view.issues.github.name%",
@@ -918,6 +912,12 @@
 					"icon": "$(git-compare)",
 					"visibility": "visible",
 					"initialSize": 1
+				},
+				{
+					"id": "codetour:steps",
+					"name": "Code Tour Steps",
+					"when": "activeCodeTour",
+					"icon": "$(list-tree)"
 				},
 				{
 					"id": "github:compareChangesCommits",
@@ -1013,6 +1013,16 @@
 			{
 				"command": "codetour.scrollToSection",
 				"title": "Scroll to Section"
+			},
+			{
+				"command": "codetour.treeItem.openDiff",
+				"title": "GoTo Diff",
+				"icon": "$(git-compare)"
+			},
+			{
+				"command": "codetour.treeItem.checkoutPR",
+				"title": "%codetour.checkoutPR%",
+				"icon": "$(git-branch)"
 			},
 			{
 				"command": "pr.pickOnVscodeDev",
@@ -2875,6 +2885,11 @@
 			],
 			"view/item/context": [
 				{
+					"command": "codetour.treeItem.openDiff",
+					"when": "view == codetour:steps && viewItem == codetourHunkCheckedOut",
+					"group": "inline"
+				},
+				{
 					"command": "pr.pick",
 					"when": "view == pr:github && viewItem =~ /(pullrequest(:local)?:nonactive)/",
 					"group": "1_pullrequest@1"
@@ -3559,6 +3574,12 @@
 					"command": "pr.create",
 					"when": "scmProvider =~ /^remoteHub:github/",
 					"group": "1_modification@0"
+				}
+			],
+			"view/title": [
+				{
+					"command": "codetour.treeItem.checkoutPR",
+					"when": "view == codetour:steps && codetour:checkoutAvailable"
 				}
 			],
 			"webview/context": [
