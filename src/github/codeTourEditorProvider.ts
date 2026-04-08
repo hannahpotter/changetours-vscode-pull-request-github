@@ -17,6 +17,9 @@ export const CODE_TOUR_EDITOR_VIEW_TYPE = 'codeTourEditor';
 
 export class CodeTourEditorProvider extends WebviewBase implements vscode.CustomTextEditorProvider {
 
+	public static readonly onDidChangeActiveCodeTour = new vscode.EventEmitter<vscode.TextDocument | undefined>();
+	public static activeDocumentTracker: vscode.TextDocument | undefined = undefined;
+
 	private static readonly _webviewPanels = new Map<string, vscode.WebviewPanel>();
 	private _pendingWebviewEdits = new Map<string, number>();
 
@@ -45,6 +48,21 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		}
 	}
 
+	public static scrollToNode(uri: vscode.Uri, nodeId: string) {
+		const key = uri.toString();
+		const panel = CodeTourEditorProvider._webviewPanels.get(key);
+		if (panel) {
+			if (!panel.active) {
+				panel.reveal();
+			}
+			panel.webview.postMessage({
+				res: { command: 'codeTourEditor.scrollToNode', id: nodeId }
+			});
+		} else {
+			vscode.window.showErrorMessage(`No Code Tour editor found for ${key}`);
+		}
+	}
+
 	public static register(context: vscode.ExtensionContext, reposManager: RepositoriesManager): vscode.Disposable {
 		const provider = new CodeTourEditorProvider(context.extensionUri, reposManager);
 		return vscode.window.registerCustomEditorProvider(
@@ -64,6 +82,24 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	): Promise<void> {
 		const key = document.uri.toString();
 		CodeTourEditorProvider._webviewPanels.set(key, webviewPanel);
+
+		if (webviewPanel.active) {
+			CodeTourEditorProvider.activeDocumentTracker = document;
+			CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(document);
+			vscode.commands.executeCommand('setContext', 'activeCodeTour', true);
+		}
+
+		const viewStateDisposable = webviewPanel.onDidChangeViewState(e => {
+			if (e.webviewPanel.active) {
+				CodeTourEditorProvider.activeDocumentTracker = document;
+				CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(document);
+				vscode.commands.executeCommand('setContext', 'activeCodeTour', true);
+			} else if (CodeTourEditorProvider.activeDocumentTracker === document) {
+				CodeTourEditorProvider.activeDocumentTracker = undefined;
+				CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(undefined);
+				vscode.commands.executeCommand('setContext', 'activeCodeTour', false);
+			}
+		});
 
 		this._webview = webviewPanel.webview;
 
@@ -145,6 +181,12 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			CodeTourEditorProvider._webviewPanels.delete(key);
 			messageDisposable.dispose();
 			changeDisposable.dispose();
+			viewStateDisposable.dispose();
+			if (CodeTourEditorProvider.activeDocumentTracker === document) {
+				CodeTourEditorProvider.activeDocumentTracker = undefined;
+				CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(undefined);
+				vscode.commands.executeCommand('setContext', 'activeCodeTour', false);
+			}
 			disposables.forEach(d => d.dispose());
 		});
 	}

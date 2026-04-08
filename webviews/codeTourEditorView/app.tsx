@@ -19,6 +19,7 @@ function Root() {
 	const [activePR, setActivePR] = useState<{ number: number; owner: string; repo: string } | undefined>(undefined);
 	const [isEditMode, setIsEditMode] = useState(true);
 	const [handler, setHandler] = useState<MessageHandler | undefined>(undefined);
+	const [scrollToNode, setScrollToNode] = useState<{ id: string; ts: number } | undefined>(undefined);
 
 	useEffect(() => {
 		const h = getMessageHandler((message: any) => {
@@ -32,6 +33,9 @@ function Root() {
 					return;
 				case 'codeTourEditor.toggleEditMode':
 					setIsEditMode(prev => !prev);
+					return;
+				case 'codeTourEditor.scrollToNode':
+					setScrollToNode({ id: message.id, ts: Date.now() });
 					return;
 			}
 		});
@@ -95,6 +99,7 @@ function Root() {
 			document={doc}
 			activePR={activePR}
 			isEditMode={isEditMode}
+			scrollToNode={scrollToNode}
 			onDocumentChange={onDocumentChange}
 			onInsertHunk={onInsertHunk}
 			onOpenDiff={onOpenDiff}

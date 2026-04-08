@@ -873,6 +873,12 @@
 					"icon": "$(github-inverted)",
 					"accessibilityHelpContent": "%view.pr.github.accessibilityHelpContent%"
 				},
+								{
+					"id": "codetour:steps",
+					"name": "Code Tour Steps",
+					"when": "activeCodeTour",
+					"icon": "$(list-tree)"
+				},
 				{
 					"id": "issues:github",
 					"name": "%view.issues.github.name%",
@@ -1003,6 +1009,10 @@
 				"title": "%command.pr.codeTourEditor.toggleEditMode.title%",
 				"category": "%command.pull.request.category%",
 				"icon": "$(edit)"
+			},
+			{
+				"command": "codetour.scrollToSection",
+				"title": "Scroll to Section"
 			},
 			{
 				"command": "pr.pickOnVscodeDev",

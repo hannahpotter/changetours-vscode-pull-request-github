@@ -57,6 +57,7 @@ interface CodeTourEditorProps {
 	document: CodeTourDocument;
 	activePR?: { number: number; owner: string; repo: string };
 	isEditMode?: boolean;
+	scrollToNode?: { id: string; ts: number };
 	onDocumentChange: (markdown: string) => void;
 	onInsertHunk: (hunk: HunkReference) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
@@ -387,6 +388,7 @@ function NodeShell({
 
 	return (
 		<div
+			id={`node-${node.id}`}
 			className={[
 				'tour-node-shell',
 				isDraggable ? 'tour-node-shell-draggable' : '',
@@ -910,10 +912,28 @@ function NodeRenderer({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, onError }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, scrollToNode, onError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
 	const isLocalEdit = useRef(false);
+
+	useEffect(() => {
+		if (scrollToNode && scrollToNode.id) {
+			// use setTimeout to ensure React layout is finished just in case
+			setTimeout(() => {
+				const element = document.getElementById(`node-${scrollToNode.id}`);
+				if (element) {
+					element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+					// Optional: Highlight the element briefly
+					element.classList.add('highlight-flash');
+					setTimeout(() => element.classList.remove('highlight-flash'), 2000);
+				} else {
+					console.error(`CodeTour: Could not find node-${scrollToNode.id}`);
+				}
+			}, 0);
+		}
+	}, [scrollToNode]);
 
 	const isMismatch = !!doc.isPR && (
 		!activePR ||
