@@ -8,7 +8,7 @@ import { render } from 'react-dom';
 import { ChangedFilesOverview } from './changesOverview';
 import { CodeTourEditor } from './codeTourEditor';
 
-import type { CodeTourDocument, TourNode, HunkReference } from '../../src/github/codeTourMarkdown';
+import type { CodeTourDocument, HunkReference, TourNode } from '../../src/github/codeTourMarkdown';
 import { getMessageHandler, MessageHandler } from '../common/message';
 
 export function main() {
@@ -25,6 +25,7 @@ function Root() {
 	const [changesData, setChangesData] = useState<any>(undefined);
 	const [activeNodeId, setActiveNodeId] = useState<string | undefined>(undefined);
 	const [insertHunkCommand, setInsertHunkCommand] = useState<{ ts: number, payload: HunkReference, mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string } | undefined>(undefined);
+	const [insertMultipleHunksCommand, setInsertMultipleHunksCommand] = useState<{ ts: number, payloads: HunkReference[] } | undefined>(undefined);
 
 	useEffect(() => {
 		const h = getMessageHandler((message: any) => {
@@ -164,6 +165,15 @@ function Root() {
 		});
 	}, [handler]);
 
+	const [codeTourHunks, setCodeTourHunks] = useState<HunkReference[]>([]);
+	const onCodeTourHunksChange = useCallback((hunks: HunkReference[]) => {
+		setCodeTourHunks(hunks);
+	}, []);
+
+	const onAddAllMissing = useCallback((hunks: HunkReference[]) => {
+		setInsertMultipleHunksCommand({ ts: Date.now(), payloads: hunks });
+	}, []);
+
 	if (!doc) {
 		return <div className="loading-indicator">Loading...</div>;
 	}
@@ -177,9 +187,11 @@ function Root() {
 					isEditMode={isEditMode}
 					scrollToNode={scrollToNode}
 					insertHunkCommand={insertHunkCommand}
+					insertMultipleHunksCommand={insertMultipleHunksCommand}
 					onProvideGroupsForQuickPick={onProvideGroupsForQuickPick}
 					onActiveNodeChanged={onActiveNodeChanged}
 					onDocumentChange={onDocumentChange}
+					onCodeTourHunksChange={onCodeTourHunksChange}
 					onInsertHunk={onInsertHunk}
 					onOpenDiff={onOpenDiff}
 					onCheckoutPR={onCheckoutPR}
@@ -189,7 +201,7 @@ function Root() {
 			{isChangesOpen && (
 				<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', position: 'relative' }}>
 					{changesData ? (
-						<ChangedFilesOverview {...changesData} onHunkAdd={onHunkAdd} activeNodeContext={activeNodeContext} />
+						<ChangedFilesOverview {...changesData} onHunkAdd={onHunkAdd} activeNodeContext={activeNodeContext} codeTourHunks={codeTourHunks} onAddAllMissing={onAddAllMissing} />
 					) : (
 						<div className="loading-indicator">Loading PR changes...</div>
 					)}

@@ -91,6 +91,11 @@
 	line-height: 0;
 }
 
+.diff-hunk-covered {
+	opacity: 0.5;
+	filter: grayscale(100%);
+}
+
 /* Addition */
 .diff-add {
 	background: var(--vscode-diffEditor-insertedLineBackground, rgba(40, 167, 69, 0.15));

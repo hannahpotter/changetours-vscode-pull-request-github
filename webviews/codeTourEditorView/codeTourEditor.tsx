@@ -59,9 +59,11 @@ interface CodeTourEditorProps {
 	isEditMode?: boolean;
 	scrollToNode?: { id: string; ts: number };
 	insertHunkCommand?: { ts: number, payload: HunkReference, mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string };
+	insertMultipleHunksCommand?: { ts: number, payloads: HunkReference[] };
 	onProvideGroupsForQuickPick?: (groups: any[], hunk: HunkReference) => void;
 	onActiveNodeChanged?: (id: string | undefined) => void;
 	onDocumentChange: (markdown: string) => void;
+	onCodeTourHunksChange?: (hunks: HunkReference[]) => void;
 	onInsertHunk: (hunk: HunkReference) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	onCheckoutPR?: () => void;
@@ -956,7 +958,7 @@ function NodeRenderer({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, scrollToNode, insertHunkCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
 	const [activeNodeId, setActiveNodeId] = useState<string | undefined>(undefined);
@@ -1078,6 +1080,38 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 		}
 	}, [insertHunkCommand]);
 
+	// Handle insert multiple missing hunks command
+	useEffect(() => {
+		if (!insertMultipleHunksCommand || insertMultipleHunksCommand.payloads.length === 0) {
+			return;
+		}
+
+		applyLocal(prev => {
+			const groupId = localId();
+			const newGroup: EditorGroupNode = {
+				type: 'group',
+				id: groupId,
+				title: 'Remaining Changes',
+				level: 1, // Will be normalized
+				children: insertMultipleHunksCommand.payloads.map(payload => ({
+					type: 'hunk',
+					id: localId(),
+					hunk: {
+						file: payload.file,
+						startLine: payload.startLine,
+						endLine: payload.endLine,
+						ref: payload.ref,
+						patch: payload.patch,
+						previousFile: payload.previousFile
+					}
+				}))
+			};
+
+			setJustInsertedId(groupId);
+			return { ...prev, children: appendToList(prev.children, newGroup) };
+		});
+	}, [insertMultipleHunksCommand]);
+
 	const isMismatch = !!doc.isPR && (
 		!activePR ||
 		doc.prNumber !== activePR.number ||
@@ -1096,13 +1130,28 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 
 	// Whenever doc changes due to a local edit, serialize and push to the extension host.
 	useEffect(() => {
+		if (onCodeTourHunksChange) {
+			const hunks: HunkReference[] = [];
+			function collectHunks(nodes: EditorNode[]) {
+				for (const node of nodes) {
+					if (node.type === 'hunk') {
+						hunks.push(node.hunk);
+					} else if (node.type === 'group' && node.children) {
+						collectHunks(node.children);
+					}
+				}
+			}
+			collectHunks(doc.children);
+			onCodeTourHunksChange(hunks);
+		}
+
 		if (!isLocalEdit.current) {
 			return;
 		}
 		isLocalEdit.current = false;
 		const markdown = serializeDoc(doc);
 		onDocumentChange(markdown);
-	}, [doc, onDocumentChange]);
+	}, [doc, onDocumentChange, onCodeTourHunksChange]);
 
 	// Helper: apply a local edit (sets the flag before updating state).
 	const applyLocal = useCallback((updater: (prev: EditorDocument) => EditorDocument) => {

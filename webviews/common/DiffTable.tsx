@@ -13,19 +13,24 @@ interface DiffTableProps {
 	onHunkAddActive?: (headerIdx: number) => void;
 	onHunkAddQuickPick?: (headerIdx: number) => void;
 	activeNodeContext?: string;
+	coveredHeaderIndices?: Set<number>;
 }
 
-export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext }: DiffTableProps) {
+export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices }: DiffTableProps) {
+	let currentHeaderIdx = -1;
+
 	return (
 		<table className="diff-table">
 			<tbody>
 				{lines.map((line, i) => {
 					if (line.type === 'hunk-header') {
+						currentHeaderIdx = i;
 						const draggable = !!onHunkHeaderDragStart;
+						const isCovered = coveredHeaderIndices?.has(currentHeaderIdx);
 						return (
 							<tr
 								key={i}
-								className={`diff-line diff-hunk-header${draggable ? ' draggable-hunk' : ''}`}
+								className={`diff-line diff-hunk-header${draggable ? ' draggable-hunk' : ''}${isCovered ? ' diff-hunk-covered' : ''}`}
 								draggable={draggable || undefined}
 								onDragStart={draggable ? e => onHunkHeaderDragStart!(e, i) : undefined}
 								title={draggable ? 'Drag this hunk into a Code Tour editor' : undefined}
@@ -58,8 +63,10 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 							</tr>
 						);
 					}
+
+					const isCovered = coveredHeaderIndices?.has(currentHeaderIdx);
 					return (
-						<tr key={i} className={`diff-line diff-${line.type}`}>
+						<tr key={i} className={`diff-line diff-${line.type}${isCovered ? ' diff-hunk-covered' : ''}`}>
 							<td className="diff-line-num">
 								{line.type !== 'add' && line.oldLine !== undefined ? line.oldLine : ''}
 							</td>

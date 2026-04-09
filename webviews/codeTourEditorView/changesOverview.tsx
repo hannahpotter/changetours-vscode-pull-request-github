@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
+import type { HunkReference } from '../../src/github/codeTourMarkdown';
 import { ChangedFileInfo } from '../../src/github/views';
 import { DiffTable } from '../common/DiffTable';
 import { ParsedDiffLine, parsePatch } from '../common/diffUtils';
@@ -18,6 +19,8 @@ interface ChangedFilesOverviewProps {
 	files: ChangedFileInfo[];
 	onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void;
 	activeNodeContext?: string;
+	codeTourHunks?: HunkReference[];
+	onAddAllMissing?: (hunks: HunkReference[]) => void;
 }
 
 function statusLabel(status: string): { text: string; className: string } {
@@ -76,7 +79,7 @@ function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: nu
 	return ranges;
 }
 
-function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext }: { patch: string; fileName: string; previousFile?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string, onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void, activeNodeContext?: string }) {
+function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet }: { patch: string; fileName: string; previousFile?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string, onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string> }) {
 	const lines = parsePatch(patch);
 	const rawLines = patch.split('\n');
 	const hunkRanges = computeHunkRanges(lines);
@@ -148,6 +151,16 @@ function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, ba
 		onHunkAdd(payload, mode);
 	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, baseRef, prNumber, prOwner, prRepo, onHunkAdd]);
 
+	// Figure out which lines belong to covered hunks so we can style them
+	const coveredHeaderIndices = new Set<number>();
+	if (coveredHunksSet) {
+		hunkRanges.forEach((range, headerIdx) => {
+			if (coveredHunksSet.has(`${fileName}:${range.startLine}:${range.endLine}`)) {
+				coveredHeaderIndices.add(headerIdx);
+			}
+		});
+	}
+
 	return (
 		<DiffTable
 			lines={lines}
@@ -155,11 +168,12 @@ function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, ba
 			onHunkAddActive={(headerIdx: number) => addHunkToEditor(headerIdx, 'active')}
 			onHunkAddQuickPick={(headerIdx: number) => addHunkToEditor(headerIdx, 'quickpick')}
 			activeNodeContext={activeNodeContext}
+			coveredHeaderIndices={coveredHeaderIndices}
 		/>
 	);
 }
 
-function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string, onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void, activeNodeContext?: string }) {
+function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string, onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string> }) {
 	const [expanded, setExpanded] = useState(true);
 	const { text, className } = statusLabel(file.status);
 	const { dir, base } = splitPath(file.fileName);
@@ -196,6 +210,7 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, active
 						baseRef={baseRef}
 						onHunkAdd={onHunkAdd}
 						activeNodeContext={activeNodeContext}
+						coveredHunksSet={coveredHunksSet}
 					/>
 				</div>
 			)}
@@ -206,9 +221,66 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, active
 	);
 }
 
-export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, files, onHunkAdd, activeNodeContext }: ChangedFilesOverviewProps) => {
+export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, files, onHunkAdd, activeNodeContext, codeTourHunks = [], onAddAllMissing }: ChangedFilesOverviewProps) => {
 	const totalAdditions = files.reduce((sum, f) => sum + (f.additions ?? 0), 0);
 	const totalDeletions = files.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
+
+	const coveredHunksSet = useMemo(() => {
+		const set = new Set<string>();
+		for (const ch of codeTourHunks) {
+			set.add(`${ch.file}:${ch.startLine}:${ch.endLine}`);
+		}
+		return set;
+	}, [codeTourHunks]);
+
+	const { totalHunks, missingHunks } = useMemo(() => {
+		let total = 0;
+		const missing: any[] = [];
+		for (const file of files) {
+			if (!file.patch) continue;
+			const lines = parsePatch(file.patch);
+			const rawLines = file.patch.split('\n');
+			const ranges = computeHunkRanges(lines);
+
+			const hunkRawIndices: number[] = [];
+			for (let i = 0; i < rawLines.length; i++) {
+				if (rawLines[i].startsWith('@@')) {
+					hunkRawIndices.push(i);
+				}
+			}
+
+			for (const [headerIdx, range] of ranges.entries()) {
+				total++;
+				const hunkKey = `${file.fileName}:${range.startLine}:${range.endLine}`;
+				if (!coveredHunksSet.has(hunkKey)) {
+					const parsedHunkIdx = lines.slice(0, headerIdx + 1).filter(l => l.type === 'hunk-header').length - 1;
+					const rawStart = hunkRawIndices[parsedHunkIdx];
+					const rawEnd = parsedHunkIdx + 1 < hunkRawIndices.length
+						? hunkRawIndices[parsedHunkIdx + 1]
+						: rawLines.length;
+					const hunkPatch = rawLines.slice(rawStart, rawEnd).join('\n');
+
+					missing.push({
+						file: file.fileName,
+						startLine: range.startLine,
+						endLine: range.endLine,
+						ref: 'HEAD',
+						patch: hunkPatch,
+						previousFile: file.previousFileName,
+						isPR: true,
+						baseRef,
+						prNumber: number,
+						prOwner: owner,
+						prRepo: repo
+					});
+				}
+			}
+		}
+		return { totalHunks: total, missingHunks: missing };
+	}, [files, coveredHunksSet, baseRef, number, owner, repo]);
+
+	const coveredHunks = totalHunks - missingHunks.length;
+	const progressPercent = totalHunks === 0 ? 0 : Math.round((coveredHunks / totalHunks) * 100);
 
 	return (
 		<div className="code-tour-changes">
@@ -218,6 +290,19 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 				<span className="additions">+{totalAdditions}</span> and{' '}
 				<span className="deletions">-{totalDeletions}</span>
 			</div>
+			{totalHunks > 0 && (
+				<div className="exhaustiveness-check">
+					<div className="exhaustiveness-header">
+						<span>Covered Changes: {coveredHunks} / {totalHunks}</span>
+						{missingHunks.length > 0 && onAddAllMissing && (
+							<button onClick={() => onAddAllMissing(missingHunks)}>Add All Missing</button>
+						)}
+					</div>
+					<div className="progress-bar-container">
+						<div className="progress-bar" style={{ width: `${progressPercent}%` }} />
+					</div>
+				</div>
+			)}
 			<div className="changed-files-list">
 				{files.map(file => (
 					<FileEntry
@@ -229,6 +314,7 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 						baseRef={baseRef}
 						onHunkAdd={onHunkAdd}
 						activeNodeContext={activeNodeContext}
+						coveredHunksSet={coveredHunksSet}
 					/>
 				))}
 			</div>

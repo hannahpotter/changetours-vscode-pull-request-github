@@ -443,6 +443,50 @@ h2 {
 	color: var(--vscode-gitDecoration-deletedResourceForeground, #d73a49);
 }
 
+.exhaustiveness-check {
+	margin-bottom: 24px;
+	padding: 12px;
+	background: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
+	border-radius: 4px;
+}
+
+.exhaustiveness-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 8px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.exhaustiveness-header button {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border: none;
+	padding: 4px 12px;
+	border-radius: 2px;
+	cursor: pointer;
+	font-size: 12px;
+}
+
+.exhaustiveness-header button:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.progress-bar-container {
+	height: 8px;
+	background: var(--vscode-editorWidget-background, rgba(0,0,0,0.2));
+	border-radius: 4px;
+	overflow: hidden;
+}
+
+.progress-bar {
+	height: 100%;
+	background: var(--vscode-progressBar-background, var(--vscode-button-background));
+	transition: width 0.3s ease;
+}
+
 .changed-files-list {
 	display: flex;
 	flex-direction: column;
