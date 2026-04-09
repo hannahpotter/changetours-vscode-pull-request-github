@@ -5,7 +5,8 @@
 
 import * as vscode from 'vscode';
 import { CodeTourEditorProvider } from './codeTourEditorProvider';
-import { CodeTourDocument, parseCodeTourMarkdown, TourGroupNode, TourHunkNode, TourNode } from './codeTourMarkdown';
+import { CodeTourDocument, parseCodeTourMarkdown, serializeCodeTourMarkdown, TourGroupNode, TourHunkNode, TourNode } from './codeTourMarkdown';
+import { extractNodeById, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from './codeTourTreeHelpers';
 import { RepositoriesManager } from './repositoriesManager';
 
 export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupNode | TourHunkNode | CodeTourDocument>, vscode.Disposable {
@@ -38,7 +39,8 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 	constructor(private _reposManager: RepositoriesManager) {
 		this._view = vscode.window.createTreeView('codetour:steps', {
 			treeDataProvider: this,
-			showCollapseAll: true
+			showCollapseAll: true,
+			dragAndDropController: new CodeTourStepsTreeDragAndDropController(this)
 		});
 		this._disposables.push(this._view);
 
@@ -106,6 +108,14 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 		}
 		this.updateViewTitle();
 		this._onDidChangeTreeData.fire();
+	}
+
+	public getCurrentDocument(): CodeTourDocument | undefined {
+		return this.parsedDoc;
+	}
+
+	public getCurrentTextDocument(): vscode.TextDocument | undefined {
+		return this.currentDocument;
 	}
 
 	getTreeItem(element: TourGroupNode | TourHunkNode | CodeTourDocument): vscode.TreeItem {
@@ -182,5 +192,84 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 			}
 		}
 		return result;
+	}
+}
+
+class CodeTourStepsTreeDragAndDropController implements vscode.TreeDragAndDropController<TourGroupNode | TourHunkNode | CodeTourDocument> {
+	dropMimeTypes = ['application/vnd.code.tree.codetoursteps'];
+	dragMimeTypes = ['application/vnd.code.tree.codetoursteps'];
+
+	constructor(private treeProvider: CodeTourStepsTreeView) { }
+
+	async handleDrag(source: (TourGroupNode | TourHunkNode | CodeTourDocument)[], dataTransfer: vscode.DataTransfer, _token: vscode.CancellationToken): Promise<void> {
+		if (source.length === 0) {
+			return;
+		}
+
+		// Use the first selected node's ID for dragging (we only support single drag properly)
+		const sourceNode = source[0] as TourNode;
+		if (!sourceNode || !sourceNode.id) {
+			return;
+		}
+
+		const nodeIds = [sourceNode.id];
+		dataTransfer.set(this.dropMimeTypes[0], new vscode.DataTransferItem(JSON.stringify(nodeIds)));
+	}
+
+	async handleDrop(target: TourGroupNode | TourHunkNode | CodeTourDocument | undefined, dataTransfer: vscode.DataTransfer, _token: vscode.CancellationToken): Promise<void> {
+		const draggedDataItem = dataTransfer.get(this.dropMimeTypes[0]);
+		if (!draggedDataItem) {
+			return;
+		}
+
+		const draggedIds = JSON.parse(await draggedDataItem.asString());
+		if (!draggedIds || draggedIds.length === 0) {
+			return;
+		}
+
+		const sourceId = draggedIds[0];
+		const parsedDoc = this.treeProvider.getCurrentDocument();
+		const textDocument = this.treeProvider.getCurrentTextDocument();
+
+		if (!parsedDoc || !textDocument) {
+			return;
+		}
+
+		let newChildren: TourNode[] = [...parsedDoc.children];
+
+		if (!target || !(target as TourNode).type) {
+			// Dropped on the root document. Move after the very last element of the tree
+			const { nodes, extracted } = extractNodeById(newChildren, sourceId);
+			if (extracted) {
+				newChildren = [...nodes, extracted];
+			}
+		} else {
+			const targetNode = target as TourNode;
+
+			if (targetNode.type === 'group') {
+				// Dropped onto a group: append to the end of that group
+				newChildren = moveNodeToGroupEnd(newChildren, sourceId, targetNode.id);
+			} else {
+				// Dropped onto a hunk
+				newChildren = moveNodeRelative(newChildren, sourceId, targetNode.id, 'after');
+			}
+		}
+
+		newChildren = normalizeGroupLevels(newChildren);
+
+		const modifiedDoc: CodeTourDocument = {
+			...parsedDoc,
+			children: newChildren
+		};
+
+		const newMarkdown = serializeCodeTourMarkdown(modifiedDoc);
+
+		const edit = new vscode.WorkspaceEdit();
+		edit.replace(
+			textDocument.uri,
+			new vscode.Range(0, 0, textDocument.lineCount, 0),
+			newMarkdown
+		);
+		await vscode.workspace.applyEdit(edit);
 	}
 }

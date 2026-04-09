@@ -54,7 +54,7 @@ export interface CodeTourDocument {
 	children: TourNode[];
 }
 
-const HUNK_PATTERN = /^:::hunk\s+file=(?<file>[^\s]+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>[^\s]+)(?:\s+previousFile=(?<previousFile>[^\s]+))?\s*$/;
+const HUNK_PATTERN = /^:::hunk\s+file=(?<file>[^\s]+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>[^\s]+)(?:\s+previousFile=(?<previousFile>[^\s]+))?(?:\s+level=(?<level>\d+))?\s*$/;
 const HUNK_END_PATTERN = /^:::$/;
 
 let nextId = 0;
@@ -207,6 +207,13 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		if (hunkMatch) {
 			flushText();
 
+			if (hunkMatch.groups!.level) {
+				const parsedLevel = parseInt(hunkMatch.groups!.level, 10);
+				while (groupStack.length > 0 && groupStack[groupStack.length - 1].level > parsedLevel) {
+					groupStack.pop();
+				}
+			}
+
 			// Multi-line hunk, start accumulating patch content
 			inHunk = true;
 			pendingHunk = {
@@ -252,14 +259,14 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 	lines.push(`# ${doc.title}`);
 	lines.push('');
 
-	function serializeNodes(nodes: TourNode[]): void {
+	function serializeNodes(nodes: TourNode[], currentLevel: number): void {
 		for (const node of nodes) {
 			switch (node.type) {
 				case 'group': {
 					const prefix = '#'.repeat(node.level);
 					lines.push(`${prefix} ${node.title}`);
 					lines.push('');
-					serializeNodes(node.children);
+					serializeNodes(node.children, node.level);
 					break;
 				}
 				case 'text':
@@ -269,6 +276,7 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 				case 'hunk': {
 					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
 					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
+					hunkHeader += ` level=${currentLevel}`;
 					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
@@ -281,7 +289,7 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 		}
 	}
 
-	serializeNodes(doc.children);
+	serializeNodes(doc.children, 1);
 
 	// Trim trailing newlines to a single trailing newline
 	return lines.join('\n').replace(/\n+$/, '\n');

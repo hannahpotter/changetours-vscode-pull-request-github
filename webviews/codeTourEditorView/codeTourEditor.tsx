@@ -6,6 +6,7 @@
 import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CodeTourDocument, HunkReference, TourTextNode } from '../../src/github/codeTourMarkdown';
+import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
 import { DiffTable } from '../common/DiffTable';
 import { parsePatch } from '../common/diffUtils';
 import { chevronDownIcon, gripperIcon } from '../components/icon';
@@ -33,8 +34,6 @@ interface EditorGroupNode {
 }
 
 type EditorNode = EditorGroupNode | TourTextNode | EditorHunkNode | TourDropZoneNode;
-
-type DropPosition = 'before' | 'after';
 
 interface ReorderDragState {
 	nodeId: string;
@@ -126,134 +125,6 @@ function appendToGroup(nodes: EditorNode[], groupId: string, node: EditorNode): 
 	});
 }
 
-function extractNodeById(nodes: EditorNode[], nodeId: string): { nodes: EditorNode[]; extracted?: EditorNode } {
-	let extracted: EditorNode | undefined;
-	const nextNodes: EditorNode[] = [];
-
-	for (const node of nodes) {
-		if (node.id === nodeId) {
-			extracted = node;
-			continue;
-		}
-
-		if (node.type === 'group') {
-			const childResult = extractNodeById(node.children, nodeId);
-			if (childResult.extracted) {
-				extracted = childResult.extracted;
-				nextNodes.push({ ...node, children: childResult.nodes });
-			} else {
-				nextNodes.push(node);
-			}
-		} else {
-			nextNodes.push(node);
-		}
-	}
-
-	return { nodes: nextNodes, extracted };
-}
-
-function insertNodeRelative(
-	nodes: EditorNode[],
-	targetId: string,
-	nodeToInsert: EditorNode,
-	position: DropPosition,
-): { nodes: EditorNode[]; inserted: boolean } {
-	const nextNodes: EditorNode[] = [];
-	let inserted = false;
-
-	for (const node of nodes) {
-		if (!inserted && node.id === targetId && position === 'before') {
-			nextNodes.push(nodeToInsert);
-			inserted = true;
-		}
-
-		if (node.type === 'group' && !inserted) {
-			const childResult = insertNodeRelative(node.children, targetId, nodeToInsert, position);
-			if (childResult.inserted) {
-				nextNodes.push({ ...node, children: childResult.nodes });
-				inserted = true;
-			} else {
-				nextNodes.push(node);
-			}
-		} else {
-			nextNodes.push(node);
-		}
-
-		if (!inserted && node.id === targetId && position === 'after') {
-			nextNodes.push(nodeToInsert);
-			inserted = true;
-		}
-	}
-
-	return { nodes: nextNodes, inserted };
-}
-
-function appendNodeToGroupEnd(
-	nodes: EditorNode[],
-	targetGroupId: string,
-	nodeToInsert: EditorNode,
-): { nodes: EditorNode[]; inserted: boolean } {
-	let inserted = false;
-	const nextNodes = nodes.map(node => {
-		if (node.type !== 'group') {
-			return node;
-		}
-		if (node.id === targetGroupId) {
-			inserted = true;
-			return { ...node, children: [...node.children, nodeToInsert] };
-		}
-
-		const childResult = appendNodeToGroupEnd(node.children, targetGroupId, nodeToInsert);
-		if (childResult.inserted) {
-			inserted = true;
-			return { ...node, children: childResult.nodes };
-		}
-		return node;
-	});
-
-	return { nodes: nextNodes, inserted };
-}
-
-function moveNodeRelative(nodes: EditorNode[], draggedId: string, targetId: string, position: DropPosition): EditorNode[] {
-	if (draggedId === targetId) {
-		return nodes;
-	}
-
-	const extracted = extractNodeById(nodes, draggedId);
-	if (!extracted.extracted) {
-		return nodes;
-	}
-
-	const inserted = insertNodeRelative(extracted.nodes, targetId, extracted.extracted, position);
-	return inserted.inserted ? inserted.nodes : nodes;
-}
-
-function moveNodeToGroupEnd(nodes: EditorNode[], draggedId: string, targetGroupId: string): EditorNode[] {
-	const extracted = extractNodeById(nodes, draggedId);
-	if (!extracted.extracted) {
-		return nodes;
-	}
-
-	const inserted = appendNodeToGroupEnd(extracted.nodes, targetGroupId, extracted.extracted);
-	return inserted.inserted ? inserted.nodes : nodes;
-}
-
-function normalizeGroupLevels(nodes: EditorNode[], parentLevel?: number): EditorNode[] {
-	const normalizedLevel = parentLevel === undefined ? 2 : Math.min(parentLevel + 1, 6);
-
-	return nodes.map(node => {
-		if (node.type !== 'group') {
-			return node;
-		}
-
-		return {
-			...node,
-			level: normalizedLevel,
-			children: normalizeGroupLevels(node.children, normalizedLevel),
-		};
-	});
-}
-
 /* - Serializer (local, mirrors codeTourMarkdown.ts) -------- */
 
 function serializeDoc(doc: EditorDocument): string {
@@ -272,14 +143,14 @@ function serializeDoc(doc: EditorDocument): string {
 	lines.push(`# ${doc.title}`);
 	lines.push('');
 
-	function walk(nodes: EditorNode[]): void {
+	function walk(nodes: EditorNode[], currentLevel: number): void {
 		for (const node of nodes) {
 			switch (node.type) {
 				case 'group': {
 					const prefix = '#'.repeat(node.level);
 					lines.push(`${prefix} ${node.title}`);
 					lines.push('');
-					walk(node.children);
+					walk(node.children, node.level);
 					break;
 				}
 				case 'text':
@@ -289,6 +160,7 @@ function serializeDoc(doc: EditorDocument): string {
 				case 'hunk': {
 					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
 					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
+					hunkHeader += ` level=${currentLevel}`;
 					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
@@ -304,7 +176,7 @@ function serializeDoc(doc: EditorDocument): string {
 		}
 	}
 
-	walk(doc.children);
+	walk(doc.children, 1);
 	return lines.join('\n').replace(/\n+$/, '\n');
 }
 
