@@ -20,7 +20,6 @@ import { formatError } from './common/utils';
 import { EXTENSION_ID } from './constants';
 import { CodeTourEditorProvider } from './github/codeTourEditorProvider';
 import { parseCodeTourMarkdown } from './github/codeTourMarkdown';
-import { CodeTourPanel } from './github/codeTourPanel';
 import { CrossChatSessionWithPR } from './github/copilotApi';
 import { CopilotRemoteAgentManager, SessionIdForPr } from './github/copilotRemoteAgent';
 import { FolderRepositoryManager } from './github/folderRepositoryManager';
@@ -963,7 +962,7 @@ export function registerCommands(
 						vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Loading Code Tour Pull Request') }, async () => {
 							const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
 							if (prModel) {
-								await CodeTourPanel.createOrShow(context.extensionUri, prModel, vscode.ViewColumn.Beside);
+								CodeTourEditorProvider.toggleChangesForDocument(docUri);
 							} else {
 								vscode.window.showErrorMessage(vscode.l10n.t('Pull Request not found.'));
 							}

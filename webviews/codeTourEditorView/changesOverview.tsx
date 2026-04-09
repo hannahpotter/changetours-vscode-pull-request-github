@@ -16,6 +16,8 @@ interface ChangedFilesOverviewProps {
 	repo: string;
 	baseRef: string;
 	files: ChangedFileInfo[];
+	onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void;
+	activeNodeContext?: string;
 }
 
 function statusLabel(status: string): { text: string; className: string } {
@@ -74,7 +76,7 @@ function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: nu
 	return ranges;
 }
 
-function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, baseRef }: { patch: string; fileName: string; previousFile?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string }) {
+function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext }: { patch: string; fileName: string; previousFile?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string, onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void, activeNodeContext?: string }) {
 	const lines = parsePatch(patch);
 	const rawLines = patch.split('\n');
 	const hunkRanges = computeHunkRanges(lines);
@@ -118,10 +120,46 @@ function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, ba
 		e.dataTransfer.effectAllowed = 'copy';
 	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, baseRef, prNumber, prOwner, prRepo]);
 
-	return <DiffTable lines={lines} onHunkHeaderDragStart={handleHunkDragStart} />;
+	const addHunkToEditor = useCallback((headerIdx: number, mode: 'active' | 'quickpick') => {
+		const range = hunkRanges.get(headerIdx);
+		if (!range) return;
+
+		const parsedHunkIdx = lines.slice(0, headerIdx + 1).filter(l => l.type === 'hunk-header').length - 1;
+		const rawStart = hunkRawIndices[parsedHunkIdx];
+		const rawEnd = parsedHunkIdx + 1 < hunkRawIndices.length
+			? hunkRawIndices[parsedHunkIdx + 1]
+			: rawLines.length;
+		const hunkPatch = rawLines.slice(rawStart, rawEnd).join('\n');
+
+		const payload = {
+			file: fileName,
+			startLine: range.startLine,
+			endLine: range.endLine,
+			ref: 'HEAD',
+			patch: hunkPatch,
+			previousFile,
+			isPR: true,
+			baseRef,
+			prNumber,
+			prOwner,
+			prRepo
+		};
+
+		onHunkAdd(payload, mode);
+	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, baseRef, prNumber, prOwner, prRepo, onHunkAdd]);
+
+	return (
+		<DiffTable
+			lines={lines}
+			onHunkHeaderDragStart={handleHunkDragStart}
+			onHunkAddActive={(headerIdx: number) => addHunkToEditor(headerIdx, 'active')}
+			onHunkAddQuickPick={(headerIdx: number) => addHunkToEditor(headerIdx, 'quickpick')}
+			activeNodeContext={activeNodeContext}
+		/>
+	);
 }
 
-function FileEntry({ file, prNumber, prOwner, prRepo, baseRef }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string }) {
+function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string, onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void, activeNodeContext?: string }) {
 	const [expanded, setExpanded] = useState(true);
 	const { text, className } = statusLabel(file.status);
 	const { dir, base } = splitPath(file.fileName);
@@ -156,6 +194,8 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef }: { file: Changed
 						prOwner={prOwner}
 						prRepo={prRepo}
 						baseRef={baseRef}
+						onHunkAdd={onHunkAdd}
+						activeNodeContext={activeNodeContext}
 					/>
 				</div>
 			)}
@@ -166,12 +206,12 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef }: { file: Changed
 	);
 }
 
-export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, files }: ChangedFilesOverviewProps) => {
+export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, files, onHunkAdd, activeNodeContext }: ChangedFilesOverviewProps) => {
 	const totalAdditions = files.reduce((sum, f) => sum + (f.additions ?? 0), 0);
 	const totalDeletions = files.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
 
 	return (
-		<>
+		<div className="code-tour-changes">
 			<h2>All Changes for Code Tour &mdash; {title} <a>#{number}</a></h2>
 			<div className="summary">
 				{files.length} changed file{files.length !== 1 ? 's' : ''} with{' '}
@@ -187,9 +227,11 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 						prOwner={owner}
 						prRepo={repo}
 						baseRef={baseRef}
+						onHunkAdd={onHunkAdd}
+						activeNodeContext={activeNodeContext}
 					/>
 				))}
 			</div>
-		</>
+		</div>
 	);
 };

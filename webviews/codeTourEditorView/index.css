@@ -408,9 +408,136 @@
 }
 
 .loading-indicator {
-	position: fixed;
+	position: absolute;
 	top: 50%;
 	left: 50%;
 	transform: translate(-50%, -50%);
 }
+
+html, body, #app {
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+}
+
+.code-tour-changes {
+	padding: 20px;
+}
+
+h2 {
+	margin-bottom: 16px;
+}
+
+.summary {
+	margin-bottom: 16px;
+	color: var(--vscode-descriptionForeground);
+	font-size: 13px;
+}
+
+.summary .additions {
+	color: var(--vscode-gitDecoration-addedResourceForeground, #28a745);
+}
+
+.summary .deletions {
+	color: var(--vscode-gitDecoration-deletedResourceForeground, #d73a49);
+}
+
+.changed-files-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+@keyframes tour-node-flash {
+	0% { background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33)); }
+	100% { background: transparent; }
+}
+
+.tour-node-flash {
+	animation: tour-node-flash 1.5s ease-out;
+}
+
+/* File entry */
+.file-entry {
+	border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+	border-radius: 4px;
+	overflow: hidden;
+}
+
+.file-header {
+	display: flex;
+	align-items: center;
+	padding: 6px 10px;
+	gap: 8px;
+	cursor: pointer;
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	user-select: none;
+}
+
+.file-header:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+.file-status {
+	font-size: 11px;
+	font-weight: 600;
+	padding: 1px 6px;
+	border-radius: 3px;
+	text-transform: uppercase;
+	flex-shrink: 0;
+}
+
+.file-status.added {
+	color: var(--vscode-gitDecoration-addedResourceForeground, #28a745);
+}
+
+.file-status.modified {
+	color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+}
+
+.file-status.removed {
+	color: var(--vscode-gitDecoration-deletedResourceForeground, #d73a49);
+}
+
+.file-status.renamed {
+	color: var(--vscode-gitDecoration-renamedResourceForeground, #73c991);
+}
+
+.file-name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.file-path {
+	color: var(--vscode-descriptionForeground);
+	font-size: 12px;
+}
+
+.file-basename {
+	font-weight: 600;
+}
+
+.file-stats {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	flex-shrink: 0;
+}
+
+.file-stats .additions {
+	color: var(--vscode-gitDecoration-addedResourceForeground, #28a745);
+}
+
+.file-stats .deletions {
+	color: var(--vscode-gitDecoration-deletedResourceForeground, #d73a49);
+}
+
+/* Diff view */
+.file-diff {
+	border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+	overflow-x: auto;
+}
+
 

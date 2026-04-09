@@ -5,13 +5,17 @@
 
 import React from 'react';
 import { ParsedDiffLine } from './diffUtils';
+import { addIcon, listTree } from '../components/icon';
 
 interface DiffTableProps {
 	lines: ParsedDiffLine[];
 	onHunkHeaderDragStart?: (e: React.DragEvent, headerIdx: number) => void;
+	onHunkAddActive?: (headerIdx: number) => void;
+	onHunkAddQuickPick?: (headerIdx: number) => void;
+	activeNodeContext?: string;
 }
 
-export function DiffTable({ lines, onHunkHeaderDragStart }: DiffTableProps) {
+export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext }: DiffTableProps) {
 	return (
 		<table className="diff-table">
 			<tbody>
@@ -28,7 +32,29 @@ export function DiffTable({ lines, onHunkHeaderDragStart }: DiffTableProps) {
 							>
 								<td className="diff-line-num"></td>
 								<td className="diff-line-num"></td>
-								<td className="diff-line-content">{line.content}</td>
+								<td className="diff-line-content diff-hunk-content-flex">
+									<span className="diff-hunk-title">{line.content}</span>
+									<span className="diff-hunk-actions">
+										{onHunkAddActive && (
+											<span
+												className="icon-button"
+												title={activeNodeContext ? `Insert after: ${activeNodeContext}` : 'Append to end of tour'}
+												onClick={(e) => { e.stopPropagation(); onHunkAddActive(i); }}
+											>
+												{addIcon}
+											</span>
+										)}
+										{onHunkAddQuickPick && (
+											<span
+												className="icon-button"
+												title="Add Hunk to Section..."
+												onClick={(e) => { e.stopPropagation(); onHunkAddQuickPick(i); }}
+											>
+												{listTree}
+											</span>
+										)}
+									</span>
+								</td>
 							</tr>
 						);
 					}

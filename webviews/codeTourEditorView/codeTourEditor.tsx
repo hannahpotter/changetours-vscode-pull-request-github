@@ -58,6 +58,9 @@ interface CodeTourEditorProps {
 	activePR?: { number: number; owner: string; repo: string };
 	isEditMode?: boolean;
 	scrollToNode?: { id: string; ts: number };
+	insertHunkCommand?: { ts: number, payload: HunkReference, mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string };
+	onProvideGroupsForQuickPick?: (groups: any[], hunk: HunkReference) => void;
+	onActiveNodeChanged?: (id: string | undefined) => void;
 	onDocumentChange: (markdown: string) => void;
 	onInsertHunk: (hunk: HunkReference) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
@@ -322,6 +325,8 @@ function getDropPosition(event: React.DragEvent<HTMLElement>): DropPosition {
 function NodeShell({
 	node,
 	dragState,
+	activeNodeId,
+	onActiveNodeChanged,
 	onDragStart,
 	onDragEnd,
 	onReorder,
@@ -330,6 +335,8 @@ function NodeShell({
 }: {
 	node: EditorNode;
 	dragState: ReorderDragState | null;
+	activeNodeId: string | undefined;
+	onActiveNodeChanged: (id: string) => void;
 	onDragStart: (nodeId: string) => void;
 	onDragEnd: () => void;
 	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
@@ -393,10 +400,17 @@ function NodeShell({
 				'tour-node-shell',
 				isDraggable ? 'tour-node-shell-draggable' : '',
 				dropPosition ? `tour-node-shell-drop-${dropPosition}` : '',
+				activeNodeId === node.id ? 'tour-node-active' : ''
 			].filter(Boolean).join(' ')}
 			onDragOver={handleDragOver}
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
+			onClick={(e) => {
+				e.stopPropagation();
+				if (isEditMode) {
+					onActiveNodeChanged(node.id);
+				}
+			}}
 		>
 			{isDraggable && (
 				<span
@@ -659,6 +673,8 @@ function GroupBlock({
 	node,
 	doc,
 	dragState,
+	activeNodeId,
+	onActiveNodeChanged,
 	onNodeDragStart,
 	onNodeDragEnd,
 	onReorder,
@@ -678,6 +694,8 @@ function GroupBlock({
 	node: EditorGroupNode;
 	doc: EditorDocument;
 	dragState: ReorderDragState | null;
+	activeNodeId: string | undefined;
+	onActiveNodeChanged: (id: string) => void;
 	onNodeDragStart: (nodeId: string) => void;
 	onNodeDragEnd: () => void;
 	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
@@ -771,6 +789,8 @@ function GroupBlock({
 							node={child}
 							doc={doc}
 							dragState={dragState}
+							activeNodeId={activeNodeId}
+							onActiveNodeChanged={onActiveNodeChanged}
 							onNodeDragStart={onNodeDragStart}
 							onNodeDragEnd={onNodeDragEnd}
 							onReorder={onReorder}
@@ -809,6 +829,8 @@ function NodeRenderer({
 	node,
 	doc,
 	dragState,
+	activeNodeId,
+	onActiveNodeChanged,
 	onNodeDragStart,
 	onNodeDragEnd,
 	onReorder,
@@ -828,6 +850,8 @@ function NodeRenderer({
 	node: EditorNode;
 	doc: EditorDocument;
 	dragState: ReorderDragState | null;
+	activeNodeId: string | undefined;
+	onActiveNodeChanged: (id: string) => void;
 	onNodeDragStart: (nodeId: string) => void;
 	onNodeDragEnd: () => void;
 	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
@@ -850,6 +874,8 @@ function NodeRenderer({
 				<NodeShell
 					node={node}
 					dragState={dragState}
+					activeNodeId={activeNodeId}
+					onActiveNodeChanged={onActiveNodeChanged}
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
@@ -859,6 +885,8 @@ function NodeRenderer({
 						node={node}
 						doc={doc}
 						dragState={dragState}
+						activeNodeId={activeNodeId}
+						onActiveNodeChanged={onActiveNodeChanged}
 						onNodeDragStart={onNodeDragStart}
 						onNodeDragEnd={onNodeDragEnd}
 						onReorder={onReorder}
@@ -882,6 +910,8 @@ function NodeRenderer({
 				<NodeShell
 					node={node}
 					dragState={dragState}
+					activeNodeId={activeNodeId}
+					onActiveNodeChanged={onActiveNodeChanged}
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
@@ -895,6 +925,8 @@ function NodeRenderer({
 				<NodeShell
 					node={node}
 					dragState={dragState}
+					activeNodeId={activeNodeId}
+					onActiveNodeChanged={onActiveNodeChanged}
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
@@ -909,6 +941,8 @@ function NodeRenderer({
 				<NodeShell
 					node={node}
 					dragState={dragState}
+					activeNodeId={activeNodeId}
+					onActiveNodeChanged={onActiveNodeChanged}
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
@@ -922,10 +956,34 @@ function NodeRenderer({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, scrollToNode, onError }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, scrollToNode, insertHunkCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
+	const [activeNodeId, setActiveNodeId] = useState<string | undefined>(undefined);
+	const [justInsertedId, setJustInsertedId] = useState<string | undefined>(undefined);
 	const isLocalEdit = useRef(false);
+
+	useEffect(() => {
+		if (justInsertedId) {
+			setTimeout(() => {
+				const el = document.getElementById(`node-${justInsertedId}`);
+				if (el) {
+					el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+					el.classList.add('tour-node-flash');
+					setTimeout(() => {
+						el.classList.remove('tour-node-flash');
+						setJustInsertedId(undefined);
+					}, 1500);
+				}
+			}, 100);
+		}
+	}, [justInsertedId]);
+
+	useEffect(() => {
+		if (onActiveNodeChanged) {
+			onActiveNodeChanged(activeNodeId);
+		}
+	}, [activeNodeId, onActiveNodeChanged]);
 
 	useEffect(() => {
 		if (scrollToNode && scrollToNode.id) {
@@ -944,6 +1002,81 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 			}, 0);
 		}
 	}, [scrollToNode]);
+
+	// Handle insert hunk command
+	useEffect(() => {
+		if (!insertHunkCommand) {
+			return;
+		}
+
+		if (insertHunkCommand.mode === 'active' || insertHunkCommand.mode === 'requestGroupsForQuickPick') {
+			applyLocal(prev => {
+				const dropZoneId = localId();
+				const dzNode: EditorHunkNode = {
+					type: 'hunk',
+					id: dropZoneId,
+					hunk: {
+						file: insertHunkCommand.payload.file,
+						startLine: insertHunkCommand.payload.startLine,
+						endLine: insertHunkCommand.payload.endLine,
+						ref: insertHunkCommand.payload.ref,
+						patch: insertHunkCommand.payload.patch,
+						previousFile: insertHunkCommand.payload.previousFile
+					},
+				};
+
+				if (activeNodeId) {
+					const inserted = insertNodeRelative(prev.children, activeNodeId, dzNode, 'after');
+					if (inserted.inserted) {
+						setJustInsertedId(dzNode.id);
+						return { ...prev, children: inserted.nodes };
+					}
+				}
+
+				setJustInsertedId(dzNode.id);
+				return { ...prev, children: appendToList(prev.children, dzNode) };
+			});
+		} else if (insertHunkCommand.mode === 'quickpick') {
+			if (insertHunkCommand.targetId) {
+				applyLocal(prev => {
+					const dropZoneId = localId();
+					const dzNode: EditorHunkNode = {
+						type: 'hunk',
+						id: dropZoneId,
+						hunk: {
+							file: insertHunkCommand.payload.file,
+							startLine: insertHunkCommand.payload.startLine,
+							endLine: insertHunkCommand.payload.endLine,
+							ref: insertHunkCommand.payload.ref,
+							patch: insertHunkCommand.payload.patch,
+							previousFile: insertHunkCommand.payload.previousFile
+						},
+					};
+
+					const inserted = appendNodeToGroupEnd(prev.children, insertHunkCommand.targetId!, dzNode);
+					if (inserted.inserted) {
+						setJustInsertedId(dzNode.id);
+						return { ...prev, children: inserted.nodes };
+					}
+
+					setJustInsertedId(dzNode.id);
+					return { ...prev, children: appendToList(prev.children, dzNode) };
+				});
+			} else if (onProvideGroupsForQuickPick) {
+				const groups: { id: string; title: string }[] = [];
+				const collectGroups = (nodes: EditorNode[]) => {
+					for (const n of nodes) {
+						if (n.type === 'group') {
+							groups.push({ id: n.id, title: n.title });
+							collectGroups(n.children);
+						}
+					}
+				};
+				collectGroups(doc.children);
+				onProvideGroupsForQuickPick(groups, insertHunkCommand.payload);
+			}
+		}
+	}, [insertHunkCommand]);
 
 	const isMismatch = !!doc.isPR && (
 		!activePR ||
@@ -1166,6 +1299,8 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onOpenD
 						node={node}
 						doc={doc}
 						dragState={dragState}
+						activeNodeId={activeNodeId}
+						onActiveNodeChanged={setActiveNodeId}
 						onNodeDragStart={handleNodeDragStart}
 						onNodeDragEnd={handleNodeDragEnd}
 						onReorder={handleReorder}

@@ -33,6 +33,7 @@ export const gitPullRequestDraftIcon = <Icon src={require('../../resources/icons
 export const gitPullRequestIcon = <Icon src={require('../../resources/icons/codicons/git-pull-request.svg')} />;
 export const gripperIcon = <Icon src={require('../../resources/icons/codicons/gripper.svg')} />;
 export const issuescon = <Icon src={require('../../resources/icons/codicons/issues.svg')} />;
+export const listTree = <Icon src={require('../../resources/icons/codicons/list-tree.svg')} />;
 export const loadingIcon = <Icon className='loading' src={require('../../resources/icons/codicons/loading.svg')} />;
 export const milestoneIcon = <Icon src={require('../../resources/icons/codicons/milestone.svg')} />;
 export const notebookTemplate = <Icon src={require('../../resources/icons/codicons/notebook-template.svg')} />;

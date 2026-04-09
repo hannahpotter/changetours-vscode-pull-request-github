@@ -70,9 +70,25 @@
 }
 
 .diff-hunk-header .diff-line-content {
+	display: flex;
+	justify-content: space-between;
 	color: var(--vscode-descriptionForeground);
 	font-style: italic;
 	font-size: 12px;
+}
+
+.diff-hunk-actions {
+	display: flex;
+	padding-left: 8px;
+	height: fit-content;
+	color: var(--vscode-button-background);
+}
+
+.diff-hunk-actions .icon {
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	line-height: 0;
 }
 
 /* Addition */

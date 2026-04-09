@@ -7,7 +7,6 @@
 import * as vscode from 'vscode';
 import { OpenCommitChangesArgs } from '../../common/views';
 import { openPullRequestOnGitHub } from '../commands';
-import { CodeTourPanel } from './codeTourPanel';
 import { getCopilotApi } from './copilotApi';
 import { SessionIdForPr } from './copilotRemoteAgent';
 import { FolderRepositoryManager } from './folderRepositoryManager';
@@ -530,8 +529,6 @@ export class PullRequestOverviewPanel extends IssueOverviewPanel<PullRequestMode
 				return this.cancelGenerateDescription();
 			case 'pr.change-base-branch':
 				return this.changeBaseBranch(message);
-			case 'pr.open-code-tour':
-				return this.openCodeTour(message);
 		}
 	}
 
@@ -541,11 +538,6 @@ export class PullRequestOverviewPanel extends IssueOverviewPanel<PullRequestMode
 		} else {
 			PullRequestModel.openChanges(this._folderRepositoryManager, this._item);
 		}
-		return this._replyMessage(message, {});
-	}
-
-	private async openCodeTour(message: IRequestMessage<void>): Promise<void> {
-		await CodeTourPanel.createOrShow(this._extensionUri, this._item);
 		return this._replyMessage(message, {});
 	}
 

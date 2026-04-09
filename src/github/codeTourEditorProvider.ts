@@ -48,6 +48,54 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		}
 	}
 
+	public static toggleChangesForDocument(uri?: vscode.Uri) {
+		if (uri) {
+			const panel = CodeTourEditorProvider._webviewPanels.get(uri.toString());
+			if (panel) {
+				panel.webview.postMessage({
+					res: { command: 'codeTourEditor.toggleChanges' }
+				});
+				return;
+			}
+		}
+
+		for (const panel of CodeTourEditorProvider._webviewPanels.values()) {
+			if (panel.active || panel.visible) {
+				panel.webview.postMessage({
+					res: { command: 'codeTourEditor.toggleChanges' }
+				});
+				return;
+			}
+		}
+	}
+
+	public static async addHunkToEditor(hunk: HunkReference, mode: 'active' | 'quickpick') {
+		const document = CodeTourEditorProvider.activeDocumentTracker;
+		if (!document) {
+			vscode.window.showErrorMessage('No active Code Tour editor found. Please focus a Code Tour first.');
+			return;
+		}
+
+		const uri = document.uri;
+		const panel = CodeTourEditorProvider._webviewPanels.get(uri.toString());
+		if (!panel) {
+			vscode.window.showErrorMessage('No Code Tour editor panel found.');
+			return;
+		}
+
+		if (mode === 'quickpick') {
+			panel.webview.postMessage({ res: { command: 'codeTourEditor.requestGroupsForQuickPick', hunk } });
+		} else {
+			panel.webview.postMessage({
+				res: {
+					command: 'codeTourEditor.insertHunkAt',
+					hunk,
+					mode
+				}
+			});
+		}
+	}
+
 	public static scrollToNode(uri: vscode.Uri, nodeId: string) {
 		const key = uri.toString();
 		const panel = CodeTourEditorProvider._webviewPanels.get(key);
@@ -231,6 +279,75 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			case 'codeTourEditor.checkoutPR': {
 				const { prNumber, owner, repo } = message.args as { prNumber: number, owner: string, repo: string };
 				vscode.commands.executeCommand('pr.checkoutFromCodeTour', prNumber, owner, repo, document.uri);
+				return;
+			}
+
+			case 'codeTourEditor.addHunk': {
+				const { hunk, mode } = message.args as { hunk: HunkReference, mode: 'active' | 'quickpick' };
+				CodeTourEditorProvider.addHunkToEditor(hunk, mode);
+				return;
+			}
+
+			case 'codeTourEditor.showGroupsQuickPick': {
+				const { groups, hunk } = message.args as { groups: { id: string, title: string, level: number }[], hunk: HunkReference };
+				const options: ({ label: string, id: string })[] = [
+					{ label: '$(root-folder) Document End', id: 'root' },
+					...groups.map(g => ({
+						label: '\u00A0'.repeat((g.level - 1) * 4) + '$(symbol-folder) ' + (g.title || 'Untitled Section'),
+						id: g.id
+					}))
+				];
+				const selected = await vscode.window.showQuickPick(options, { placeHolder: 'Select target section for hunk' });
+				if (selected) {
+					panel.webview.postMessage({
+						res: {
+							command: 'codeTourEditor.insertHunkAt',
+							hunk,
+							mode: 'quickpick',
+							targetId: selected.id
+						}
+					});
+				}
+				return;
+			}
+
+			case 'codeTourEditor.requestChanges': {
+				try {
+					const parsed = parseCodeTourMarkdown(document.getText());
+					if (parsed.isPR && parsed.prOwner && parsed.prRepo && parsed.prNumber) {
+						const { prOwner, prRepo, prNumber } = parsed;
+						const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
+						if (folderManager) {
+							const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+							if (prModel) {
+								const rawChanges = await prModel.getRawFileChangesInfo();
+								const files = rawChanges.map(change => ({
+									fileName: change.filename,
+									status: change.status,
+									additions: change.additions,
+									deletions: change.deletions,
+									previousFileName: change.previous_filename,
+									patch: change.patch,
+								}));
+								panel.webview.postMessage({
+									res: {
+										command: 'codeTourEditor.changesData',
+										data: {
+											title: prModel.title,
+											number: prModel.number,
+											owner: prOwner,
+											repo: prRepo,
+											baseRef: prModel.base.sha,
+											files
+										}
+									}
+								});
+							}
+						}
+					}
+				} catch (e) {
+					Logger.error(`Failed to fetch PR changes: ${formatError(e)}`, CodeTourEditorProvider.name);
+				}
 				return;
 			}
 
