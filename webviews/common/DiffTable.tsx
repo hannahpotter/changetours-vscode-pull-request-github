@@ -3,9 +3,9 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import React from 'react';
+import React, { useState } from 'react';
 import { ParsedDiffLine } from './diffUtils';
-import { addIcon, listTree } from '../components/icon';
+import { addIcon, chevronDownIcon, listTree } from '../components/icon';
 
 interface DiffTableProps {
 	lines: ParsedDiffLine[];
@@ -18,6 +18,14 @@ interface DiffTableProps {
 
 export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices }: DiffTableProps) {
 	let currentHeaderIdx = -1;
+	const [collapsedState, setCollapsedState] = useState<{ [key: number]: boolean }>({});
+
+	const toggleCollapse = (idx: number, isCurrentlyCovered: boolean) => {
+		setCollapsedState(prev => ({
+			...prev,
+			[idx]: prev[idx] !== undefined ? !prev[idx] : !isCurrentlyCovered
+		}));
+	};
 
 	return (
 		<table className="diff-table">
@@ -26,7 +34,9 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 					if (line.type === 'hunk-header') {
 						currentHeaderIdx = i;
 						const draggable = !!onHunkHeaderDragStart;
-						const isCovered = coveredHeaderIndices?.has(currentHeaderIdx);
+						const isCovered = !!coveredHeaderIndices?.has(currentHeaderIdx);
+						const isCollapsed = collapsedState[currentHeaderIdx] !== undefined ? collapsedState[currentHeaderIdx] : isCovered;
+
 						return (
 							<tr
 								key={i}
@@ -35,11 +45,11 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 								onDragStart={draggable ? e => onHunkHeaderDragStart!(e, i) : undefined}
 								title={draggable ? 'Drag this hunk into a Code Tour editor' : undefined}
 							>
-								<td className="diff-line-num"></td>
-								<td className="diff-line-num"></td>
-								<td className="diff-line-content diff-hunk-content-flex">
-									<span className="diff-hunk-title">{line.content}</span>
+								<td className="diff-line-num" colSpan={2}>
 									<span className="diff-hunk-actions">
+										<span className={`expand-icon icon-button ${isCollapsed ? 'closed' : ''}`} onClick={(e) => { e.stopPropagation(); toggleCollapse(i, isCovered); }}>
+											{chevronDownIcon}
+										</span>
 										{onHunkAddActive && (
 											<span
 												className="icon-button"
@@ -60,11 +70,20 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 										)}
 									</span>
 								</td>
+								<td className="diff-line-content diff-hunk-content-flex">
+									<span className="diff-hunk-title">{line.content}</span>
+								</td>
 							</tr>
 						);
 					}
 
-					const isCovered = coveredHeaderIndices?.has(currentHeaderIdx);
+					const isCovered = !!coveredHeaderIndices?.has(currentHeaderIdx);
+					const isCollapsed = collapsedState[currentHeaderIdx] !== undefined ? collapsedState[currentHeaderIdx] : isCovered;
+
+					if (isCollapsed) {
+						return null;
+					}
+
 					return (
 						<tr key={i} className={`diff-line diff-${line.type}${isCovered ? ' diff-hunk-covered' : ''}`}>
 							<td className="diff-line-num">

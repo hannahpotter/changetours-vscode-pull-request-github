@@ -32,9 +32,8 @@
 }
 
 .diff-line-num {
-	width: 50px;
-	min-width: 50px;
-	padding: 0 8px;
+	width: 60px;
+	min-width: 60px;
 	text-align: right;
 	color: var(--vscode-editorLineNumber-foreground, #858585);
 	font-size: 12px;
@@ -79,7 +78,6 @@
 
 .diff-hunk-actions {
 	display: flex;
-	padding-left: 8px;
 	height: fit-content;
 	color: var(--vscode-button-background);
 }
