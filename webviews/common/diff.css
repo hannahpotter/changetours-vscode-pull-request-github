@@ -60,6 +60,14 @@
 	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(90, 130, 180, 0.1));
 }
 
+.diff-search-match {
+	background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.18));
+}
+
+.diff-hunk-header.diff-search-match {
+	box-shadow: inset 0 0 0 1px var(--vscode-editor-findMatchBorder, var(--vscode-focusBorder));
+}
+
 .diff-hunk-header.draggable-hunk {
 	cursor: grab;
 }
@@ -74,6 +82,10 @@
 	color: var(--vscode-descriptionForeground);
 	font-style: italic;
 	font-size: 12px;
+}
+
+.diff-line.diff-search-match .diff-line-content {
+	box-shadow: inset 0 0 0 1px var(--vscode-editor-findMatchBorder, var(--vscode-focusBorder));
 }
 
 .diff-hunk-actions {

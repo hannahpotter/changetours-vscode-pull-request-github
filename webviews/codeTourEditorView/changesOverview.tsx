@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import type { HunkReference } from '../../src/github/codeTourMarkdown';
 import { ChangedFileInfo } from '../../src/github/views';
 import { DiffTable } from '../common/DiffTable';
@@ -45,6 +45,26 @@ function splitPath(fileName: string): { dir: string; base: string } {
 	};
 }
 
+function normalizeSearchText(value: string | undefined): string {
+	return (value ?? '').toLowerCase();
+}
+
+function buildFileSearchText(file: ChangedFileInfo): string {
+	return normalizeSearchText([
+		file.fileName,
+		file.previousFileName,
+		file.status,
+		file.patch,
+	].filter((part): part is string => !!part).join('\n'));
+}
+
+function matchesFileSearch(file: ChangedFileInfo, query: string): boolean {
+	if (!query) {
+		return true;
+	}
+	return buildFileSearchText(file).includes(query);
+}
+
 /**
  * Compute the line range covered by each hunk section so we can attach
  * drag data to hunk-header rows.
@@ -79,10 +99,42 @@ function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: nu
 	return ranges;
 }
 
-function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet, selectedHunksSet, onHunkSelect, onClearHunksSelection }: { patch: string; fileName: string; previousFile?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onClearHunksSelection: () => void }) {
+function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet, selectedHunksSet, onHunkSelect, onClearHunksSelection, searchQuery, searchActive }: { patch: string; fileName: string; previousFile?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onClearHunksSelection: () => void, searchQuery: string, searchActive: boolean }) {
 	const lines = parsePatch(patch);
 	const rawLines = patch.split('\n');
 	const hunkRanges = computeHunkRanges(lines);
+	const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+
+	const searchMatchInfo = useMemo(() => {
+		const matchedHeaderIndices = new Set<number>();
+		const matchedLineIndices = new Set<number>();
+
+		if (!searchActive || !normalizedSearchQuery) {
+			return { matchedHeaderIndices, matchedLineIndices };
+		}
+
+		let currentHeaderIdx = -1;
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			const isMatch = line.content.toLowerCase().includes(normalizedSearchQuery);
+			if (line.type === 'hunk-header') {
+				currentHeaderIdx = i;
+				if (isMatch) {
+					matchedHeaderIndices.add(i);
+				}
+				continue;
+			}
+
+			if (isMatch) {
+				matchedLineIndices.add(i);
+				if (currentHeaderIdx >= 0) {
+					matchedHeaderIndices.add(currentHeaderIdx);
+				}
+			}
+		}
+
+		return { matchedHeaderIndices, matchedLineIndices };
+	}, [lines, normalizedSearchQuery, searchActive]);
 
 	// Find the raw patch indices for each hunk header so we can extract hunk content
 	const hunkRawIndices: number[] = [];
@@ -210,21 +262,18 @@ function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, ba
 			activeNodeContext={activeNodeContext}
 			coveredHeaderIndices={coveredHeaderIndices}
 			selectedHeaderIndices={selectedHeaderIndices}
+			searchActive={searchActive}
+			searchMatchedHeaderIndices={searchMatchInfo.matchedHeaderIndices}
+			searchMatchedLineIndices={searchMatchInfo.matchedLineIndices}
 			onHunkSelectToggle={handleHunkSelectToggle}
 			selectedHunksCount={selectedHeaderIndices.size}
 		/>
 	);
 }
 
-function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet, fileMissingHunks, selectedHunksSet, onHunkSelect, onFileSelect, fileAllHunks }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, fileMissingHunks: any[], selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onFileSelect: (hunks: any[], s: boolean) => void, fileAllHunks: any[] }) {
-	const allCovered = fileMissingHunks.length === 0;
-	const [expanded, setExpanded] = useState(!allCovered);
 
-	useEffect(() => {
-		if (allCovered) {
-			setExpanded(false);
-		}
-	}, [allCovered]);
+function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet, fileMissingHunks, selectedHunksSet, onHunkSelect, onFileSelect, fileAllHunks, expanded, onToggleExpanded, searchActive, searchMatched, searchQuery }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, fileMissingHunks: any[], selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onFileSelect: (hunks: any[], s: boolean) => void, fileAllHunks: any[], expanded: boolean, onToggleExpanded: (expanded: boolean) => void, searchActive: boolean, searchMatched: boolean, searchQuery: string }) {
+	const allCovered = fileMissingHunks.length === 0;
 
 	const { text, className } = statusLabel(file.status);
 	const { dir, base } = splitPath(file.fileName);
@@ -237,8 +286,8 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, active
 	const isIndeterminate = selectedFileHunks.length > 0 && !isAllSelected;
 
 	return (
-		<div className="file-entry">
-			<div className={`file-header ${allCovered ? 'file-covered' : ''}`} onClick={() => setExpanded(!expanded)}>
+		<div className={`file-entry${searchActive && searchMatched ? ' file-entry-search-match' : ''}`}>
+			<div className={`file-header ${allCovered ? 'file-covered' : ''}`} onClick={() => onToggleExpanded(!expanded)}>
 				<div className="file-actions">
 					<span className={`expand-icon icon-button ${expanded ? '' : 'closed'}`} title={expanded ? 'Collapse file' : 'Expand file'}>{chevronDownIcon}</span>
 					<div className="checkbox-wrapper">
@@ -298,6 +347,8 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, active
 						selectedHunksSet={selectedHunksSet}
 						onHunkSelect={onHunkSelect}
 						onClearHunksSelection={() => onFileSelect(fileMissingHunks, false)}
+						searchQuery={searchQuery}
+						searchActive={searchActive}
 					/>
 				</div>
 			)}
@@ -312,6 +363,17 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 	const totalAdditions = files.reduce((sum, f) => sum + (f.additions ?? 0), 0);
 	const totalDeletions = files.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
 	const [selectedHunksSet, setSelectedHunksSet] = useState<Set<string>>(new Set());
+	const [searchQuery, setSearchQuery] = useState('');
+	const [expandedFiles, setExpandedFiles] = useState<Record<string, boolean>>({});
+	const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+	const searchActive = normalizedSearchQuery.length > 0;
+
+	const visibleFiles = useMemo(() => {
+		if (!searchActive) {
+			return files;
+		}
+		return files.filter(file => matchesFileSearch(file, normalizedSearchQuery));
+	}, [files, normalizedSearchQuery, searchActive]);
 
 	const handleHunkSelect = useCallback((hunkKey: string, selected: boolean) => {
 		setSelectedHunksSet(prev => {
@@ -407,11 +469,32 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 		return allSelected;
 	}, [fileAllHunks, selectedHunksSet]);
 
+	const handleToggleExpanded = useCallback((fileName: string, expanded: boolean) => {
+		setExpandedFiles(prev => ({
+			...prev,
+			[fileName]: expanded,
+		}));
+	}, []);
+
 	return (
 		<div className="code-tour-changes">
 			<h2>All Changes for Code Tour &mdash; {title} <a>#{number}</a></h2>
+			<div className="changes-search-row">
+				<input
+					className="changes-search-input"
+					type="search"
+					placeholder="Search files, hunks, or patch text"
+					value={searchQuery}
+					onChange={e => setSearchQuery(e.target.value)}
+				/>
+				{searchActive && (
+					<button className="changes-search-clear" onClick={() => setSearchQuery('')}>
+						Clear
+					</button>
+				)}
+			</div>
 			<div className="summary">
-				{files.length} changed file{files.length !== 1 ? 's' : ''} with{' '}
+				{searchActive ? `${visibleFiles.length} of ${files.length} files match search` : `${files.length} changed file${files.length !== 1 ? 's' : ''}`} with{' '}
 				<span className="additions">+{totalAdditions}</span> and{' '}
 				<span className="deletions">-{totalDeletions}</span>
 			</div>
@@ -441,8 +524,10 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 				</div>
 			)}
 			<div className="changed-files-list">
-				{files.map(file => {
+				{visibleFiles.length > 0 ? visibleFiles.map(file => {
 					const fileMissingHunks = missingHunks.filter(h => h.file === file.fileName);
+					const fileSearchMatch = matchesFileSearch(file, normalizedSearchQuery);
+					const expanded = searchActive && fileSearchMatch ? true : (expandedFiles[file.fileName] ?? fileMissingHunks.length > 0);
 					return (
 						<FileEntry
 							key={file.fileName}
@@ -459,9 +544,16 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 							selectedHunksSet={selectedHunksSet}
 							onHunkSelect={handleHunkSelect}
 							onFileSelect={handleFileSelect}
+							expanded={expanded}
+							onToggleExpanded={expandedValue => handleToggleExpanded(file.fileName, expandedValue)}
+							searchActive={searchActive}
+							searchMatched={fileSearchMatch}
+							searchQuery={searchQuery}
 						/>
 					);
-				})}
+				}) : (
+					<div className="changes-empty-state">No files match this search.</div>
+				)}
 			</div>
 		</div>
 	);

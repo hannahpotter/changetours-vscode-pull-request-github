@@ -15,11 +15,14 @@ interface DiffTableProps {
 	activeNodeContext?: string;
 	coveredHeaderIndices?: Set<number>;
 	selectedHeaderIndices?: Set<number>;
+	searchActive?: boolean;
+	searchMatchedHeaderIndices?: Set<number>;
+	searchMatchedLineIndices?: Set<number>;
 	onHunkSelectToggle?: (headerIdx: number, selected: boolean) => void;
 	selectedHunksCount?: number;
 }
 
-export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices, selectedHeaderIndices, onHunkSelectToggle, selectedHunksCount }: DiffTableProps) {
+export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices, selectedHeaderIndices, searchActive, searchMatchedHeaderIndices, searchMatchedLineIndices, onHunkSelectToggle, selectedHunksCount }: DiffTableProps) {
 	let currentHeaderIdx = -1;
 	const [collapsedState, setCollapsedState] = useState<{ [key: number]: boolean }>({});
 
@@ -38,12 +41,13 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 						currentHeaderIdx = i;
 						const draggable = !!onHunkHeaderDragStart;
 						const isCovered = !!coveredHeaderIndices?.has(currentHeaderIdx);
-						const isCollapsed = collapsedState[currentHeaderIdx] !== undefined ? collapsedState[currentHeaderIdx] : isCovered;
+						const isSearchMatch = !!searchActive && !!searchMatchedHeaderIndices?.has(currentHeaderIdx);
+						const isCollapsed = isSearchMatch ? false : (collapsedState[currentHeaderIdx] !== undefined ? collapsedState[currentHeaderIdx] : isCovered);
 
 						return (
 							<tr
 								key={i}
-								className={`diff-line diff-hunk-header${draggable ? ' draggable-hunk' : ''}${isCovered ? ' diff-hunk-covered' : ''}`}
+								className={`diff-line diff-hunk-header${draggable ? ' draggable-hunk' : ''}${isCovered ? ' diff-hunk-covered' : ''}${isSearchMatch ? ' diff-search-match' : ''}`}
 								draggable={draggable || undefined}
 								onDragStart={draggable ? e => onHunkHeaderDragStart!(e, i) : undefined}
 								title={draggable ? 'Drag this hunk into a Code Tour editor' : undefined}
@@ -90,14 +94,17 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 					}
 
 					const isCovered = !!coveredHeaderIndices?.has(currentHeaderIdx);
-					const isCollapsed = collapsedState[currentHeaderIdx] !== undefined ? collapsedState[currentHeaderIdx] : isCovered;
+					const isSearchMatch = !!searchActive && !!searchMatchedLineIndices?.has(i);
+					const isCollapsed = searchActive && !!searchMatchedHeaderIndices?.has(currentHeaderIdx)
+						? false
+						: (collapsedState[currentHeaderIdx] !== undefined ? collapsedState[currentHeaderIdx] : isCovered);
 
 					if (isCollapsed) {
 						return null;
 					}
 
 					return (
-						<tr key={i} className={`diff-line diff-${line.type}${isCovered ? ' diff-hunk-covered' : ''}`}>
+						<tr key={i} className={`diff-line diff-${line.type}${isCovered ? ' diff-hunk-covered' : ''}${isSearchMatch ? ' diff-search-match' : ''}`}>
 							<td className="diff-line-num">
 								{line.type !== 'add' && line.oldLine !== undefined ? line.oldLine : ''}
 							</td>

@@ -256,8 +256,11 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			}
 
 			case 'codeTourEditor.insertHunk': {
-				const { hunk } = message.args as { hunk: HunkReference };
-				const directive = createHunkDirective(hunk);
+				const { hunk } = message.args as { hunk: HunkReference[] };
+				if (hunk.length === 0) {
+					return;
+				}
+				const directive = hunk.map(createHunkDirective).join('\n\n');
 				const text = document.getText();
 				const newText = text.trimEnd() + '\n\n' + directive + '\n';
 				await this._applyEdit(document, newText);
