@@ -554,7 +554,7 @@ function GroupBlock({
 	onReorder,
 	onMoveToGroupEnd,
 	onTextChange,
-	onGroupTitleChange,
+	onGroupTitleCommit,
 	onDropZoneDrop,
 	onAddText,
 	onAddCode,
@@ -575,7 +575,7 @@ function GroupBlock({
 	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
 	onMoveToGroupEnd: (draggedId: string, groupId: string) => void;
 	onTextChange: (id: string, content: string) => void;
-	onGroupTitleChange: (id: string, title: string) => void;
+	onGroupTitleCommit: (id: string, title: string) => void;
 	onDropZoneDrop: (id: string, payload: HunkPayload) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
@@ -588,10 +588,32 @@ function GroupBlock({
 }) {
 	const [collapsed, setCollapsed] = useState(false);
 	const [groupDropActive, setGroupDropActive] = useState(false);
+	const [titleDraft, setTitleDraft] = useState(node.title);
 
-	const handleTitleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-		onGroupTitleChange(node.id, e.target.value);
-	}, [node.id, onGroupTitleChange]);
+	useEffect(() => {
+		setTitleDraft(node.title);
+	}, [node.id, node.title]);
+
+	const commitTitle = useCallback(() => {
+		if (titleDraft !== node.title) {
+			onGroupTitleCommit(node.id, titleDraft);
+		}
+	}, [node.id, node.title, onGroupTitleCommit, titleDraft]);
+
+	const handleTitleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			commitTitle();
+			e.currentTarget.blur();
+			return;
+		}
+
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			setTitleDraft(node.title);
+			e.currentTarget.blur();
+		}
+	}, [commitTitle, node.title]);
 
 	const handleGroupBodyDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
 		if (!dragState || collapsed) {
@@ -639,8 +661,10 @@ function GroupBlock({
 				{isEditMode ? (
 					<input
 						className="tour-group-title-input"
-						value={node.title}
-						onChange={handleTitleChange}
+						value={titleDraft}
+						onChange={e => setTitleDraft(e.target.value)}
+						onBlur={commitTitle}
+						onKeyDown={handleTitleKeyDown}
 						placeholder="Section title"
 					/>
 				) : (
@@ -670,7 +694,7 @@ function GroupBlock({
 							onReorder={onReorder}
 							onMoveToGroupEnd={onMoveToGroupEnd}
 							onTextChange={onTextChange}
-							onGroupTitleChange={onGroupTitleChange}
+							onGroupTitleCommit={onGroupTitleCommit}
 							onDropZoneDrop={onDropZoneDrop}
 							onAddText={onAddText}
 							onAddCode={onAddCode}
@@ -710,7 +734,7 @@ function NodeRenderer({
 	onReorder,
 	onMoveToGroupEnd,
 	onTextChange,
-	onGroupTitleChange,
+	onGroupTitleCommit,
 	onDropZoneDrop,
 	onAddText,
 	onAddCode,
@@ -731,7 +755,7 @@ function NodeRenderer({
 	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
 	onMoveToGroupEnd: (draggedId: string, groupId: string) => void;
 	onTextChange: (id: string, content: string) => void;
-	onGroupTitleChange: (id: string, title: string) => void;
+	onGroupTitleCommit: (id: string, title: string) => void;
 	onDropZoneDrop: (id: string, payload: HunkPayload) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
@@ -766,7 +790,7 @@ function NodeRenderer({
 						onReorder={onReorder}
 						onMoveToGroupEnd={onMoveToGroupEnd}
 						onTextChange={onTextChange}
-						onGroupTitleChange={onGroupTitleChange}
+						onGroupTitleCommit={onGroupTitleCommit}
 						onDropZoneDrop={onDropZoneDrop}
 						onAddText={onAddText}
 						onAddCode={onAddCode}
@@ -832,10 +856,13 @@ function NodeRenderer({
 
 export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
+	const [titleDraft, setTitleDraft] = useState(initialDoc.title);
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
 	const [activeNodeId, setActiveNodeId] = useState<string | undefined>(undefined);
 	const [justInsertedId, setJustInsertedId] = useState<string | undefined>(undefined);
 	const isLocalEdit = useRef(false);
+	const pendingDocumentSyncTimerRef = useRef<number | undefined>(undefined);
+	const lastSyncedMarkdownRef = useRef<string | undefined>(undefined);
 
 	useEffect(() => {
 		if (justInsertedId) {
@@ -1020,8 +1047,16 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		if (isLocalEdit.current) {
 			return;
 		}
+		if (pendingDocumentSyncTimerRef.current !== undefined) {
+			window.clearTimeout(pendingDocumentSyncTimerRef.current);
+			pendingDocumentSyncTimerRef.current = undefined;
+		}
 		setDoc(cloneDoc(initialDoc));
 	}, [initialDoc]);
+
+	useEffect(() => {
+		setTitleDraft(doc.title);
+	}, [doc.title]);
 
 	// Whenever doc changes due to a local edit, serialize and push to the extension host.
 	useEffect(() => {
@@ -1045,8 +1080,28 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		}
 		isLocalEdit.current = false;
 		const markdown = serializeDoc(doc);
-		onDocumentChange(markdown);
+		if (pendingDocumentSyncTimerRef.current !== undefined) {
+			window.clearTimeout(pendingDocumentSyncTimerRef.current);
+		}
+
+		pendingDocumentSyncTimerRef.current = window.setTimeout(() => {
+			if (lastSyncedMarkdownRef.current === markdown) {
+				return;
+			}
+
+			onDocumentChange(markdown);
+			lastSyncedMarkdownRef.current = markdown;
+			pendingDocumentSyncTimerRef.current = undefined;
+		}, 180);
 	}, [doc, onDocumentChange, onCodeTourHunksChange]);
+
+	useEffect(() => {
+		return () => {
+			if (pendingDocumentSyncTimerRef.current !== undefined) {
+				window.clearTimeout(pendingDocumentSyncTimerRef.current);
+			}
+		};
+	}, []);
 
 	// Helper: apply a local edit (sets the flag before updating state).
 	const applyLocal = useCallback((updater: (prev: EditorDocument) => EditorDocument) => {
@@ -1056,14 +1111,32 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 
 	/* - Title editing ------------------------ */
 
-	const handleTitleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-		const value = e.target.value;
-		applyLocal(prev => ({ ...prev, title: value }));
-	}, [applyLocal]);
+	const commitTitle = useCallback(() => {
+		if (titleDraft === doc.title) {
+			return;
+		}
+
+		applyLocal(prev => ({ ...prev, title: titleDraft }));
+	}, [applyLocal, doc.title, titleDraft]);
+
+	const handleTitleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			commitTitle();
+			e.currentTarget.blur();
+			return;
+		}
+
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			setTitleDraft(doc.title);
+			e.currentTarget.blur();
+		}
+	}, [commitTitle, doc.title]);
 
 	/* - Group title editing ------------------- */
 
-	const handleGroupTitleChange = useCallback((id: string, title: string) => {
+	const handleGroupTitleCommit = useCallback((id: string, title: string) => {
 		applyLocal(prev => ({
 			...prev,
 			children: updateNodeInList(prev.children, id, n =>
@@ -1229,8 +1302,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			{isEditMode ? (
 				<input
 					className="tour-title-input"
-					value={doc.title}
-					onChange={handleTitleChange}
+					value={titleDraft}
+					onChange={e => setTitleDraft(e.target.value)}
+					onBlur={commitTitle}
+					onKeyDown={handleTitleKeyDown}
 					placeholder="Code Tour Title"
 				/>
 			) : (
@@ -1250,7 +1325,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 						onReorder={handleReorder}
 						onMoveToGroupEnd={handleMoveToGroupEnd}
 						onTextChange={handleTextChange}
-						onGroupTitleChange={handleGroupTitleChange}
+						onGroupTitleCommit={handleGroupTitleCommit}
 						onDropZoneDrop={handleDropZoneDrop}
 						onAddText={handleAddText}
 						onAddCode={handleAddCode}
