@@ -24,7 +24,7 @@ function Root() {
 	const [isChangesOpen, setIsChangesOpen] = useState(false);
 	const [changesData, setChangesData] = useState<any>(undefined);
 	const [activeNodeId, setActiveNodeId] = useState<string | undefined>(undefined);
-	const [insertHunkCommand, setInsertHunkCommand] = useState<{ ts: number, payload: HunkReference, mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string } | undefined>(undefined);
+	const [insertHunkCommand, setInsertHunkCommand] = useState<{ ts: number, payload: HunkReference[], mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string } | undefined>(undefined);
 	const [insertMultipleHunksCommand, setInsertMultipleHunksCommand] = useState<{ ts: number, payloads: HunkReference[] } | undefined>(undefined);
 
 	useEffect(() => {
@@ -74,10 +74,10 @@ function Root() {
 		});
 	}, [handler]);
 
-	const onInsertHunk = useCallback((hunk: any) => {
+	const onInsertHunk = useCallback((hunks: HunkReference[]) => {
 		handler?.postMessage({
 			command: 'codeTourEditor.insertHunk',
-			args: { hunk },
+			args: { hunk: hunks },
 		});
 	}, [handler]);
 
@@ -122,10 +122,10 @@ function Root() {
 		});
 	}, [handler]);
 
-	const onProvideGroupsForQuickPick = useCallback((groups: any[], hunk: any) => {
+	const onProvideGroupsForQuickPick = useCallback((groups: any[], hunks: HunkReference[]) => {
 		handler?.postMessage({
 			command: 'codeTourEditor.showGroupsQuickPick',
-			args: { groups, hunk }
+			args: { groups, hunk: hunks }
 		});
 	}, [handler]);
 
@@ -158,10 +158,10 @@ function Root() {
 		}
 	}, [doc, activeNodeId]);
 
-	const onHunkAdd = useCallback((hunk: any, mode: 'active' | 'quickpick') => {
+	const onHunkAdd = useCallback((hunks: HunkReference[], mode: 'active' | 'quickpick') => {
 		handler?.postMessage({
 			command: 'codeTourEditor.addHunk',
-			args: { hunk, mode }
+			args: { hunk: hunks, mode }
 		});
 	}, [handler]);
 

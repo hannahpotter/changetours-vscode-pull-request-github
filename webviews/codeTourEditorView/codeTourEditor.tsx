@@ -57,13 +57,13 @@ interface CodeTourEditorProps {
 	activePR?: { number: number; owner: string; repo: string };
 	isEditMode?: boolean;
 	scrollToNode?: { id: string; ts: number };
-	insertHunkCommand?: { ts: number, payload: HunkReference, mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string };
+	insertHunkCommand?: { ts: number, payload: HunkReference[], mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string };
 	insertMultipleHunksCommand?: { ts: number, payloads: HunkReference[] };
-	onProvideGroupsForQuickPick?: (groups: any[], hunk: HunkReference) => void;
+	onProvideGroupsForQuickPick?: (groups: any[], hunks: HunkReference[]) => void;
 	onActiveNodeChanged?: (id: string | undefined) => void;
 	onDocumentChange: (markdown: string) => void;
 	onCodeTourHunksChange?: (hunks: HunkReference[]) => void;
-	onInsertHunk: (hunk: HunkReference) => void;
+	onInsertHunk: (hunks: HunkReference[]) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	onCheckoutPR?: () => void;
 	onError?: (message: string) => void;
@@ -885,56 +885,79 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 
 		if (insertHunkCommand.mode === 'active' || insertHunkCommand.mode === 'requestGroupsForQuickPick') {
 			applyLocal(prev => {
-				const dropZoneId = localId();
-				const dzNode: EditorHunkNode = {
-					type: 'hunk',
-					id: dropZoneId,
-					hunk: {
-						file: insertHunkCommand.payload.file,
-						startLine: insertHunkCommand.payload.startLine,
-						endLine: insertHunkCommand.payload.endLine,
-						ref: insertHunkCommand.payload.ref,
-						patch: insertHunkCommand.payload.patch,
-						previousFile: insertHunkCommand.payload.previousFile
-					},
-				};
+					const payloads = insertHunkCommand.payload;
+				let newChildren = prev.children;
+				let lastInsertedId: string | undefined;
+				let currentActiveId = activeNodeId;
 
-				if (activeNodeId) {
-					const inserted = insertNodeRelative(prev.children, activeNodeId, dzNode, 'after');
-					if (inserted.inserted) {
-						setJustInsertedId(dzNode.id);
-						return { ...prev, children: inserted.nodes };
-					}
-				}
-
-				setJustInsertedId(dzNode.id);
-				return { ...prev, children: appendToList(prev.children, dzNode) };
-			});
-		} else if (insertHunkCommand.mode === 'quickpick') {
-			if (insertHunkCommand.targetId) {
-				applyLocal(prev => {
+				for (const payload of payloads) {
 					const dropZoneId = localId();
 					const dzNode: EditorHunkNode = {
 						type: 'hunk',
 						id: dropZoneId,
 						hunk: {
-							file: insertHunkCommand.payload.file,
-							startLine: insertHunkCommand.payload.startLine,
-							endLine: insertHunkCommand.payload.endLine,
-							ref: insertHunkCommand.payload.ref,
-							patch: insertHunkCommand.payload.patch,
-							previousFile: insertHunkCommand.payload.previousFile
+							file: payload.file,
+							startLine: payload.startLine,
+							endLine: payload.endLine,
+							ref: payload.ref,
+							patch: payload.patch,
+							previousFile: payload.previousFile
 						},
 					};
 
-					const inserted = appendNodeToGroupEnd(prev.children, insertHunkCommand.targetId!, dzNode);
-					if (inserted.inserted) {
-						setJustInsertedId(dzNode.id);
-						return { ...prev, children: inserted.nodes };
+					if (currentActiveId) {
+						const inserted = insertNodeRelative(newChildren, currentActiveId, dzNode, 'after');
+						if (inserted.inserted) {
+							newChildren = inserted.nodes;
+							currentActiveId = dropZoneId;
+							lastInsertedId = dropZoneId;
+						} else {
+							newChildren = appendToList(newChildren, dzNode);
+							lastInsertedId = dropZoneId;
+						}
+					} else {
+						newChildren = appendToList(newChildren, dzNode);
+						lastInsertedId = dropZoneId;
+					}
+				}
+
+				if (lastInsertedId) setJustInsertedId(lastInsertedId);
+				return { ...prev, children: newChildren };
+			});
+		} else if (insertHunkCommand.mode === 'quickpick') {
+			if (insertHunkCommand.targetId) {
+				applyLocal(prev => {
+						const payloads = insertHunkCommand.payload;
+					let newChildren = prev.children;
+					let lastInsertedId: string | undefined;
+
+					for (const payload of payloads) {
+						const dropZoneId = localId();
+						const dzNode: EditorHunkNode = {
+							type: 'hunk',
+							id: dropZoneId,
+							hunk: {
+								file: payload.file,
+								startLine: payload.startLine,
+								endLine: payload.endLine,
+								ref: payload.ref,
+								patch: payload.patch,
+								previousFile: payload.previousFile
+							},
+						};
+
+						const inserted = appendNodeToGroupEnd(newChildren, insertHunkCommand.targetId!, dzNode);
+						if (inserted.inserted) {
+							newChildren = inserted.nodes;
+							lastInsertedId = dropZoneId;
+						} else {
+							newChildren = appendToList(newChildren, dzNode);
+							lastInsertedId = dropZoneId;
+						}
 					}
 
-					setJustInsertedId(dzNode.id);
-					return { ...prev, children: appendToList(prev.children, dzNode) };
+					if (lastInsertedId) setJustInsertedId(lastInsertedId);
+					return { ...prev, children: newChildren };
 				});
 			} else if (onProvideGroupsForQuickPick) {
 				const groups: { id: string; title: string }[] = [];

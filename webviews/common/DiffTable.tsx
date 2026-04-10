@@ -14,9 +14,12 @@ interface DiffTableProps {
 	onHunkAddQuickPick?: (headerIdx: number) => void;
 	activeNodeContext?: string;
 	coveredHeaderIndices?: Set<number>;
+	selectedHeaderIndices?: Set<number>;
+	onHunkSelectToggle?: (headerIdx: number, selected: boolean) => void;
+	selectedHunksCount?: number;
 }
 
-export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices }: DiffTableProps) {
+export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices, selectedHeaderIndices, onHunkSelectToggle, selectedHunksCount }: DiffTableProps) {
 	let currentHeaderIdx = -1;
 	const [collapsedState, setCollapsedState] = useState<{ [key: number]: boolean }>({});
 
@@ -47,13 +50,22 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 							>
 								<td className="diff-line-num" colSpan={2}>
 									<span className="diff-hunk-actions">
-										<span className={`expand-icon icon-button ${isCollapsed ? 'closed' : ''}`} onClick={(e) => { e.stopPropagation(); toggleCollapse(i, isCovered); }}>
-											{chevronDownIcon}
-										</span>
+									<span className={`expand-icon icon-button ${isCollapsed ? 'closed' : ''}`} title={isCollapsed ? 'Expand hunk' : 'Collapse hunk'} onClick={(e) => { e.stopPropagation(); toggleCollapse(i, isCovered); }}>
+										{chevronDownIcon}
+									</span>
+									{onHunkSelectToggle && (<div className="checkbox-wrapper">
+										<input
+											type="checkbox"
+											title="Select hunk"
+												checked={!!selectedHeaderIndices?.has(i)}
+												onChange={(e) => onHunkSelectToggle?.(i, e.target.checked)}
+												onClick={(e) => e.stopPropagation()}
+											/>
+										</div>)}
 										{onHunkAddActive && (
 											<span
 												className="icon-button"
-												title={activeNodeContext ? `Insert after: ${activeNodeContext}` : 'Append to end of tour'}
+												title={selectedHunksCount && selectedHunksCount > 1 ? `Insert ${selectedHunksCount} selected hunks${activeNodeContext ? ` after: ${activeNodeContext}` : ''}` : (activeNodeContext ? `Insert after: ${activeNodeContext}` : 'Append to end of tour')}
 												onClick={(e) => { e.stopPropagation(); onHunkAddActive(i); }}
 											>
 												{addIcon}
@@ -62,7 +74,7 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 										{onHunkAddQuickPick && (
 											<span
 												className="icon-button"
-												title="Add Hunk to Section..."
+												title={selectedHunksCount && selectedHunksCount > 1 ? `Add ${selectedHunksCount} selected hunks to Section...` : 'Add Hunk to Section...'}
 												onClick={(e) => { e.stopPropagation(); onHunkAddQuickPick(i); }}
 											>
 												{listTree}

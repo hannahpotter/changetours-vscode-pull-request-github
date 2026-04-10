@@ -3,12 +3,12 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { HunkReference } from '../../src/github/codeTourMarkdown';
 import { ChangedFileInfo } from '../../src/github/views';
 import { DiffTable } from '../common/DiffTable';
 import { ParsedDiffLine, parsePatch } from '../common/diffUtils';
-import { chevronDownIcon } from '../components/icon';
+import { addIcon, chevronDownIcon, listTree } from '../components/icon';
 
 interface ChangedFilesOverviewProps {
 	title: string;
@@ -17,7 +17,7 @@ interface ChangedFilesOverviewProps {
 	repo: string;
 	baseRef: string;
 	files: ChangedFileInfo[];
-	onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void;
+	onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void;
 	activeNodeContext?: string;
 	codeTourHunks?: HunkReference[];
 	onAddAllMissing?: (hunks: HunkReference[]) => void;
@@ -79,7 +79,7 @@ function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: nu
 	return ranges;
 }
 
-function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet }: { patch: string; fileName: string; previousFile?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string, onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string> }) {
+function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet, selectedHunksSet, onHunkSelect, onClearHunksSelection }: { patch: string; fileName: string; previousFile?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onClearHunksSelection: () => void }) {
 	const lines = parsePatch(patch);
 	const rawLines = patch.split('\n');
 	const hunkRanges = computeHunkRanges(lines);
@@ -123,43 +123,83 @@ function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, ba
 		e.dataTransfer.effectAllowed = 'copy';
 	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, baseRef, prNumber, prOwner, prRepo]);
 
+	// Figure out which lines belong to covered & selected hunks so we can style/manage them
+	const coveredHeaderIndices = new Set<number>();
+	const selectedHeaderIndices = new Set<number>();
+	hunkRanges.forEach((range, headerIdx) => {
+		const key = `${fileName}:${range.startLine}:${range.endLine}`;
+		if (coveredHunksSet?.has(key)) {
+			coveredHeaderIndices.add(headerIdx);
+		}
+		if (selectedHunksSet.has(key)) {
+			selectedHeaderIndices.add(headerIdx);
+		}
+	});
+
 	const addHunkToEditor = useCallback((headerIdx: number, mode: 'active' | 'quickpick') => {
 		const range = hunkRanges.get(headerIdx);
 		if (!range) return;
 
-		const parsedHunkIdx = lines.slice(0, headerIdx + 1).filter(l => l.type === 'hunk-header').length - 1;
-		const rawStart = hunkRawIndices[parsedHunkIdx];
-		const rawEnd = parsedHunkIdx + 1 < hunkRawIndices.length
-			? hunkRawIndices[parsedHunkIdx + 1]
-			: rawLines.length;
-		const hunkPatch = rawLines.slice(rawStart, rawEnd).join('\n');
+		if (selectedHeaderIndices.has(headerIdx)) {
+			const payloads: any[] = [];
+			hunkRanges.forEach((r, idx) => {
+				if (selectedHeaderIndices.has(idx)) {
+					const parsedHunkIdx = lines.slice(0, idx + 1).filter(l => l.type === 'hunk-header').length - 1;
+					const rawStart = hunkRawIndices[parsedHunkIdx];
+					const rawEnd = parsedHunkIdx + 1 < hunkRawIndices.length
+						? hunkRawIndices[parsedHunkIdx + 1]
+						: rawLines.length;
+					const hunkPatch = rawLines.slice(rawStart, rawEnd).join('\n');
 
-		const payload = {
-			file: fileName,
-			startLine: range.startLine,
-			endLine: range.endLine,
-			ref: 'HEAD',
-			patch: hunkPatch,
-			previousFile,
-			isPR: true,
-			baseRef,
-			prNumber,
-			prOwner,
-			prRepo
-		};
+					payloads.push({
+						file: fileName,
+						startLine: r.startLine,
+						endLine: r.endLine,
+						ref: 'HEAD',
+						patch: hunkPatch,
+						previousFile,
+						isPR: true,
+						baseRef,
+						prNumber,
+						prOwner,
+						prRepo
+					});
+				}
+			});
+			onHunkAdd(payloads, mode);
+			onClearHunksSelection();
+		} else {
+			const parsedHunkIdx = lines.slice(0, headerIdx + 1).filter(l => l.type === 'hunk-header').length - 1;
+			const rawStart = hunkRawIndices[parsedHunkIdx];
+			const rawEnd = parsedHunkIdx + 1 < hunkRawIndices.length
+				? hunkRawIndices[parsedHunkIdx + 1]
+				: rawLines.length;
+			const hunkPatch = rawLines.slice(rawStart, rawEnd).join('\n');
 
-		onHunkAdd(payload, mode);
-	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, baseRef, prNumber, prOwner, prRepo, onHunkAdd]);
+			const payload = {
+				file: fileName,
+				startLine: range.startLine,
+				endLine: range.endLine,
+				ref: 'HEAD',
+				patch: hunkPatch,
+				previousFile,
+				isPR: true,
+				baseRef,
+				prNumber,
+				prOwner,
+				prRepo
+			};
 
-	// Figure out which lines belong to covered hunks so we can style them
-	const coveredHeaderIndices = new Set<number>();
-	if (coveredHunksSet) {
-		hunkRanges.forEach((range, headerIdx) => {
-			if (coveredHunksSet.has(`${fileName}:${range.startLine}:${range.endLine}`)) {
-				coveredHeaderIndices.add(headerIdx);
-			}
-		});
-	}
+			onHunkAdd([payload], mode);
+		}
+	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, baseRef, prNumber, prOwner, prRepo, onHunkAdd, selectedHeaderIndices, onClearHunksSelection]);
+
+	const handleHunkSelectToggle = useCallback((headerIdx: number, selected: boolean) => {
+		const range = hunkRanges.get(headerIdx);
+		if (range) {
+			onHunkSelect(`${fileName}:${range.startLine}:${range.endLine}`, selected);
+		}
+	}, [hunkRanges, fileName, onHunkSelect]);
 
 	return (
 		<DiffTable
@@ -169,19 +209,63 @@ function DiffView({ patch, fileName, previousFile, prNumber, prOwner, prRepo, ba
 			onHunkAddQuickPick={(headerIdx: number) => addHunkToEditor(headerIdx, 'quickpick')}
 			activeNodeContext={activeNodeContext}
 			coveredHeaderIndices={coveredHeaderIndices}
+			selectedHeaderIndices={selectedHeaderIndices}
+			onHunkSelectToggle={handleHunkSelectToggle}
+			selectedHunksCount={selectedHeaderIndices.size}
 		/>
 	);
 }
 
-function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string, onHunkAdd: (hunk: any, mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string> }) {
-	const [expanded, setExpanded] = useState(true);
+function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, activeNodeContext, coveredHunksSet, fileMissingHunks, selectedHunksSet, onHunkSelect, onFileSelect, fileAllHunks }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, fileMissingHunks: any[], selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onFileSelect: (hunks: any[], s: boolean) => void, fileAllHunks: any[] }) {
+	const allCovered = fileMissingHunks.length === 0;
+	const [expanded, setExpanded] = useState(!allCovered);
+
+	useEffect(() => {
+		if (allCovered) {
+			setExpanded(false);
+		}
+	}, [allCovered]);
+
 	const { text, className } = statusLabel(file.status);
 	const { dir, base } = splitPath(file.fileName);
 
+	const selectedFileHunks = useMemo(() => {
+		return fileAllHunks.filter((h: any) => selectedHunksSet.has(`${h.file}:${h.startLine}:${h.endLine}`));
+	}, [fileAllHunks, selectedHunksSet]);
+
+	const isAllSelected = fileAllHunks.length > 0 && selectedFileHunks.length === fileAllHunks.length;
+	const isIndeterminate = selectedFileHunks.length > 0 && !isAllSelected;
+
 	return (
 		<div className="file-entry">
-			<div className="file-header" onClick={() => setExpanded(!expanded)}>
-				<span className={`expand-icon icon-button${expanded ? '' : 'closed'}`}>{chevronDownIcon}</span>
+			<div className={`file-header ${allCovered ? 'file-covered' : ''}`} onClick={() => setExpanded(!expanded)}>
+				<div className="file-actions">
+					<span className={`expand-icon icon-button ${expanded ? '' : 'closed'}`} title={expanded ? 'Collapse file' : 'Expand file'}>{chevronDownIcon}</span>
+					<div className="checkbox-wrapper">
+						<input
+							type="checkbox"
+							title="Select file hunks"
+							checked={isAllSelected}
+							ref={r => { if (r) r.indeterminate = isIndeterminate; }}
+							onChange={(e) => onFileSelect(fileAllHunks, e.target.checked)}
+							onClick={(e) => e.stopPropagation()}
+						/>
+					</div>
+					<span
+						className="icon-button"
+						title={`Insert ${selectedFileHunks.length} selected hunks${activeNodeContext ? ` after: ${activeNodeContext}` : ''}`}
+						onClick={(e) => { e.stopPropagation(); onHunkAdd(selectedFileHunks, 'active'); onFileSelect(fileMissingHunks, false); }}
+					>
+						{addIcon}
+					</span>
+					<span
+						className="icon-button"
+						title={`Add ${selectedFileHunks.length} selected hunks to Section...`}
+						onClick={(e) => { e.stopPropagation(); onHunkAdd(selectedFileHunks, 'quickpick'); onFileSelect(fileMissingHunks, false); }}
+					>
+						{listTree}
+					</span>
+				</div>
 				<span className={`file-status ${className}`}>{text}</span>
 				<span className="file-name">
 					<span className="file-basename">{base}</span>
@@ -211,6 +295,9 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, active
 						onHunkAdd={onHunkAdd}
 						activeNodeContext={activeNodeContext}
 						coveredHunksSet={coveredHunksSet}
+						selectedHunksSet={selectedHunksSet}
+						onHunkSelect={onHunkSelect}
+						onClearHunksSelection={() => onFileSelect(fileMissingHunks, false)}
 					/>
 				</div>
 			)}
@@ -224,6 +311,28 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, onHunkAdd, active
 export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, files, onHunkAdd, activeNodeContext, codeTourHunks = [], onAddAllMissing }: ChangedFilesOverviewProps) => {
 	const totalAdditions = files.reduce((sum, f) => sum + (f.additions ?? 0), 0);
 	const totalDeletions = files.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
+	const [selectedHunksSet, setSelectedHunksSet] = useState<Set<string>>(new Set());
+
+	const handleHunkSelect = useCallback((hunkKey: string, selected: boolean) => {
+		setSelectedHunksSet(prev => {
+			const next = new Set(prev);
+			if (selected) next.add(hunkKey);
+			else next.delete(hunkKey);
+			return next;
+		});
+	}, []);
+
+	const handleFileSelect = useCallback((fileMissingHunks: any[], selected: boolean) => {
+		setSelectedHunksSet(prev => {
+			const next = new Set(prev);
+			for (const h of fileMissingHunks) {
+				const key = `${h.file}:${h.startLine}:${h.endLine}`;
+				if (selected) next.add(key);
+				else next.delete(key);
+			}
+			return next;
+		});
+	}, []);
 
 	const coveredHunksSet = useMemo(() => {
 		const set = new Set<string>();
@@ -233,15 +342,17 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 		return set;
 	}, [codeTourHunks]);
 
-	const { totalHunks, missingHunks } = useMemo(() => {
+	const { totalHunks, missingHunks, fileAllHunks } = useMemo(() => {
 		let total = 0;
 		const missing: any[] = [];
+		const allHunksMap = new Map<string, any[]>();
 		for (const file of files) {
 			if (!file.patch) continue;
 			const lines = parsePatch(file.patch);
 			const rawLines = file.patch.split('\n');
 			const ranges = computeHunkRanges(lines);
 
+			const fileHunks: any[] = [];
 			const hunkRawIndices: number[] = [];
 			for (let i = 0; i < rawLines.length; i++) {
 				if (rawLines[i].startsWith('@@')) {
@@ -252,35 +363,49 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 			for (const [headerIdx, range] of ranges.entries()) {
 				total++;
 				const hunkKey = `${file.fileName}:${range.startLine}:${range.endLine}`;
-				if (!coveredHunksSet.has(hunkKey)) {
-					const parsedHunkIdx = lines.slice(0, headerIdx + 1).filter(l => l.type === 'hunk-header').length - 1;
-					const rawStart = hunkRawIndices[parsedHunkIdx];
-					const rawEnd = parsedHunkIdx + 1 < hunkRawIndices.length
-						? hunkRawIndices[parsedHunkIdx + 1]
-						: rawLines.length;
-					const hunkPatch = rawLines.slice(rawStart, rawEnd).join('\n');
 
-					missing.push({
-						file: file.fileName,
-						startLine: range.startLine,
-						endLine: range.endLine,
-						ref: 'HEAD',
-						patch: hunkPatch,
-						previousFile: file.previousFileName,
-						isPR: true,
-						baseRef,
-						prNumber: number,
-						prOwner: owner,
-						prRepo: repo
-					});
+				const parsedHunkIdx = lines.slice(0, headerIdx + 1).filter(l => l.type === 'hunk-header').length - 1;
+				const rawStart = hunkRawIndices[parsedHunkIdx];
+				const rawEnd = parsedHunkIdx + 1 < hunkRawIndices.length
+					? hunkRawIndices[parsedHunkIdx + 1]
+					: rawLines.length;
+				const hunkPatch = rawLines.slice(rawStart, rawEnd).join('\n');
+
+				const hunkObj = {
+					file: file.fileName,
+					startLine: range.startLine,
+					endLine: range.endLine,
+					ref: 'HEAD',
+					patch: hunkPatch,
+					previousFile: file.previousFileName,
+					isPR: true,
+					baseRef,
+					prNumber: number,
+					prOwner: owner,
+					prRepo: repo
+				};
+
+				fileHunks.push(hunkObj);
+
+				if (!coveredHunksSet.has(hunkKey)) {
+					missing.push(hunkObj);
 				}
 			}
+			allHunksMap.set(file.fileName, fileHunks);
 		}
-		return { totalHunks: total, missingHunks: missing };
+		return { totalHunks: total, missingHunks: missing, fileAllHunks: allHunksMap };
 	}, [files, coveredHunksSet, baseRef, number, owner, repo]);
 
 	const coveredHunks = totalHunks - missingHunks.length;
 	const progressPercent = totalHunks === 0 ? 0 : Math.round((coveredHunks / totalHunks) * 100);
+
+	const allSelectedHunks = useMemo(() => {
+		const allSelected: any[] = [];
+		fileAllHunks.forEach((hunks) => {
+			allSelected.push(...hunks.filter(h => selectedHunksSet.has(`${h.file}:${h.startLine}:${h.endLine}`)));
+		});
+		return allSelected;
+	}, [fileAllHunks, selectedHunksSet]);
 
 	return (
 		<div className="code-tour-changes">
@@ -294,9 +419,21 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 				<div className="exhaustiveness-check">
 					<div className="exhaustiveness-header">
 						<span>Covered Changes: {coveredHunks} / {totalHunks}</span>
-						{missingHunks.length > 0 && onAddAllMissing && (
-							<button onClick={() => onAddAllMissing(missingHunks)}>Add All Missing</button>
-						)}
+						<div className="global-actions">
+							<button
+								disabled={allSelectedHunks.length === 0}
+								onClick={() => {
+									if (allSelectedHunks.length > 0) {
+										onHunkAdd(allSelectedHunks, 'active');
+										setSelectedHunksSet(new Set());
+									}
+								}}>
+								{allSelectedHunks.length > 0 ? `Add ${allSelectedHunks.length} Selected` : 'Add Selected'}
+							</button>
+							{missingHunks.length > 0 && onAddAllMissing && (
+								<button onClick={() => onAddAllMissing(missingHunks)}>Add All Missing</button>
+							)}
+						</div>
 					</div>
 					<div className="progress-bar-container">
 						<div className="progress-bar" style={{ width: `${progressPercent}%` }} />
@@ -304,19 +441,27 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 				</div>
 			)}
 			<div className="changed-files-list">
-				{files.map(file => (
-					<FileEntry
-						key={file.fileName}
-						file={file}
-						prNumber={number}
-						prOwner={owner}
-						prRepo={repo}
-						baseRef={baseRef}
-						onHunkAdd={onHunkAdd}
-						activeNodeContext={activeNodeContext}
-						coveredHunksSet={coveredHunksSet}
-					/>
-				))}
+				{files.map(file => {
+					const fileMissingHunks = missingHunks.filter(h => h.file === file.fileName);
+					return (
+						<FileEntry
+							key={file.fileName}
+							file={file}
+							prNumber={number}
+							prOwner={owner}
+							prRepo={repo}
+							baseRef={baseRef}
+							onHunkAdd={onHunkAdd}
+							activeNodeContext={activeNodeContext}
+							coveredHunksSet={coveredHunksSet}
+							fileMissingHunks={fileMissingHunks}
+							fileAllHunks={fileAllHunks.get(file.fileName) || []}
+							selectedHunksSet={selectedHunksSet}
+							onHunkSelect={handleHunkSelect}
+							onFileSelect={handleFileSelect}
+						/>
+					);
+				})}
 			</div>
 		</div>
 	);

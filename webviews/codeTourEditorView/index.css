@@ -449,6 +449,9 @@ h2 {
 	background: var(--vscode-editor-background);
 	border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
 	border-radius: 4px;
+	position: sticky;
+	top: 0;
+	z-index: 10;
 }
 
 .exhaustiveness-header {
@@ -458,6 +461,11 @@ h2 {
 	margin-bottom: 8px;
 	font-weight: 600;
 	color: var(--vscode-foreground);
+}
+
+.global-actions {
+	display: flex;
+	gap: 6px;
 }
 
 .exhaustiveness-header button {
@@ -512,8 +520,8 @@ h2 {
 .file-header {
 	display: flex;
 	align-items: center;
-	padding: 6px 10px;
-	gap: 8px;
+	padding: 6px 10px 6px 1px;
+	gap: 4px;
 	cursor: pointer;
 	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 	user-select: none;
@@ -530,6 +538,18 @@ h2 {
 	border-radius: 3px;
 	text-transform: uppercase;
 	flex-shrink: 0;
+}
+
+.file-actions {
+	display: flex;
+	align-items: center;
+	width: 86px;
+}
+
+.file-actions .icon-button {
+	display: block;
+	height: 18px;
+	width: 18px;
 }
 
 .file-status.added {
@@ -582,6 +602,11 @@ h2 {
 .file-diff {
 	border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
 	overflow-x: auto;
+}
+
+.file-covered {
+	opacity: 0.5;
+	filter: grayscale(100%);
 }
 
 

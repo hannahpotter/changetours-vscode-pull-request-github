@@ -69,7 +69,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		}
 	}
 
-	public static async addHunkToEditor(hunk: HunkReference, mode: 'active' | 'quickpick') {
+	public static async addHunkToEditor(hunks: HunkReference[], mode: 'active' | 'quickpick') {
 		const document = CodeTourEditorProvider.activeDocumentTracker;
 		if (!document) {
 			vscode.window.showErrorMessage('No active Code Tour editor found. Please focus a Code Tour first.');
@@ -84,12 +84,12 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		}
 
 		if (mode === 'quickpick') {
-			panel.webview.postMessage({ res: { command: 'codeTourEditor.requestGroupsForQuickPick', hunk } });
+			panel.webview.postMessage({ res: { command: 'codeTourEditor.requestGroupsForQuickPick', hunk: hunks } });
 		} else {
 			panel.webview.postMessage({
 				res: {
 					command: 'codeTourEditor.insertHunkAt',
-					hunk,
+					hunk: hunks,
 					mode
 				}
 			});
@@ -283,13 +283,13 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			}
 
 			case 'codeTourEditor.addHunk': {
-				const { hunk, mode } = message.args as { hunk: HunkReference, mode: 'active' | 'quickpick' };
+				const { hunk, mode } = message.args as { hunk: HunkReference[], mode: 'active' | 'quickpick' };
 				CodeTourEditorProvider.addHunkToEditor(hunk, mode);
 				return;
 			}
 
 			case 'codeTourEditor.showGroupsQuickPick': {
-				const { groups, hunk } = message.args as { groups: { id: string, title: string, level: number }[], hunk: HunkReference };
+				const { groups, hunk } = message.args as { groups: { id: string, title: string, level: number }[], hunk: HunkReference[] };
 				const options: ({ label: string, id: string })[] = [
 					{ label: '$(root-folder) Document End', id: 'root' },
 					...groups.map(g => ({
