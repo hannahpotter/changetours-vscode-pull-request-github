@@ -30,7 +30,9 @@ module.exports.unicodeFilter = [
 	'!**/LICENSE',
 	'!**/CHANGELOG.md',
 	'!*.yml',
-	'!resources/emojis.json'
+	'!resources/emojis.json',
+	'!.readme/actions.png',
+	'!.readme/open_files.png',
 ];
 
 module.exports.indentationFilter = [
