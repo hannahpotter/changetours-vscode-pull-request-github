@@ -14,6 +14,7 @@ interface DiffTableProps {
 	onHunkAddQuickPick?: (headerIdx: number) => void;
 	activeNodeContext?: string;
 	coveredHeaderIndices?: Set<number>;
+	hideCovered?: boolean;
 	selectedHeaderIndices?: Set<number>;
 	searchActive?: boolean;
 	searchMatchedHeaderIndices?: Set<number>;
@@ -22,7 +23,7 @@ interface DiffTableProps {
 	selectedHunksCount?: number;
 }
 
-export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices, selectedHeaderIndices, searchActive, searchMatchedHeaderIndices, searchMatchedLineIndices, onHunkSelectToggle, selectedHunksCount }: DiffTableProps) {
+export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices, hideCovered, selectedHeaderIndices, searchActive, searchMatchedHeaderIndices, searchMatchedLineIndices, onHunkSelectToggle, selectedHunksCount }: DiffTableProps) {
 	let currentHeaderIdx = -1;
 	const [collapsedState, setCollapsedState] = useState<{ [key: number]: boolean }>({});
 
@@ -41,6 +42,9 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 						currentHeaderIdx = i;
 						const draggable = !!onHunkHeaderDragStart;
 						const isCovered = !!coveredHeaderIndices?.has(currentHeaderIdx);
+						if (hideCovered && isCovered) {
+							return null;
+						}
 						const isSearchMatch = !!searchActive && !!searchMatchedHeaderIndices?.has(currentHeaderIdx);
 						const isCollapsed = isSearchMatch ? false : (collapsedState[currentHeaderIdx] !== undefined ? collapsedState[currentHeaderIdx] : isCovered);
 
@@ -94,6 +98,9 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 					}
 
 					const isCovered = !!coveredHeaderIndices?.has(currentHeaderIdx);
+					if (hideCovered && isCovered) {
+						return null;
+					}
 					const isSearchMatch = !!searchActive && !!searchMatchedLineIndices?.has(i);
 					const isCollapsed = searchActive && !!searchMatchedHeaderIndices?.has(currentHeaderIdx)
 						? false

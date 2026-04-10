@@ -443,22 +443,39 @@ h2 {
 	color: var(--vscode-gitDecoration-deletedResourceForeground, #d73a49);
 }
 
+.changes-sticky-stack {
+	position: sticky;
+	top: 0;
+	z-index: 11;
+	background: var(--vscode-editor-background);
+	padding-top: 6px;
+	padding-bottom: 2px;
+	margin-bottom: 12px;
+}
+
 .exhaustiveness-check {
-	margin-bottom: 24px;
+	margin-bottom: 8px;
 	padding: 12px;
 	background: var(--vscode-editor-background);
 	border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border));
 	border-radius: 4px;
-	position: sticky;
-	top: 0;
-	z-index: 10;
 }
 
 .changes-search-row {
 	display: flex;
-	gap: 8px;
+	gap: 12px;
 	align-items: center;
-	margin: 0 0 12px;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	margin: 0;
+}
+
+.changes-search-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1;
+	min-width: 320px;
 }
 
 .changes-search-input {
@@ -490,6 +507,20 @@ h2 {
 
 .changes-search-clear:hover {
 	background: var(--vscode-button-hoverBackground);
+}
+
+.changes-toggle-covered {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	color: var(--vscode-foreground);
+	user-select: none;
+	white-space: nowrap;
+}
+
+.changes-toggle-covered input {
+	margin: 0;
 }
 
 .exhaustiveness-header {
