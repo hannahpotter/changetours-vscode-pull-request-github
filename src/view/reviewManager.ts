@@ -85,6 +85,7 @@ export class ReviewManager extends Disposable {
 	 * Used to show/hide the status bar item based on repository selection.
 	 */
 	private _isRepositorySelected!: boolean;
+	private _openChangesToTheSideForPrNumber: number | undefined;
 
 	public get switchingToReviewMode(): boolean {
 		return this._switchingToReviewMode;
@@ -702,12 +703,22 @@ export class ReviewManager extends Disposable {
 				return this.openDescription();
 			} else if (focusedMode === 'multiDiff') {
 				if (pr.fileChanges.size < 400) {
-					return PullRequestModel.openChanges(this._folderRepoManager, pr);
+					const openToTheSide = this.justSwitchedToReviewMode && this.consumeOpenChangesToTheSide(pr);
+					return PullRequestModel.openChanges(this._folderRepoManager, pr, openToTheSide);
 				} else {
 					return this._openFirstDiff();
 				}
 			}
 		}
+	}
+
+	private consumeOpenChangesToTheSide(pr: PullRequestModel): boolean {
+		if (this._openChangesToTheSideForPrNumber === pr.number) {
+			this._openChangesToTheSideForPrNumber = undefined;
+			return true;
+		}
+
+		return false;
 	}
 
 	private async _closeOutdatedMultiDiffEditors(pullRequest: PullRequestModel): Promise<void> {
@@ -1147,13 +1158,14 @@ export class ReviewManager extends Disposable {
 		}
 	}
 
-	public async switch(pr: PullRequestModel): Promise<void> {
+	public async switch(pr: PullRequestModel, options?: { openChangesToTheSide?: boolean }): Promise<void> {
 		Logger.appendLine(`Switch to Pull Request #${pr.number} - start`, this.id);
 		this.statusBarItem.text = vscode.l10n.t('{0} Switching to Review Mode', '$(sync~spin)');
 		this.statusBarItem.command = undefined;
 		this.showStatusBarIfSelected();
 		this.switchingToReviewMode = true;
 		this._switchedToPullRequest = pr;
+		this._openChangesToTheSideForPrNumber = options?.openChangesToTheSide ? pr.number : undefined;
 
 		try {
 			await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification }, async (progress) => {

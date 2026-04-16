@@ -1673,7 +1673,9 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 		pullRequestModel: PullRequestModel,
 		change: SlimFileChange | InMemFileChange,
 		diffTitle: string,
-		line?: number
+		line?: number,
+		viewColumn?: vscode.ViewColumn,
+		preview?: boolean,
 	): Promise<void> {
 		let headUri, baseUri: vscode.Uri;
 		if (!pullRequestModel.equals(folderManager.activePullRequest)) {
@@ -1732,7 +1734,11 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 			baseUri,
 			headUri,
 			`${diffTitle} (Pull Request)`,
-			line ? { selection: { start: { line, character: 0 }, end: { line, character: 0 } } } : {},
+			{
+				...(line && { selection: { start: { line, character: 0 }, end: { line, character: 0 } } }),
+				viewColumn,
+				preview
+			},
 		);
 	}
 

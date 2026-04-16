@@ -23,6 +23,10 @@ import { PullRequestModel } from '../github/pullRequestModel';
 import { RepositoriesManager } from '../github/repositoriesManager';
 import { NotificationsManager } from '../notifications/notificationsManager';
 
+type CheckoutPresentationOptions = {
+	openChangesToTheSide?: boolean;
+};
+
 export class ReviewsManager extends Disposable {
 	public static ID = 'Reviews';
 
@@ -108,7 +112,7 @@ export class ReviewsManager extends Disposable {
 		}
 	}
 
-	async switchToPr(folderManager: FolderRepositoryManager, pullRequestModel: PullRequestModel, repository: Repository | undefined, isFromDescription: boolean) {
+	async switchToPr(folderManager: FolderRepositoryManager, pullRequestModel: PullRequestModel, repository: Repository | undefined, isFromDescription: boolean, options?: CheckoutPresentationOptions) {
 		// If we don't have a repository from the node, use the one from the folder manager
 		const repositoryToCheck = repository || folderManager.repository;
 
@@ -135,7 +139,7 @@ export class ReviewsManager extends Disposable {
 					this._reviewManagers,
 					pullRequestModel.githubRepository,
 					repository
-				)?.switch(pullRequestModel);
+				)?.switch(pullRequestModel, options);
 			});
 	};
 }

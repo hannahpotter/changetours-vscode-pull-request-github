@@ -165,7 +165,7 @@ export function registerCommands(
 					const changeModel = changes.find(c => c.fileName === hunk.file);
 
 					if (changeModel) {
-						await PullRequestModel.openDiff(folderManager, activePR, changeModel, hunk.file, hunk.startLine);
+						await PullRequestModel.openDiff(folderManager, activePR, changeModel, hunk.file, hunk.startLine, vscode.ViewColumn.Beside, true);
 						return;
 					}
 				}
@@ -175,7 +175,14 @@ export function registerCommands(
 				const leftUri = vscode.Uri.file(pathLib.resolve(folderManager.repository.rootUri.fsPath, hunk.previousFile || hunk.file));
 				const rightUri = vscode.Uri.file(pathLib.resolve(folderManager.repository.rootUri.fsPath, hunk.file));
 
-				const options = { selection: { start: { line: hunk.startLine, character: 0 }, end: { line: hunk.endLine, character: 0 } } };
+				const options = {
+					selection: {
+						start: { line: hunk.startLine, character: 0 },
+						end: { line: hunk.endLine, character: 0 }
+					},
+					viewColumn: vscode.ViewColumn.Beside,
+					preview: true
+				};
 				await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, `${hunk.file} (Tour Diff)`, options);
 			}
 		)
@@ -496,7 +503,7 @@ export function registerCommands(
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pr.pick', async (pr: PRNode | RepositoryChangesNode | PullRequestModel) => {
+		vscode.commands.registerCommand('pr.pick', async (pr: PRNode | RepositoryChangesNode | PullRequestModel, options?: { openChangesToTheSide?: boolean }) => {
 			if (pr === undefined) {
 				// This is unexpected, but has happened a few times.
 				Logger.error('Unexpectedly received undefined when picking a PR.', logId);
@@ -520,7 +527,7 @@ export function registerCommands(
 			}
 
 			const fromDescriptionPage = pr instanceof PullRequestModel;
-			return reviewsManager.switchToPr(folderManager, pullRequestModel, repository, fromDescriptionPage);
+			return reviewsManager.switchToPr(folderManager, pullRequestModel, repository, fromDescriptionPage, options);
 
 		}));
 
@@ -810,7 +817,7 @@ export function registerCommands(
 			});
 
 			if (uris && uris.length > 0) {
-				await vscode.commands.executeCommand('vscode.open', uris[0]);
+				await vscode.commands.executeCommand('vscode.open', uris[0], { preview: false });
 			}
 		}),
 	);
@@ -839,7 +846,7 @@ export function registerCommands(
 			if (uri) {
 				const content = `---\nisPR: true\nprNumber: ${resolved.pr.number}\nprOwner: ${resolved.pr.remote.owner}\nprRepo: ${resolved.pr.remote.repositoryName}\nbaseRef: ${resolved.pr.base.ref}\n---\n\n# New Code Tour for PR #${resolved.pr.number}\n\n`;
 				await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
-				await vscode.commands.executeCommand('vscode.open', uri);
+				await vscode.commands.executeCommand('vscode.open', uri, { preview: false });
 			}
 		}),
 	);
@@ -2054,7 +2061,7 @@ ${contents}
 
 			if (targetPR) {
 				// Use pr.pick to precisely checkout the PullRequestModel
-				return vscode.commands.executeCommand('pr.pick', targetPR);
+				return vscode.commands.executeCommand('pr.pick', targetPR, { openChangesToTheSide: true });
 			}
 
 			return vscode.window.showErrorMessage(vscode.l10n.t('Unable to resolve pull request for Code Tour checkout.'));
