@@ -224,6 +224,7 @@
 
 .tour-text-wrapper {
 	position: relative;
+	display: flex;
 }
 
 .tour-text-wrapper .tour-text-remove {
@@ -334,6 +335,11 @@
 	gap: 8px;
 }
 
+.tour-hunk-actions button {
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	color: var(--vscode-activityBar-background);
+}
+
 
 .tour-hunk-file {
 	font-weight: 600;
@@ -356,6 +362,73 @@
 	font-size: 13px;
 	font-style: italic;
 	text-align: center;
+}
+
+/* - Hunk highlight mode -------------------- */
+
+/* Base icon-button styles (size, transparent bg, hover) come from the shared
+ * `.tour-action-btn.icon-button` block below; this only adds the "active"
+ * toggled state and removes the default focus outline. */
+
+.tour-hunk-highlight-toggle:focus,
+.tour-hunk-highlight-toggle:focus-visible {
+	outline: none;
+}
+
+/* The active toggle keeps its grey even when focused. The :focus and :hover
+ * selectors bump specificity above the global `button:focus:enabled` rule
+ * (specificity 0,2,1) so the active state isn't recolored after a click. */
+.tour-hunk-highlight-toggle.active,
+.tour-hunk-highlight-toggle.active:hover,
+.tour-hunk-highlight-toggle.active:focus {
+	background-color: var(--vscode-toolbar-hoverBackground);
+	outline: none;
+}
+
+.tour-hunk-highlight-mode .diff-table tbody tr.diff-line {
+	cursor: crosshair;
+	user-select: none;
+}
+
+.tour-hunk-highlight-mode .diff-table {
+	user-select: none;
+}
+
+.diff-line-highlighted {
+	background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.25));
+	box-shadow: inset 2px 0 0 var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+}
+
+.diff-line-highlighted .diff-line-num {
+	position: relative;
+}
+
+.diff-highlight-remove {
+	position: absolute;
+	top: 50%;
+	right: 2px;
+	transform: translateY(-50%);
+	width: 16px;
+	height: 16px;
+	padding: 0;
+	border: none;
+	border-radius: 3px;
+	background: transparent;
+	color: var(--vscode-button-foreground);
+	font-size: 14px;
+	line-height: 1;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.diff-line-highlighted:hover .diff-highlight-remove {
+	opacity: 0.8;
+}
+
+.diff-highlight-remove:hover {
+	opacity: 1;
+	background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
 }
 
 /* - PR Warning Banner ---------------------- */
@@ -455,6 +528,7 @@
 
 .drop-zone {
 	display: flex;
+	flex-grow: 1;
 	align-items: center;
 	justify-content: center;
 	gap: 8px;
@@ -507,6 +581,64 @@
 	line-height: 1;
 	border-radius: 4px;
 	flex-shrink: 0;
+}
+
+/* - Icon-button overrides ----------------------- *
+ * When tour-add-btn / tour-remove-btn / tour-action-btn are combined with
+ * .icon-button (content swapped from text to a codicon), they should render
+ * like the .tour-node-drag-handle gripper: transparent square, 16x16 icon,
+ * toolbar hover background. */
+
+.tour-add-btn.icon-button,
+.tour-remove-btn.icon-button,
+.tour-action-btn.icon-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--vscode-foreground);
+	font-size: inherit;
+	line-height: 0;
+	cursor: pointer;
+}
+
+.tour-add-btn.icon-button:hover:not(:disabled),
+.tour-remove-btn.icon-button:hover:not(:disabled),
+.tour-action-btn.icon-button:hover:not(:disabled) {
+	background: var(--vscode-toolbar-hoverBackground);
+}
+
+/* Defeat the global `button:focus:enabled { background-color: var(--vscode-button-hoverBackground) }`
+ * rule in common.css so these icon buttons don't go blue after a click. The
+ * highlight toggle's `.active` state is excluded so its grey indicator persists. */
+.tour-add-btn.icon-button:focus,
+.tour-add-btn.icon-button:focus-visible,
+.tour-remove-btn.icon-button:focus,
+.tour-remove-btn.icon-button:focus-visible,
+.tour-action-btn.icon-button:focus:not(.active),
+.tour-action-btn.icon-button:focus-visible:not(.active) {
+	background: transparent;
+	outline: none;
+}
+
+.tour-add-btn.icon-button:disabled,
+.tour-action-btn.icon-button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.tour-add-btn.icon-button .icon,
+.tour-remove-btn.icon-button .icon,
+.tour-action-btn.icon-button .icon {
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	line-height: 0;
 }
 
 .loading-indicator {

@@ -5,11 +5,11 @@
 
 import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CodeTourDocument, HunkReference, TourTextNode } from '../../src/github/codeTourMarkdown';
+import { serializeHighlightAttribute, type CodeTourDocument, type HighlightRange, type HunkReference, type TourTextNode } from '../../src/github/codeTourMarkdown';
 import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
 import { DiffTable } from '../common/DiffTable';
-import { parsePatch } from '../common/diffUtils';
-import { addIcon, chevronDownIcon, gripperIcon } from '../components/icon';
+import  { parsePatch, type ParsedDiffLine } from '../common/diffUtils';
+import { addIcon, chevronDownIcon, diffIcon, diffSingleIcon, editIcon, gripperIcon, newCollectionIcon, symbolStringIcon, trashIcon } from '../components/icon';
 
 type InsertKind = 'text' | 'code' | 'group';
 
@@ -163,6 +163,8 @@ function serializeDoc(doc: EditorDocument): string {
 					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
 					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
 					hunkHeader += ` level=${currentLevel}`;
+					const highlightAttr = serializeHighlightAttribute(node.hunk.highlights);
+					if (highlightAttr) hunkHeader += ` highlights=${highlightAttr}`;
 					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
@@ -377,11 +379,11 @@ function DropZoneBlock({
 				<span>Drop a hunk here</span>
 			</div>
 			<button
-				className="tour-remove-btn tour-text-remove"
+				className="tour-remove-btn tour-text-remove icon-button"
 				title="Remove drop zone"
 				onClick={() => onRemove(node.id)}
 			>
-				&times;
+				{trashIcon}
 			</button>
 		</div>
 	);
@@ -389,7 +391,74 @@ function DropZoneBlock({
 
 /* - Hunk display component ---------------------- */
 
-function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { node: EditorHunkNode; doc: EditorDocument; onRemove: (id: string) => void; onOpenDiff?: (hunk: HunkReference) => void; activePR?: { number: number; owner: string; repo: string }; isEditMode: boolean }) {
+function indicesFromHighlights(lines: ParsedDiffLine[], highlights: HighlightRange[] | undefined): Set<number> {
+	const set = new Set<number>();
+	if (!highlights || highlights.length === 0) {
+		return set;
+	}
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (line.type === 'hunk-header') {
+			continue;
+		}
+		for (const r of highlights) {
+			if (r.side === 'new' && line.newLine !== undefined && line.newLine >= r.start && line.newLine <= r.end) {
+				set.add(i);
+				break;
+			}
+			if (r.side === 'old' && line.oldLine !== undefined && line.oldLine >= r.start && line.oldLine <= r.end) {
+				set.add(i);
+				break;
+			}
+		}
+	}
+	return set;
+}
+
+function rangesFromDrag(lines: ParsedDiffLine[], startIdx: number, endIdx: number): HighlightRange[] {
+	const lo = Math.min(startIdx, endIdx);
+	const hi = Math.max(startIdx, endIdx);
+	const newLines: number[] = [];
+	const oldLines: number[] = [];
+	for (let i = lo; i <= hi; i++) {
+		const line = lines[i];
+		if (!line || line.type === 'hunk-header') {
+			continue;
+		}
+		if (line.newLine !== undefined) {
+			newLines.push(line.newLine);
+		}
+		if (line.oldLine !== undefined) {
+			oldLines.push(line.oldLine);
+		}
+	}
+	const result: HighlightRange[] = [];
+	if (newLines.length > 0) {
+		result.push({ side: 'new', start: Math.min(...newLines), end: Math.max(...newLines) });
+	}
+	if (oldLines.length > 0) {
+		result.push({ side: 'old', start: Math.min(...oldLines), end: Math.max(...oldLines) });
+	}
+	return result;
+}
+
+function HunkBlock({
+	node,
+	doc,
+	onRemove,
+	onOpenDiff,
+	onHighlightsChange,
+	activePR,
+	isEditMode,
+}: {
+	node: EditorHunkNode;
+	doc: EditorDocument;
+	onRemove: (id: string) => void;
+	onOpenDiff?: (hunk: HunkReference) => void;
+	onHighlightsChange?: (hunkId: string, highlights: HighlightRange[]) => void;
+	activePR?: { number: number; owner: string; repo: string };
+	isEditMode: boolean;
+}) {
 	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 
@@ -401,9 +470,85 @@ function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { 
 	);
 
 	const [collapsed, setCollapsed] = useState(false);
+	const [highlightMode, setHighlightMode] = useState(false);
+	const [dragStart, setDragStart] = useState<number | null>(null);
+	const [dragEnd, setDragEnd] = useState<number | null>(null);
+
+	const committedHighlights = node.hunk.highlights ?? [];
+
+	const previewHighlights = useMemo(() => {
+		if (dragStart === null || dragEnd === null) {
+			return committedHighlights;
+		}
+		return [...committedHighlights, ...rangesFromDrag(lines, dragStart, dragEnd)];
+	}, [committedHighlights, dragStart, dragEnd, lines]);
+
+	const highlightedLineIndices = useMemo(
+		() => indicesFromHighlights(lines, previewHighlights),
+		[lines, previewHighlights],
+	);
+
+	const handleDragStart = useCallback((idx: number) => {
+		setDragStart(idx);
+		setDragEnd(idx);
+	}, []);
+
+	const handleDragEnter = useCallback((idx: number) => {
+		setDragStart(prev => {
+			if (prev === null) {
+				return prev;
+			}
+			setDragEnd(idx);
+			return prev;
+		});
+	}, []);
+
+	const commitDrag = useCallback(() => {
+		if (dragStart !== null && dragEnd !== null && onHighlightsChange) {
+			const newRanges = rangesFromDrag(lines, dragStart, dragEnd);
+			if (newRanges.length > 0) {
+				onHighlightsChange(node.id, [...committedHighlights, ...newRanges]);
+			}
+		}
+		setDragStart(null);
+		setDragEnd(null);
+	}, [dragStart, dragEnd, lines, committedHighlights, onHighlightsChange, node.id]);
+
+	useEffect(() => {
+		if (dragStart === null) {
+			return;
+		}
+		const handleWindowUp = () => commitDrag();
+		window.addEventListener('mouseup', handleWindowUp);
+		return () => window.removeEventListener('mouseup', handleWindowUp);
+	}, [dragStart, commitDrag]);
+
+	const handleRemoveRow = useCallback((idx: number) => {
+		if (!onHighlightsChange) {
+			return;
+		}
+		const row = lines[idx];
+		if (!row) {
+			return;
+		}
+		const remaining = committedHighlights.filter(r => {
+			if (r.side === 'new' && row.newLine !== undefined) {
+				return !(row.newLine >= r.start && row.newLine <= r.end);
+			}
+			if (r.side === 'old' && row.oldLine !== undefined) {
+				return !(row.oldLine >= r.start && row.oldLine <= r.end);
+			}
+			return true;
+		});
+		if (remaining.length !== committedHighlights.length) {
+			onHighlightsChange(node.id, remaining);
+		}
+	}, [committedHighlights, lines, onHighlightsChange, node.id]);
+
+	const highlightEditingEnabled = isEditMode && !!onHighlightsChange;
 
 	return (
-		<div className="tour-hunk">
+		<div className={`tour-hunk${highlightEditingEnabled && highlightMode ? ' tour-hunk-highlight-mode' : ''}`}>
 			<div className="tour-hunk-header">
 				<div className="tour-hunk-info">
 					<span
@@ -417,25 +562,45 @@ function HunkBlock({ node, doc, onRemove, onOpenDiff, activePR, isEditMode }: { 
 					<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
 				</div>
 				<div className="tour-hunk-actions">
+					{highlightEditingEnabled && (
+						<button
+							type="button"
+							className={`tour-action-btn icon-button tour-hunk-highlight-toggle${highlightMode ? ' active' : ''}`}
+							title={highlightMode ? 'Exit highlight mode' : 'Highlight lines (drag in the diff)'}
+							aria-pressed={highlightMode}
+							onClick={() => setHighlightMode(m => !m)}
+						>
+							{editIcon}
+						</button>
+					)}
 					{onOpenDiff && (
 						<button
-							className="tour-action-btn"
-							style={isMismatch ? { opacity: 0.5 } : {}}
+							className="tour-action-btn icon-button"
 							disabled={isMismatch}
 							title={isMismatch ? 'Checkout the associated PR to view the diff' : 'GoTo Diff'}
 							onClick={() => onOpenDiff(node.hunk)}
 						>
-							GoTo Diff
+							{diffSingleIcon}
 						</button>
 					)}
 					{isEditMode && (
-						<button className="tour-remove-btn" title="Remove hunk" onClick={() => onRemove(node.id)}>&times;</button>
+						<button className="tour-remove-btn tour-action-btn icon-button" title="Remove hunk" onClick={() => onRemove(node.id)}>
+							{trashIcon}
+						</button>
 					)}
 				</div>
 			</div>
 			{!collapsed && (
 				lines.length > 0 ? (
-					<DiffTable lines={lines} />
+					<DiffTable
+						lines={lines}
+						highlightedLineIndices={highlightedLineIndices}
+						highlightMode={highlightEditingEnabled && highlightMode}
+						onHighlightDragStart={handleDragStart}
+						onHighlightDragEnter={handleDragEnter}
+						onHighlightDragEnd={commitDrag}
+						onRemoveHighlightForRow={highlightEditingEnabled ? handleRemoveRow : undefined}
+					/>
 				) : (
 					<div className="tour-hunk-placeholder">
 						Diff hunk from <strong>{file}</strong> lines {startLine}&ndash;{endLine}
@@ -513,11 +678,11 @@ function TextBlock({
 					rows={1}
 				/>
 				<button
-					className="tour-remove-btn tour-text-remove"
+					className="tour-remove-btn tour-action-btn icon-button"
 					title="Remove text block"
 					onMouseDown={e => { e.preventDefault(); onRemove(node.id); }}
 				>
-					&times;
+					{trashIcon}
 				</button>
 			</div>
 		);
@@ -532,11 +697,11 @@ function TextBlock({
 			/>
 			{isEditMode && (
 				<button
-					className="tour-remove-btn tour-text-remove"
+					className="tour-remove-btn tour-action-btn icon-button"
 					title="Remove text block"
 					onClick={() => onRemove(node.id)}
 				>
-					&times;
+					{trashIcon}
 				</button>
 			)}
 		</div>
@@ -562,6 +727,7 @@ function GroupBlock({
 	onAddCode,
 	onAddGroup,
 	onInsertRelative,
+	onHighlightsChange,
 	onRemove,
 	onOpenDiff,
 	activePR,
@@ -584,6 +750,7 @@ function GroupBlock({
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
 	onInsertRelative: (kind: InsertKind, targetId: string, position: DropPosition) => void;
+	onHighlightsChange: (hunkId: string, highlights: HighlightRange[]) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	isEditMode: boolean;
@@ -675,7 +842,9 @@ function GroupBlock({
 					<span className="tour-group-title-readonly">{node.title || 'Untitled Section'}</span>
 				)}
 				{isEditMode && (
-					<button className="tour-remove-btn" title="Remove section" onClick={() => onRemove(node.id)}>&times;</button>
+					<button className="tour-remove-btn icon-button" title="Remove section" onClick={() => onRemove(node.id)}>
+						{trashIcon}
+					</button>
 				)}
 			</div>
 			{!collapsed && (
@@ -710,6 +879,7 @@ function GroupBlock({
 								onAddCode={onAddCode}
 								onAddGroup={onAddGroup}
 								onInsertRelative={onInsertRelative}
+								onHighlightsChange={onHighlightsChange}
 								onRemove={onRemove}
 								onOpenDiff={onOpenDiff}
 								activePR={activePR}
@@ -720,10 +890,10 @@ function GroupBlock({
 					))}
 					{isEditMode && (
 						<div className="tour-group-actions">
-							<button className="tour-add-btn" onClick={() => onAddText(node.id)}>+ Text</button>
-							<button className="tour-add-btn" onClick={() => onAddCode(node.id)}>+ Code</button>
+							<button className="tour-add-btn icon-button" title="Add text" onClick={() => onAddText(node.id)}>{symbolStringIcon}</button>
+							<button className="tour-add-btn icon-button" title="Add diff" onClick={() => onAddCode(node.id)}>{diffIcon}</button>
 							{node.level < 6 && (
-								<button className="tour-add-btn" onClick={() => onAddGroup(node.id)}>+ Sub-section</button>
+								<button className="tour-add-btn icon-button" title="Add section" onClick={() => onAddGroup(node.id)}>{newCollectionIcon}</button>
 							)}
 						</div>
 					)}
@@ -752,6 +922,7 @@ function NodeRenderer({
 	onAddCode,
 	onAddGroup,
 	onInsertRelative,
+	onHighlightsChange,
 	onRemove,
 	onOpenDiff,
 	activePR,
@@ -774,6 +945,7 @@ function NodeRenderer({
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
 	onInsertRelative: (kind: InsertKind, targetId: string, position: DropPosition) => void;
+	onHighlightsChange: (hunkId: string, highlights: HighlightRange[]) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	isEditMode: boolean;
@@ -810,6 +982,7 @@ function NodeRenderer({
 						onAddCode={onAddCode}
 						onAddGroup={onAddGroup}
 						onInsertRelative={onInsertRelative}
+						onHighlightsChange={onHighlightsChange}
 						onRemove={onRemove}
 						onOpenDiff={onOpenDiff}
 						activePR={activePR}
@@ -845,7 +1018,7 @@ function NodeRenderer({
 					onReorder={onReorder}
 					isEditMode={isEditMode}
 				>
-					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} activePR={activePR} isEditMode={isEditMode} />
+					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} activePR={activePR} isEditMode={isEditMode} />
 				</NodeShell>
 			);
 		case 'dropzone':
@@ -929,28 +1102,31 @@ function InsertGap({
 				<div className="tour-insert-gap-menu" role="menu">
 					<button
 						type="button"
-						className="tour-add-btn"
+						title="Add text"
+						className="tour-add-btn icon-button"
 						role="menuitem"
 						onClick={() => select('text')}
 					>
-						+ Text
+						{symbolStringIcon}
 					</button>
 					<button
 						type="button"
-						className="tour-add-btn"
+						title="Add diff"
+						className="tour-add-btn icon-button"
 						role="menuitem"
 						onClick={() => select('code')}
 					>
-						+ Code
+						{diffIcon}
 					</button>
 					{parentLevel < 6 && (
 						<button
 							type="button"
-							className="tour-add-btn"
+							title="Add section"
+							className="tour-add-btn icon-button"
 							role="menuitem"
 							onClick={() => select('group')}
 						>
-							+ Section
+							{newCollectionIcon}
 						</button>
 					)}
 				</div>
@@ -1351,6 +1527,22 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		[applyLocal],
 	);
 
+	/* - Hunk highlights ------------------------ */
+
+	const handleHighlightsChange = useCallback(
+		(hunkId: string, highlights: HighlightRange[]) => {
+			applyLocal(prev => ({
+				...prev,
+				children: updateNodeInList(prev.children, hunkId, n =>
+					n.type === 'hunk'
+						? { ...n, hunk: { ...n.hunk, highlights: highlights.length > 0 ? highlights : undefined } }
+						: n,
+				),
+			}));
+		},
+		[applyLocal],
+	);
+
 	/* - Remove node ------------------------- */
 
 	const handleRemove = useCallback((id: string) => {
@@ -1478,6 +1670,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							onAddCode={handleAddCode}
 							onAddGroup={handleAddGroup}
 							onInsertRelative={handleInsertRelative}
+							onHighlightsChange={handleHighlightsChange}
 							onRemove={handleRemove}
 							onOpenDiff={onOpenDiff}
 							activePR={activePR}
@@ -1488,9 +1681,9 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				))}
 				{isEditMode && (
 					<div className="tour-root-actions">
-						<button className="tour-add-btn" onClick={() => handleAddText()}>+ Text</button>
-						<button className="tour-add-btn" onClick={() => handleAddCode()}>+ Code</button>
-						<button className="tour-add-btn" onClick={() => handleAddGroup()}>+ Section</button>
+						<button className="tour-add-btn icon-button" title="Add text" onClick={() => handleAddText()}>{symbolStringIcon}</button>
+						<button className="tour-add-btn icon-button" title="Add diff" onClick={() => handleAddCode()}>{diffIcon}</button>
+						<button className="tour-add-btn icon-button" title="Add section" onClick={() => handleAddGroup()}>{newCollectionIcon}</button>
 					</div>
 				)}
 			</div>

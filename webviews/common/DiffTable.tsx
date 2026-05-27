@@ -21,9 +21,15 @@ interface DiffTableProps {
 	searchMatchedLineIndices?: Set<number>;
 	onHunkSelectToggle?: (headerIdx: number, selected: boolean) => void;
 	selectedHunksCount?: number;
+	highlightedLineIndices?: Set<number>;
+	highlightMode?: boolean;
+	onHighlightDragStart?: (lineIdx: number) => void;
+	onHighlightDragEnter?: (lineIdx: number) => void;
+	onHighlightDragEnd?: () => void;
+	onRemoveHighlightForRow?: (lineIdx: number) => void;
 }
 
-export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices, hideCovered, selectedHeaderIndices, searchActive, searchMatchedHeaderIndices, searchMatchedLineIndices, onHunkSelectToggle, selectedHunksCount }: DiffTableProps) {
+export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices, hideCovered, selectedHeaderIndices, searchActive, searchMatchedHeaderIndices, searchMatchedLineIndices, onHunkSelectToggle, selectedHunksCount, highlightedLineIndices, highlightMode, onHighlightDragStart, onHighlightDragEnter, onHighlightDragEnd, onRemoveHighlightForRow }: DiffTableProps) {
 	let currentHeaderIdx = -1;
 	const [collapsedState, setCollapsedState] = useState<{ [key: number]: boolean }>({});
 
@@ -110,10 +116,42 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 						return null;
 					}
 
+					const isHighlighted = !!highlightedLineIndices?.has(i);
+					const rowMouseDown = highlightMode && onHighlightDragStart
+						? (e: React.MouseEvent) => {
+							if (e.button !== 0) return;
+							e.preventDefault();
+							onHighlightDragStart(i);
+						}
+						: undefined;
+					const rowMouseEnter = highlightMode && onHighlightDragEnter
+						? () => onHighlightDragEnter(i)
+						: undefined;
+					const rowMouseUp = highlightMode && onHighlightDragEnd
+						? () => onHighlightDragEnd()
+						: undefined;
+
 					return (
-						<tr key={i} className={`diff-line diff-${line.type}${isCovered ? ' diff-hunk-covered' : ''}${isSearchMatch ? ' diff-search-match' : ''}`}>
+						<tr
+							key={i}
+							className={`diff-line diff-${line.type}${isCovered ? ' diff-hunk-covered' : ''}${isSearchMatch ? ' diff-search-match' : ''}${isHighlighted ? ' diff-line-highlighted' : ''}`}
+							onMouseDown={rowMouseDown}
+							onMouseEnter={rowMouseEnter}
+							onMouseUp={rowMouseUp}
+						>
 							<td className="diff-line-num">
 								{line.type !== 'add' && line.oldLine !== undefined ? line.oldLine : ''}
+								{isHighlighted && onRemoveHighlightForRow && (
+									<button
+										type="button"
+										className="diff-highlight-remove"
+										title="Remove highlight"
+										onMouseDown={e => e.stopPropagation()}
+										onClick={e => { e.stopPropagation(); onRemoveHighlightForRow(i); }}
+									>
+										&times;
+									</button>
+								)}
 							</td>
 							<td className="diff-line-num">
 								{line.type !== 'delete' && line.newLine !== undefined ? line.newLine : ''}

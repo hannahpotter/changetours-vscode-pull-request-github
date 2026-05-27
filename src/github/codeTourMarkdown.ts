@@ -11,6 +11,12 @@
  *   <patch content>
  *   :::
  */
+export interface HighlightRange {
+	side: 'old' | 'new';
+	start: number;
+	end: number;
+}
+
 export interface HunkReference {
 	file: string;
 	startLine: number;
@@ -18,6 +24,60 @@ export interface HunkReference {
 	ref: string;
 	patch?: string;
 	previousFile?: string;
+	highlights?: HighlightRange[];
+}
+
+/**
+ * Parse a `highlights=` attribute value (e.g. `new:14-18,old:22-25,new:30`)
+ * into a list of HighlightRange. Malformed entries are silently dropped.
+ */
+export function parseHighlightAttribute(value: string | undefined): HighlightRange[] | undefined {
+	if (!value) {
+		return undefined;
+	}
+	const ranges: HighlightRange[] = [];
+	for (const entry of value.split(',')) {
+		const m = /^(old|new):(\d+)(?:-(\d+))?$/.exec(entry.trim());
+		if (!m) {
+			continue;
+		}
+		const start = parseInt(m[2], 10);
+		const end = m[3] ? parseInt(m[3], 10) : start;
+		ranges.push({
+			side: m[1] as 'old' | 'new',
+			start: Math.min(start, end),
+			end: Math.max(start, end),
+		});
+	}
+	return ranges.length ? ranges : undefined;
+}
+
+/**
+ * Serialize a list of HighlightRange into the `highlights=` attribute value,
+ * coalescing adjacent or overlapping ranges on the same side. Returns
+ * undefined when there's nothing to write.
+ */
+export function serializeHighlightAttribute(highlights: HighlightRange[] | undefined): string | undefined {
+	if (!highlights || highlights.length === 0) {
+		return undefined;
+	}
+	const parts: string[] = [];
+	for (const side of ['new', 'old'] as const) {
+		const sorted = highlights.filter(r => r.side === side).sort((a, b) => a.start - b.start);
+		const merged: HighlightRange[] = [];
+		for (const r of sorted) {
+			const last = merged[merged.length - 1];
+			if (last && r.start <= last.end + 1) {
+				last.end = Math.max(last.end, r.end);
+			} else {
+				merged.push({ side, start: r.start, end: r.end });
+			}
+		}
+		for (const r of merged) {
+			parts.push(r.start === r.end ? `${side}:${r.start}` : `${side}:${r.start}-${r.end}`);
+		}
+	}
+	return parts.length ? parts.join(',') : undefined;
 }
 
 export type TourNodeType = 'group' | 'text' | 'hunk';
@@ -54,7 +114,7 @@ export interface CodeTourDocument {
 	children: TourNode[];
 }
 
-const HUNK_PATTERN = /^:::hunk\s+file=(?<file>[^\s]+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>[^\s]+)(?:\s+previousFile=(?<previousFile>[^\s]+))?(?:\s+level=(?<level>\d+))?\s*$/;
+const HUNK_PATTERN = /^:::hunk\s+file=(?<file>[^\s]+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>[^\s]+)(?:\s+previousFile=(?<previousFile>[^\s]+))?(?:\s+level=(?<level>\d+))?(?:\s+highlights=(?<highlights>[^\s]+))?\s*$/;
 const HUNK_END_PATTERN = /^:::$/;
 
 let nextId = 0;
@@ -221,7 +281,8 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 				startLine: parseInt(hunkMatch.groups!.start, 10),
 				endLine: parseInt(hunkMatch.groups!.end, 10),
 				ref: hunkMatch.groups!.ref,
-				previousFile: hunkMatch.groups!.previousFile
+				previousFile: hunkMatch.groups!.previousFile,
+				highlights: parseHighlightAttribute(hunkMatch.groups!.highlights),
 			};
 			pendingPatchLines = [];
 			continue;
@@ -277,6 +338,8 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
 					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
 					hunkHeader += ` level=${currentLevel}`;
+					const highlightAttr = serializeHighlightAttribute(node.hunk.highlights);
+					if (highlightAttr) hunkHeader += ` highlights=${highlightAttr}`;
 					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
@@ -301,6 +364,8 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 export function createHunkDirective(hunk: HunkReference): string {
 	let header = `:::hunk file=${hunk.file} lines=${hunk.startLine}-${hunk.endLine} ref=${hunk.ref}`;
 	if (hunk.previousFile) header += ` previousFile=${hunk.previousFile}`;
+	const highlightAttr = serializeHighlightAttribute(hunk.highlights);
+	if (highlightAttr) header += ` highlights=${highlightAttr}`;
 
 	if (hunk.patch) {
 		return `${header}\n${hunk.patch}\n:::`;

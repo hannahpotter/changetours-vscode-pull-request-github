@@ -23,6 +23,8 @@ export const closeIcon = <Icon src={require('../../resources/icons/codicons/clos
 export const commentIcon = <Icon src={require('../../resources/icons/codicons/comment.svg')} />;
 export const copilotIcon = <Icon src={require('../../resources/icons/codicons/copilot.svg')} />;
 export const copyIcon = <Icon src={require('../../resources/icons/codicons/copy.svg')} />;
+export const diffIcon = <Icon src={require('../../resources/icons/codicons/diff.svg')} />;
+export const diffSingleIcon = <Icon src={require('../../resources/icons/codicons/diff-single.svg')} />;
 export const editIcon = <Icon src={require('../../resources/icons/codicons/edit.svg')} />;
 export const errorIcon = <Icon src={require('../../resources/icons/codicons/error.svg')} />;
 export const feedbackIcon = <Icon src={require('../../resources/icons/codicons/feedback.svg')} />;
@@ -37,6 +39,7 @@ export const issuescon = <Icon src={require('../../resources/icons/codicons/issu
 export const listTree = <Icon src={require('../../resources/icons/codicons/list-tree.svg')} />;
 export const loadingIcon = <Icon className='loading' src={require('../../resources/icons/codicons/loading.svg')} />;
 export const milestoneIcon = <Icon src={require('../../resources/icons/codicons/milestone.svg')} />;
+export const newCollectionIcon = <Icon src={require('../../resources/icons/codicons/new-collection.svg')} />;
 export const notebookTemplate = <Icon src={require('../../resources/icons/codicons/notebook-template.svg')} />;
 export const passIcon = <Icon src={require('../../resources/icons/codicons/pass.svg')} />;
 export const projectIcon = <Icon src={require('../../resources/icons/codicons/github-project.svg')} />;
@@ -46,6 +49,7 @@ export const settingsIcon = <Icon src={require('../../resources/icons/codicons/s
 export const sparkleIcon = <Icon src={require('../../resources/icons/codicons/sparkle.svg')} />;
 export const stopCircleIcon = <Icon src={require('../../resources/icons/codicons/stop-circle.svg')} />;
 export const syncIcon = <Icon src={require('../../resources/icons/codicons/sync.svg')} />;
+export const symbolStringIcon = <Icon src={require('../../resources/icons/codicons/symbol-string.svg')} />;
 export const tagIcon = <Icon src={require('../../resources/icons/codicons/tag.svg')} />;
 export const tasklistIcon = <Icon src={require('../../resources/icons/codicons/tasklist.svg')} />;
 export const threeBars = <Icon src={require('../../resources/icons/codicons/three-bars.svg')} />;
