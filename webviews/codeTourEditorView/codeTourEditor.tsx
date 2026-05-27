@@ -9,7 +9,9 @@ import type { CodeTourDocument, HunkReference, TourTextNode } from '../../src/gi
 import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
 import { DiffTable } from '../common/DiffTable';
 import { parsePatch } from '../common/diffUtils';
-import { chevronDownIcon, gripperIcon } from '../components/icon';
+import { addIcon, chevronDownIcon, gripperIcon } from '../components/icon';
+
+type InsertKind = 'text' | 'code' | 'group';
 
 // Editor-only node type: a pending drop zone placeholder (never serialized).
 interface TourDropZoneNode {
@@ -559,6 +561,7 @@ function GroupBlock({
 	onAddText,
 	onAddCode,
 	onAddGroup,
+	onInsertRelative,
 	onRemove,
 	onOpenDiff,
 	activePR,
@@ -580,6 +583,7 @@ function GroupBlock({
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
+	onInsertRelative: (kind: InsertKind, targetId: string, position: DropPosition) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	isEditMode: boolean;
@@ -682,29 +686,37 @@ function GroupBlock({
 					onDrop={isEditMode ? handleGroupBodyDrop : undefined}
 				>
 					{node.children.map(child => (
-						<NodeRenderer
-							key={child.id}
-							node={child}
-							doc={doc}
-							dragState={dragState}
-							activeNodeId={activeNodeId}
-							onActiveNodeChanged={onActiveNodeChanged}
-							onNodeDragStart={onNodeDragStart}
-							onNodeDragEnd={onNodeDragEnd}
-							onReorder={onReorder}
-							onMoveToGroupEnd={onMoveToGroupEnd}
-							onTextChange={onTextChange}
-							onGroupTitleCommit={onGroupTitleCommit}
-							onDropZoneDrop={onDropZoneDrop}
-							onAddText={onAddText}
-							onAddCode={onAddCode}
-							onAddGroup={onAddGroup}
-							onRemove={onRemove}
-							onOpenDiff={onOpenDiff}
-							activePR={activePR}
-							isEditMode={isEditMode}
-							onError={onError}
-						/>
+						<React.Fragment key={child.id}>
+							{isEditMode && (
+								<InsertGap
+									parentLevel={node.level}
+									onInsert={kind => onInsertRelative(kind, child.id, 'before')}
+								/>
+							)}
+							<NodeRenderer
+								node={child}
+								doc={doc}
+								dragState={dragState}
+								activeNodeId={activeNodeId}
+								onActiveNodeChanged={onActiveNodeChanged}
+								onNodeDragStart={onNodeDragStart}
+								onNodeDragEnd={onNodeDragEnd}
+								onReorder={onReorder}
+								onMoveToGroupEnd={onMoveToGroupEnd}
+								onTextChange={onTextChange}
+								onGroupTitleCommit={onGroupTitleCommit}
+								onDropZoneDrop={onDropZoneDrop}
+								onAddText={onAddText}
+								onAddCode={onAddCode}
+								onAddGroup={onAddGroup}
+								onInsertRelative={onInsertRelative}
+								onRemove={onRemove}
+								onOpenDiff={onOpenDiff}
+								activePR={activePR}
+								isEditMode={isEditMode}
+								onError={onError}
+							/>
+						</React.Fragment>
 					))}
 					{isEditMode && (
 						<div className="tour-group-actions">
@@ -739,6 +751,7 @@ function NodeRenderer({
 	onAddText,
 	onAddCode,
 	onAddGroup,
+	onInsertRelative,
 	onRemove,
 	onOpenDiff,
 	activePR,
@@ -760,6 +773,7 @@ function NodeRenderer({
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
+	onInsertRelative: (kind: InsertKind, targetId: string, position: DropPosition) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	isEditMode: boolean;
@@ -795,6 +809,7 @@ function NodeRenderer({
 						onAddText={onAddText}
 						onAddCode={onAddCode}
 						onAddGroup={onAddGroup}
+						onInsertRelative={onInsertRelative}
 						onRemove={onRemove}
 						onOpenDiff={onOpenDiff}
 						activePR={activePR}
@@ -850,6 +865,98 @@ function NodeRenderer({
 				</NodeShell>
 			);
 	}
+}
+
+/* - Inline insert gap (insert an element between two existing nodes) -- */
+
+function InsertGap({
+	parentLevel,
+	onInsert,
+}: {
+	parentLevel: number;
+	onInsert: (kind: InsertKind) => void;
+}) {
+	const [open, setOpen] = useState(false);
+	const containerRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (!open) {
+			return;
+		}
+		const handleMouseDown = (event: MouseEvent) => {
+			if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+				setOpen(false);
+			}
+		};
+		const handleKey = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				setOpen(false);
+			}
+		};
+		document.addEventListener('mousedown', handleMouseDown);
+		document.addEventListener('keydown', handleKey);
+		return () => {
+			document.removeEventListener('mousedown', handleMouseDown);
+			document.removeEventListener('keydown', handleKey);
+		};
+	}, [open]);
+
+	const select = useCallback((kind: InsertKind) => {
+		setOpen(false);
+		onInsert(kind);
+	}, [onInsert]);
+
+	return (
+		<div
+			ref={containerRef}
+			className={`tour-insert-gap${open ? ' tour-insert-gap-open' : ''}`}
+			onClick={e => e.stopPropagation()}
+		>
+			<button
+				type="button"
+				className="tour-insert-gap-btn"
+				title="Insert element here"
+				aria-haspopup="menu"
+				aria-expanded={open}
+				onClick={e => {
+					e.stopPropagation();
+					setOpen(v => !v);
+				}}
+			>
+				{addIcon}
+			</button>
+			{open && (
+				<div className="tour-insert-gap-menu" role="menu">
+					<button
+						type="button"
+						className="tour-add-btn"
+						role="menuitem"
+						onClick={() => select('text')}
+					>
+						+ Text
+					</button>
+					<button
+						type="button"
+						className="tour-add-btn"
+						role="menuitem"
+						onClick={() => select('code')}
+					>
+						+ Code
+					</button>
+					{parentLevel < 6 && (
+						<button
+							type="button"
+							className="tour-add-btn"
+							role="menuitem"
+							onClick={() => select('group')}
+						>
+							+ Section
+						</button>
+					)}
+				</div>
+			)}
+		</div>
+	);
 }
 
 /* - Main editor component ---------------------- */
@@ -1210,6 +1317,40 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		});
 	}, [applyLocal]);
 
+	/* - Insert element between siblings ----------- */
+
+	const handleInsertRelative = useCallback(
+		(kind: InsertKind, targetId: string, position: DropPosition) => {
+			applyLocal(prev => {
+				const newId = localId();
+				let newNode: EditorNode;
+				if (kind === 'text') {
+					newNode = { type: 'text', id: newId, content: '' };
+				} else if (kind === 'code') {
+					newNode = { type: 'dropzone', id: newId };
+				} else {
+					newNode = {
+						type: 'group',
+						id: newId,
+						title: 'New Section',
+						level: 2,
+						children: [],
+					};
+				}
+				const result = insertNodeRelative(prev.children, targetId, newNode, position);
+				if (!result.inserted) {
+					return prev;
+				}
+				const nextChildren = kind === 'group'
+					? normalizeGroupLevels(result.nodes)
+					: result.nodes;
+				setJustInsertedId(newId);
+				return { ...prev, children: nextChildren };
+			});
+		},
+		[applyLocal],
+	);
+
 	/* - Remove node ------------------------- */
 
 	const handleRemove = useCallback((id: string) => {
@@ -1288,7 +1429,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 	}, [applyLocal]);
 
 	return (
-		<div className="code-tour-editor">
+		<div className={`code-tour-editor${isEditMode ? ' is-edit-mode' : ''}`}>
 			{isMismatch && (
 				<div className="tour-pr-warning">
 					<span>This Code Tour belongs to PR #{doc.prNumber}. "GoTo Diff" is unavailable until the PR is checked out.</span>
@@ -1313,29 +1454,37 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			)}
 			<div className="tour-body">
 				{doc.children.map(node => (
-					<NodeRenderer
-						key={node.id}
-						node={node}
-						doc={doc}
-						dragState={dragState}
-						activeNodeId={activeNodeId}
-						onActiveNodeChanged={setActiveNodeId}
-						onNodeDragStart={handleNodeDragStart}
-						onNodeDragEnd={handleNodeDragEnd}
-						onReorder={handleReorder}
-						onMoveToGroupEnd={handleMoveToGroupEnd}
-						onTextChange={handleTextChange}
-						onGroupTitleCommit={handleGroupTitleCommit}
-						onDropZoneDrop={handleDropZoneDrop}
-						onAddText={handleAddText}
-						onAddCode={handleAddCode}
-						onAddGroup={handleAddGroup}
-						onRemove={handleRemove}
-						onOpenDiff={onOpenDiff}
-						activePR={activePR}
-						isEditMode={isEditMode}
-						onError={onError}
-					/>
+					<React.Fragment key={node.id}>
+						{isEditMode && (
+							<InsertGap
+								parentLevel={1}
+								onInsert={kind => handleInsertRelative(kind, node.id, 'before')}
+							/>
+						)}
+						<NodeRenderer
+							node={node}
+							doc={doc}
+							dragState={dragState}
+							activeNodeId={activeNodeId}
+							onActiveNodeChanged={setActiveNodeId}
+							onNodeDragStart={handleNodeDragStart}
+							onNodeDragEnd={handleNodeDragEnd}
+							onReorder={handleReorder}
+							onMoveToGroupEnd={handleMoveToGroupEnd}
+							onTextChange={handleTextChange}
+							onGroupTitleCommit={handleGroupTitleCommit}
+							onDropZoneDrop={handleDropZoneDrop}
+							onAddText={handleAddText}
+							onAddCode={handleAddCode}
+							onAddGroup={handleAddGroup}
+							onInsertRelative={handleInsertRelative}
+							onRemove={handleRemove}
+							onOpenDiff={onOpenDiff}
+							activePR={activePR}
+							isEditMode={isEditMode}
+							onError={onError}
+						/>
+					</React.Fragment>
 				))}
 				{isEditMode && (
 					<div className="tour-root-actions">

@@ -49,6 +49,108 @@
 	gap: 12px;
 }
 
+/* In edit mode, inter-item spacing is owned by the InsertGap component so
+ * that the "+" controls land cleanly between siblings. */
+.code-tour-editor.is-edit-mode .tour-body,
+.code-tour-editor.is-edit-mode .tour-group-body {
+	gap: 0;
+}
+
+.code-tour-editor.is-edit-mode .tour-root-actions:not(:first-child),
+.code-tour-editor.is-edit-mode .tour-group-actions:not(:first-child) {
+	margin-top: 12px;
+}
+
+/* - Inline insert gap (between siblings) --------------- */
+
+.tour-insert-gap {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 12px;
+}
+
+.tour-insert-gap::before {
+	content: '';
+	position: absolute;
+	left: 28px;
+	right: 0;
+	top: 50%;
+	height: 1px;
+	background: var(--vscode-focusBorder);
+	opacity: 0;
+	transform: translateY(-0.5px);
+	transition: opacity 0.15s ease;
+	pointer-events: none;
+}
+
+.tour-insert-gap:hover::before,
+.tour-insert-gap-open::before {
+	opacity: 0.5;
+}
+
+.tour-insert-gap-btn {
+	position: relative;
+	z-index: 2;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: 1px solid var(--vscode-button-background, var(--vscode-panel-border, #555));
+	border-radius: 999px;
+	background: var(--vscode-button-background, transparent);
+	color: var(--vscode-button-foreground, var(--vscode-editor-foreground));
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+	line-height: 0;
+}
+
+.tour-insert-gap-btn .icon {
+	display: inline-flex;
+	width: 12px;
+	height: 12px;
+}
+
+/* Override the global ":not(.copilot-icon) > svg path { fill: var(--vscode-foreground) }"
+ * rule in common.css so the "+" icon tracks the button's color (button-foreground),
+ * matching the "+ Text / + Code / + Section" button labels. */
+.tour-insert-gap-btn svg path {
+	fill: currentColor;
+}
+
+.tour-insert-gap:hover .tour-insert-gap-btn,
+.tour-insert-gap-open .tour-insert-gap-btn,
+.tour-insert-gap-btn:focus-visible {
+	opacity: 1;
+	outline: none;
+}
+
+.tour-insert-gap-btn:hover,
+.tour-insert-gap-open .tour-insert-gap-btn {
+	background: var(--vscode-button-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.tour-insert-gap-menu {
+	position: absolute;
+	top: 100%;
+	left: 50%;
+	transform: translateX(-50%);
+	margin-top: 4px;
+	display: flex;
+	gap: 4px;
+	padding: 4px;
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+	border-radius: 4px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+	z-index: 15;
+	white-space: nowrap;
+}
+
 .tour-node-shell {
 	position: relative;
 	border-radius: 6px;
