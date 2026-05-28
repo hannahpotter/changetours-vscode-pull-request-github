@@ -127,7 +127,7 @@ export function resetIdCounter(): void {
 }
 
 /**
- * Parse a `.codetour.md` file into a structured document tree.
+ * Parse a `.changetour.md` file into a structured document tree.
  *
  * Rules:
  * - `# Title` (h1) becomes the document title

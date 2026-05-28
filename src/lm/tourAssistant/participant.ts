@@ -24,7 +24,7 @@ export function registerChangeTourChatParticipant(context: vscode.ExtensionConte
 		// modes need one. We don't block; the orchestrator's tools will report a
 		// clearer error if they actually need the document.
 		if (!CodeTourEditorProvider.activeDocumentTracker && mode !== 'freeform') {
-			response.markdown(vscode.l10n.t('_Tip: open a `.codetour.md` file in the Change Tour editor first - I need it as my target for changes._\n\n'));
+			response.markdown(vscode.l10n.t('_Tip: open a `.changetour.md` file in the Change Tour editor first - I need it as my target for changes._\n\n'));
 		}
 
 		// Bridge chat-cancellation token → AbortSignal for the orchestrator.

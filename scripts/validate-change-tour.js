@@ -4,10 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Standalone validator for .codetour.md files.
+ * Standalone validator for .changetour.md files.
  *
  * Usage:
- *   node validate-change-tour.js <path-to-tour.codetour.md> [--skip-pr-check]
+ *   node validate-change-tour.js <path-to-tour.changetour.md> [--skip-pr-check]
  *                                                           [--pr <number>]
  *                                                           [--repo <owner>/<repo>]
  *
@@ -443,7 +443,7 @@ function formatIssue(filePath, issue, level) {
 }
 
 function printHelp() {
-	console.error('Usage: node validate-change-tour.js <path-to-tour.codetour.md> [options]');
+	console.error('Usage: node validate-change-tour.js <path-to-tour.changetour.md> [options]');
 	console.error('');
 	console.error('Options:');
 	console.error('  --skip-pr-check       Skip the optional cross-check against the live PR diff via `gh`.');

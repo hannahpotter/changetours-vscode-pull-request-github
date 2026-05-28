@@ -17,7 +17,7 @@ The extension includes an LLM assistant that can build Change Tours for you. It 
 
 ## Entry points
 
-**Editor toolbar (✨ buttons)** - open a `.codetour.md` file created via "Pull Request: New Change Tour":
+**Editor toolbar (✨ buttons)** - open a `.changtour.md` file created via "Pull Request: New Change Tour":
 - The sparkle on the top-level toolbar auto-generates a full tour for the bound pull request.
 - The sparkle on each hunk drafts narration for just that hunk and inserts it immediately after.
 - The sparkle on each section improves the narration and highlights within that section only.

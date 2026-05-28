@@ -39,7 +39,7 @@ interface MutationContext {
 function getActiveTourDocument(): vscode.TextDocument {
 	const document = CodeTourEditorProvider.activeDocumentTracker;
 	if (!document) {
-		throw new Error('No Change Tour editor is currently active. Open a .codetour.md file and focus its editor before using assistant tools.');
+		throw new Error('No Change Tour editor is currently active. Open a .changetour.md file and focus its editor before using assistant tools.');
 	}
 	return document;
 }

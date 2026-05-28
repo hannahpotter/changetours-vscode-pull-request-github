@@ -19,7 +19,7 @@
 
 const COMMON_PREAMBLE = `You are the Change Tour authoring assistant inside the VS Code GitHub Pull Request extension.
 
-A "Change Tour" is a guided walkthrough of a pull request, persisted as a .codetour.md file. Every valid tour has:
+A "Change Tour" is a guided walkthrough of a pull request, persisted as a .changetour.md file. Every valid tour has:
 	• Frontmatter that binds it to a pull request:
 		---
 		isPR: true

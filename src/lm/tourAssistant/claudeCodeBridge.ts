@@ -88,7 +88,7 @@ function buildClaudeCodePrompt(relPath: string, validatorPath: string): string {
 	return [
 		`Edit the Change Tour file @${relPath} to improve it.`,
 		'',
-		'A Change Tour (.codetour.md) is a guided walkthrough of a pull request. It MUST be a valid document with this exact shape:',
+		'A Change Tour (.changetour.md) is a guided walkthrough of a pull request. It MUST be a valid document with this exact shape:',
 		'',
 		'1. Frontmatter (required, must be the first lines of the file):',
 		'   ---',
@@ -132,7 +132,7 @@ function shellQuote(s: string): string {
 }
 
 function pickTourUri(passed?: vscode.Uri): vscode.Uri | undefined {
-	if (passed && passed.fsPath.endsWith('.codetour.md')) {
+	if (passed && passed.fsPath.endsWith('.changetour.md')) {
 		return passed;
 	}
 	const activeTour = CodeTourEditorProvider.activeDocumentTracker;
@@ -140,7 +140,7 @@ function pickTourUri(passed?: vscode.Uri): vscode.Uri | undefined {
 		return activeTour.uri;
 	}
 	const activeEditor = vscode.window.activeTextEditor;
-	if (activeEditor && activeEditor.document.uri.fsPath.endsWith('.codetour.md')) {
+	if (activeEditor && activeEditor.document.uri.fsPath.endsWith('.changetour.md')) {
 		return activeEditor.document.uri;
 	}
 	return undefined;

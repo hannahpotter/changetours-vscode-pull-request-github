@@ -811,7 +811,7 @@ export function registerCommands(
 				canSelectFolders: false,
 				canSelectMany: false,
 				filters: {
-					'Change Tours': ['codetour.md']
+					'Change Tours': ['changetour.md']
 				},
 				defaultUri: vscode.workspace.workspaceFolders?.[0].uri
 			});
@@ -833,12 +833,12 @@ export function registerCommands(
 			}
 
 			const defaultUri = vscode.workspace.workspaceFolders?.[0].uri
-				? vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'new-tour.codetour.md')
+				? vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, `${resolved.pr.number}.changetour.md`)
 				: undefined;
 
 			const uri = await vscode.window.showSaveDialog({
 				filters: {
-					'Change Tours': ['codetour.md']
+					'Change Tours': ['changetour.md']
 				},
 				defaultUri
 			});
@@ -871,8 +871,8 @@ export function registerCommands(
 				vscode.window.showErrorMessage(vscode.l10n.t('No active Change Tour document found.'));
 				return;
 			}
-			if (!docUri.path.endsWith('.codetour.md')) {
-				vscode.window.showErrorMessage(vscode.l10n.t('Current document is not a .codetour.md file.'));
+			if (!docUri.path.endsWith('.changetour.md')) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Current document is not a .changetour.md file.'));
 				return;
 			}
 
@@ -948,8 +948,8 @@ export function registerCommands(
 				vscode.window.showErrorMessage(vscode.l10n.t('No active Change Tour document found.'));
 				return;
 			}
-			if (!docUri.path.endsWith('.codetour.md')) {
-				vscode.window.showErrorMessage(vscode.l10n.t('Current document is not a .codetour.md file.'));
+			if (!docUri.path.endsWith('.changetour.md')) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Current document is not a .changetour.md file.'));
 				return;
 			}
 
