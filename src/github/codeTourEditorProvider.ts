@@ -75,14 +75,14 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	public static async addHunkToEditor(hunks: HunkReference[], mode: 'active' | 'quickpick') {
 		const document = CodeTourEditorProvider.activeDocumentTracker;
 		if (!document) {
-			vscode.window.showErrorMessage('No active Code Tour editor found. Please focus a Code Tour first.');
+			vscode.window.showErrorMessage('No active Change Tour editor found. Please focus a Change Tour first.');
 			return;
 		}
 
 		const uri = document.uri;
 		const panel = CodeTourEditorProvider._webviewPanels.get(uri.toString());
 		if (!panel) {
-			vscode.window.showErrorMessage('No Code Tour editor panel found.');
+			vscode.window.showErrorMessage('No Change Tour editor panel found.');
 			return;
 		}
 
@@ -110,7 +110,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				res: { command: 'codeTourEditor.scrollToNode', id: nodeId }
 			});
 		} else {
-			vscode.window.showErrorMessage(`No Code Tour editor found for ${key}`);
+			vscode.window.showErrorMessage(`No Change Tour editor found for ${key}`);
 		}
 	}
 
@@ -401,7 +401,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				},
 			});
 		} catch (e) {
-			Logger.error(`Error parsing code tour document: ${formatError(e)}`, 'CodeTourEditorProvider');
+			Logger.error(`Error parsing change tour document: ${formatError(e)}`, 'CodeTourEditorProvider');
 		}
 	}
 

@@ -76,11 +76,11 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 					prRepo: doc.prRepo!
 				};
 
-				this._view.title = vscode.l10n.t('Code Tour: Pull Request #{0}', doc.prNumber);
+				this._view.title = vscode.l10n.t('Change Tour: Pull Request #{0}', doc.prNumber);
 				vscode.commands.executeCommand('setContext', 'codetour:checkoutAvailable', !this.isPRCheckedOut);
 			} else {
 				CodeTourStepsTreeView.currentPRParams = undefined;
-				this._view.title = vscode.l10n.t('Code Tour Steps');
+				this._view.title = vscode.l10n.t('Change Tour Steps');
 				vscode.commands.executeCommand('setContext', 'codetour:checkoutAvailable', false);
 			}
 		}
@@ -120,7 +120,7 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 
 	getTreeItem(element: TourGroupNode | TourHunkNode | CodeTourDocument): vscode.TreeItem {
 		if ((element as CodeTourDocument).isPR !== undefined || !((element as TourNode).type)) {
-			// This is a CodeTourDocument
+			// This is a Change Tour document
 			const doc = element as CodeTourDocument;
 			const item = new vscode.TreeItem(doc.title, vscode.TreeItemCollapsibleState.Expanded);
 

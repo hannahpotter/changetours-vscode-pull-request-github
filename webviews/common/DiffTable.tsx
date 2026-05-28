@@ -60,7 +60,7 @@ export function DiffTable({ lines, onHunkHeaderDragStart, onHunkAddActive, onHun
 								className={`diff-line diff-hunk-header${draggable ? ' draggable-hunk' : ''}${isCovered ? ' diff-hunk-covered' : ''}${isSearchMatch ? ' diff-search-match' : ''}`}
 								draggable={draggable || undefined}
 								onDragStart={draggable ? e => onHunkHeaderDragStart!(e, i) : undefined}
-								title={draggable ? 'Drag this hunk into a Code Tour editor' : undefined}
+								title={draggable ? 'Drag this hunk into a Change Tour editor' : undefined}
 							>
 								<td className="diff-line-num" colSpan={2}>
 									<span className="diff-hunk-actions">

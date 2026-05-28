@@ -1704,7 +1704,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			)}
 			{isMismatch && (
 				<div className="tour-pr-warning">
-					<span>This Code Tour belongs to PR #{doc.prNumber}. "GoTo Diff" is unavailable until the PR is checked out.</span>
+					<span>This Change Tour belongs to PR #{doc.prNumber}. "GoTo Diff" is unavailable until the PR is checked out.</span>
 					{onCheckoutPR && (
 						<button className="tour-action-btn" onClick={onCheckoutPR}>
 							Checkout PR
@@ -1719,10 +1719,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					onChange={e => setTitleDraft(e.target.value)}
 					onBlur={commitTitle}
 					onKeyDown={handleTitleKeyDown}
-					placeholder="Code Tour Title"
+					placeholder="Change Tour Title"
 				/>
 			) : (
-				<h1 className="tour-title-readonly">{doc.title || 'Untitled Code Tour'}</h1>
+				<h1 className="tour-title-readonly">{doc.title || 'Untitled Change Tour'}</h1>
 			)}
 			<div className="tour-body">
 				{doc.children.map(node => (
@@ -1771,7 +1771,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 								className="tour-add-btn icon-button tour-assistant-button"
 								title={
 									!doc.isPR || !doc.prNumber
-										? 'Bind the tour to a pull request (via "Pull Request: New Code Tour") to enable AI generation'
+										? 'Bind the tour to a pull request (via "Pull Request: New Change Tour") to enable AI generation'
 										: 'Auto-generate the full Change Tour with AI'
 								}
 								disabled={!doc.isPR || !doc.prNumber || !!assistantStatus?.running}

@@ -493,7 +493,7 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 
 	return (
 		<div className="code-tour-changes">
-			<h2>All Changes for Code Tour &mdash; {title} <a>#{number}</a></h2>
+			<h2>All Changes for Change Tour &mdash; {title} <a>#{number}</a></h2>
 			<div className="summary">
 				{searchActive ? `${visibleFiles.length} of ${files.length} files match search` : `${files.length} changed file${files.length !== 1 ? 's' : ''}`} with{' '}
 				<span className="additions">+{totalAdditions}</span> and{' '}
@@ -540,7 +540,7 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, file
 							</button>
 						)}
 					</div>
-					<label className="changes-toggle-covered" title="Hide hunks already covered by Code Tour nodes">
+					<label className="changes-toggle-covered" title="Hide hunks already covered by Change Tour nodes">
 						<div className="checkbox-wrapper">
 							<input
 								type="checkbox"

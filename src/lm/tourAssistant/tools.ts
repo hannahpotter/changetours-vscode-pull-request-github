@@ -58,7 +58,7 @@ async function getTourPRContext(reposManager: RepositoriesManager): Promise<{ do
 	const document = getActiveTourDocument();
 	const doc = parseCodeTourMarkdown(document.getText());
 	if (!doc.isPR || !doc.prOwner || !doc.prRepo || doc.prNumber === undefined) {
-		throw new Error('The active Change Tour is not bound to a pull request. Create the tour via the "Pull Request: New Code Tour" command so it includes the required frontmatter (isPR, prNumber, prOwner, prRepo, baseRef).');
+		throw new Error('The active Change Tour is not bound to a pull request. Create the tour via the "Pull Request: New Change Tour" command so it includes the required frontmatter (isPR, prNumber, prOwner, prRepo, baseRef).');
 	}
 	const folderManager = reposManager.getManagerForRepository(doc.prOwner, doc.prRepo);
 	if (!folderManager) {

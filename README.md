@@ -1,11 +1,11 @@
-> Build Code Tours of Pull Request Changes in VS Code
+> Build Change Tours of Pull Request Changes in VS Code
 
-This extension allows you to create and review code tours of GitHub pull requests in Visual Studio Code.
+This extension allows you to create and review change tours of GitHub pull requests in Visual Studio Code.
 
 # How to use
-Open a pull request overview and choose to open an existing code tour file or create a new one for the pull request.
+Open a pull request overview and choose to open an existing change tour file or create a new one for the pull request.
 
-When a code tour is opened, an overview can be seen by clicking the GitHub Pull Request icon in the activity bar.
+When a change tour is opened, an overview can be seen by clicking the GitHub Pull Request icon in the activity bar.
 
 Actions to see all of the changes and open the pull request overview for a tour's associated pull request, as well as toggling edit and view modes for a tour are found in the editor tool bar.
 
@@ -17,7 +17,7 @@ The extension includes an LLM assistant that can build Change Tours for you. It 
 
 ## Entry points
 
-**Editor toolbar (✨ buttons)** - open a `.codetour.md` file created via "Pull Request: New Code Tour":
+**Editor toolbar (✨ buttons)** - open a `.codetour.md` file created via "Pull Request: New Change Tour":
 - The sparkle on the top-level toolbar auto-generates a full tour for the bound pull request.
 - The sparkle on each hunk drafts narration for just that hunk and inserts it immediately after.
 - The sparkle on each section improves the narration and highlights within that section only.
@@ -47,7 +47,7 @@ Relevant settings (search "Change Tour" in settings UI):
 
 ## Notes
 
-The assistant only generates valid tours: every hunk it inserts is resolved server-side against the bound pull request's diff, so refs and patch content are always correct. The toolbar button is disabled until the document has pull request frontmatter (created automatically by "Pull Request: New Code Tour").
+The assistant only generates valid tours: every hunk it inserts is resolved server-side against the bound pull request's diff, so refs and patch content are always correct. The toolbar button is disabled until the document has pull request frontmatter (created automatically by "Pull Request: New Change Tour").
 
 # Running extension locally
 [How to Build and Run](https://github.com/Microsoft/vscode-pull-request-github/wiki/Contributing#build-and-run)

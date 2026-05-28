@@ -811,7 +811,7 @@ export function registerCommands(
 				canSelectFolders: false,
 				canSelectMany: false,
 				filters: {
-					'Code Tours': ['codetour.md']
+					'Change Tours': ['codetour.md']
 				},
 				defaultUri: vscode.workspace.workspaceFolders?.[0].uri
 			});
@@ -838,13 +838,13 @@ export function registerCommands(
 
 			const uri = await vscode.window.showSaveDialog({
 				filters: {
-					'Code Tours': ['codetour.md']
+					'Change Tours': ['codetour.md']
 				},
 				defaultUri
 			});
 
 			if (uri) {
-				const content = `---\nisPR: true\nprNumber: ${resolved.pr.number}\nprOwner: ${resolved.pr.remote.owner}\nprRepo: ${resolved.pr.remote.repositoryName}\nbaseRef: ${resolved.pr.base.ref}\n---\n\n# New Code Tour for PR #${resolved.pr.number}\n\n`;
+				const content = `---\nisPR: true\nprNumber: ${resolved.pr.number}\nprOwner: ${resolved.pr.remote.owner}\nprRepo: ${resolved.pr.remote.repositoryName}\nbaseRef: ${resolved.pr.base.ref}\n---\n\n# New Change Tour for PR #${resolved.pr.number}\n\n`;
 				await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
 				await vscode.commands.executeCommand('vscode.open', uri, { preview: false });
 			}
@@ -868,7 +868,7 @@ export function registerCommands(
 				docUri = vscode.window.activeTextEditor?.document.uri;
 			}
 			if (!docUri) {
-				vscode.window.showErrorMessage(vscode.l10n.t('No active Code Tour document found.'));
+				vscode.window.showErrorMessage(vscode.l10n.t('No active Change Tour document found.'));
 				return;
 			}
 			if (!docUri.path.endsWith('.codetour.md')) {
@@ -901,10 +901,10 @@ export function registerCommands(
 						vscode.window.showErrorMessage(vscode.l10n.t('Could not find repository {0}/{1}', prOwner, prRepo));
 					}
 				} else {
-					vscode.window.showErrorMessage(vscode.l10n.t('Code tour does not contain valid pull request metadata.'));
+					vscode.window.showErrorMessage(vscode.l10n.t('Change Tour does not contain valid pull request metadata.'));
 				}
 			} catch (e) {
-				vscode.window.showErrorMessage(vscode.l10n.t('Failed to read code tour: {0}', e instanceof Error ? e.message : 'Unknown error'));
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to read change tour: {0}', e instanceof Error ? e.message : 'Unknown error'));
 			}
 		})
 	);
@@ -945,7 +945,7 @@ export function registerCommands(
 				docUri = vscode.window.activeTextEditor?.document.uri;
 			}
 			if (!docUri) {
-				vscode.window.showErrorMessage(vscode.l10n.t('No active Code Tour document found.'));
+				vscode.window.showErrorMessage(vscode.l10n.t('No active Change Tour document found.'));
 				return;
 			}
 			if (!docUri.path.endsWith('.codetour.md')) {
@@ -968,7 +968,7 @@ export function registerCommands(
 					const { prOwner, prRepo, prNumber } = parsed;
 					const folderManager = reposManager.getManagerForRepository(prOwner, prRepo);
 					if (folderManager) {
-						vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Loading Code Tour Pull Request') }, async () => {
+						vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Loading Change Tour Pull Request') }, async () => {
 							const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
 							if (prModel) {
 								CodeTourEditorProvider.toggleChangesForDocument(docUri);
@@ -980,10 +980,10 @@ export function registerCommands(
 						vscode.window.showErrorMessage(vscode.l10n.t('Could not find repository {0}/{1}', prOwner, prRepo));
 					}
 				} else {
-					vscode.window.showErrorMessage(vscode.l10n.t('Code tour does not contain valid pull request metadata.'));
+					vscode.window.showErrorMessage(vscode.l10n.t('Change Tour does not contain valid pull request metadata.'));
 				}
 			} catch (e) {
-				vscode.window.showErrorMessage(vscode.l10n.t('Failed to read code tour: {0}', e instanceof Error ? e.message : 'Unknown error'));
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to read change tour: {0}', e instanceof Error ? e.message : 'Unknown error'));
 			}
 		})
 	);
@@ -2030,7 +2030,7 @@ ${contents}
 		vscode.commands.registerCommand('pr.checkoutFromCodeTour', async (prNumber: number, owner: string, repo: string, docUri: vscode.Uri) => {
 			const folderManager = reposManager.getManagerForFile(docUri) ?? reposManager.folderManagers[0];
 			if (!folderManager || folderManager.gitHubRepositories.length === 0) {
-				return vscode.window.showErrorMessage(vscode.l10n.t('No repository found for this Code Tour.'));
+				return vscode.window.showErrorMessage(vscode.l10n.t('No repository found for this Change Tour.'));
 			}
 
 			// Try to find the exact PullRequestModel from cache first, prioritizing the already properly loaded upstream PR.
@@ -2054,7 +2054,7 @@ ${contents}
 				);
 			}
 
-			// Fallback exactly to what CodeTour provided just in case it truly lives on the fork or another repository
+			// Fallback exactly to what the Change Tour provided just in case it truly lives on the fork or another repository
 			if (!targetPR) {
 				targetPR = await folderManager.resolvePullRequest(owner, repo, prNumber, true);
 			}
@@ -2064,7 +2064,7 @@ ${contents}
 				return vscode.commands.executeCommand('pr.pick', targetPR, { openChangesToTheSide: true });
 			}
 
-			return vscode.window.showErrorMessage(vscode.l10n.t('Unable to resolve pull request for Code Tour checkout.'));
+			return vscode.window.showErrorMessage(vscode.l10n.t('Unable to resolve pull request for Change Tour checkout.'));
 		})
 	);
 

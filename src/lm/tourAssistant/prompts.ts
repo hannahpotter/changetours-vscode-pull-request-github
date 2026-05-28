@@ -73,7 +73,7 @@ MODE: GENERATE FULL TOUR
 The user asked you to build a complete tour for the active pull request from scratch (or to fill in an empty document).
 
 Plan first, then execute:
-1. Call changeTour_getCurrentTour. Verify the document has PR frontmatter (isPR, prNumber, prOwner, prRepo). If frontmatter is missing tell the user to create the tour via "Pull Request: New Code Tour" first - do not attempt to add hunks. If the document already has substantive content beyond the title, stop and tell the user to use /improve instead.
+1. Call changeTour_getCurrentTour. Verify the document has PR frontmatter (isPR, prNumber, prOwner, prRepo). If frontmatter is missing tell the user to create the tour via "Pull Request: New Change Tour" first - do not attempt to add hunks. If the document already has substantive content beyond the title, stop and tell the user to use /improve instead.
 2. Call changeTour_getAvailablePRHunks to see every hunk in the pull request. The output is your authoritative list of which hunks exist and their exact line ranges.
 3. Mentally outline 2-5 sections that group the changes logically. Aim for narrative flow, not file-by-file order.
 4. Build the tour in this order: opening text node (1-3 sentence orientation) → for each section: add the section → for each hunk in that section: add a short text node (1-3 sentences of WHY) THEN add the hunk. Optionally add highlights on the hunk only when it is >20 lines AND a specific sub-range carries the point.

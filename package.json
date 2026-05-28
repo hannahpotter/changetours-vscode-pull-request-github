@@ -119,7 +119,7 @@
 		"customEditors": [
 			{
 				"viewType": "codeTourEditor",
-				"displayName": "Code Tour Editor",
+				"displayName": "Change Tour Editor",
 				"selector": [
 					{
 						"filenamePattern": "*.codetour.md"
@@ -142,7 +142,6 @@
 						"ask"
 					],
 					"enumDescriptions": [
-						"Use the latest commit message",
 						"Use the branch name",
 						"Specify a custom title",
 						"Ask which of the above methods to use"
@@ -970,7 +969,7 @@
 				},
 				{
 					"id": "codetour:steps",
-					"name": "Code Tour Steps",
+					"name": "Change Tour Steps",
 					"when": "activeCodeTour",
 					"icon": "$(list-tree)"
 				},

@@ -5,7 +5,7 @@
 'use strict';
 
 /**
- * Represents a diff hunk reference embedded in a code tour document.
+ * Represents a diff hunk reference embedded in a Change Tour document.
  * Stored in the markdown as a fenced block:
  *   :::hunk file=<path> lines=<start>-<end> ref=<commitish> previousFile=<optional previous file path>
  *   <patch content>
@@ -298,11 +298,11 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		flushHunk();
 	}
 
-	return { title: title || 'Untitled Code Tour', prNumber, prOwner, prRepo, isPR, baseRef, children: rootChildren };
+	return { title: title || 'Untitled Change Tour', prNumber, prOwner, prRepo, isPR, baseRef, children: rootChildren };
 }
 
 /**
- * Serialize a CodeTourDocument back into markdown text.
+ * Serialize a Change Tour document back into markdown text.
  */
 export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 	const lines: string[] = [];
