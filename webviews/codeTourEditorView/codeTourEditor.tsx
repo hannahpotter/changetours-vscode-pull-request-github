@@ -7,6 +7,7 @@ import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type CodeTourDocument, type HighlightRange, type HunkReference, serializeHighlightAttribute, type TourTextNode } from '../../src/github/codeTourMarkdown';
 import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
+import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import  { type ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { addIcon, chevronDownIcon, diffIcon, diffSingleIcon, editIcon, gripperIcon, newCollectionIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, trashIcon } from '../components/icon';
@@ -401,30 +402,6 @@ function DropZoneBlock({
 }
 
 /* - Hunk display component ---------------------- */
-
-function indicesFromHighlights(lines: ParsedDiffLine[], highlights: HighlightRange[] | undefined): Set<number> {
-	const set = new Set<number>();
-	if (!highlights || highlights.length === 0) {
-		return set;
-	}
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (line.type === 'hunk-header') {
-			continue;
-		}
-		for (const r of highlights) {
-			if (r.side === 'new' && line.newLine !== undefined && line.newLine >= r.start && line.newLine <= r.end) {
-				set.add(i);
-				break;
-			}
-			if (r.side === 'old' && line.oldLine !== undefined && line.oldLine >= r.start && line.oldLine <= r.end) {
-				set.add(i);
-				break;
-			}
-		}
-	}
-	return set;
-}
 
 function rangesFromDrag(lines: ParsedDiffLine[], startIdx: number, endIdx: number): HighlightRange[] {
 	const lo = Math.min(startIdx, endIdx);

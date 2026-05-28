@@ -7,6 +7,7 @@
 import * as vscode from 'vscode';
 import { createHunkDirective, HunkReference, parseCodeTourMarkdown } from './codeTourMarkdown';
 import { RepositoriesManager } from './repositoriesManager';
+import { DiffSide } from '../common/comment';
 import Logger from '../common/logger';
 import { formatError } from '../common/utils';
 import { generateUuid } from '../common/uuid';
@@ -333,6 +334,100 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				const controller = this._activeAssistantRuns.get(requestId);
 				if (controller) {
 					controller.abort();
+				}
+				return;
+			}
+
+			case 'codeTourViewer.loadThreads': {
+				const { prNumber, prOwner, prRepo } = message.args as { prNumber: number; prOwner: string; prRepo: string };
+				try {
+					const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
+					if (!folderManager) {
+						panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
+						return;
+					}
+					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+					if (!pr) {
+						panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
+						return;
+					}
+					const threads = await pr.getReviewThreads();
+					panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads } });
+				} catch (e) {
+					Logger.error(`Failed to load review threads: ${formatError(e)}`, CodeTourEditorProvider.name);
+					panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
+				}
+				return;
+			}
+
+			case 'codeTourViewer.addComment': {
+				const { requestId, prNumber, prOwner, prRepo, file, endLine, side, body } = message.args as {
+					requestId: string;
+					prNumber: number;
+					prOwner: string;
+					prRepo: string;
+					file: string;
+					endLine: number;
+					side: 'LEFT' | 'RIGHT';
+					body: string;
+				};
+				try {
+					const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
+					if (!folderManager) {
+						throw new Error('No checked-out repository matches this pull request.');
+					}
+					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+					if (!pr) {
+						throw new Error('Pull request not found.');
+					}
+					const diffSide = side === 'LEFT' ? DiffSide.LEFT : DiffSide.RIGHT;
+					const thread = await pr.createReviewThread(body, file, endLine, endLine, diffSide, false);
+					if (!thread) {
+						throw new Error('Comment creation returned no thread.');
+					}
+					panel.webview.postMessage({
+						res: { command: 'codeTourViewer.commentPosted', requestId, thread },
+					});
+				} catch (e) {
+					Logger.error(`Failed to post review comment: ${formatError(e)}`, CodeTourEditorProvider.name);
+					panel.webview.postMessage({
+						res: { command: 'codeTourViewer.commentError', requestId, error: formatError(e) },
+					});
+				}
+				return;
+			}
+
+			case 'codeTourViewer.replyToThread': {
+				const { requestId, prNumber, prOwner, prRepo, threadId, inReplyToCommentNodeId, body } = message.args as {
+					requestId: string;
+					prNumber: number;
+					prOwner: string;
+					prRepo: string;
+					threadId: string;
+					inReplyToCommentNodeId: string;
+					body: string;
+				};
+				try {
+					const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
+					if (!folderManager) {
+						throw new Error('No checked-out repository matches this pull request.');
+					}
+					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+					if (!pr) {
+						throw new Error('Pull request not found.');
+					}
+					const comment = await pr.createCommentReply(body, inReplyToCommentNodeId, true);
+					if (!comment) {
+						throw new Error('Reply creation returned no comment.');
+					}
+					panel.webview.postMessage({
+						res: { command: 'codeTourViewer.replyPosted', requestId, threadId, comment },
+					});
+				} catch (e) {
+					Logger.error(`Failed to post reply: ${formatError(e)}`, CodeTourEditorProvider.name);
+					panel.webview.postMessage({
+						res: { command: 'codeTourViewer.commentError', requestId, error: formatError(e) },
+					});
 				}
 				return;
 			}

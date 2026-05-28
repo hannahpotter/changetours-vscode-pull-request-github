@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { render } from 'react-dom';
 import { ChangedFilesOverview } from './changesOverview';
 import { CodeTourEditor } from './codeTourEditor';
+import { CodeTourViewer, type ViewerInboxMessage } from './codeTourViewer';
 
 import type { CodeTourDocument, HunkReference, TourNode } from '../../src/github/codeTourMarkdown';
 import { getMessageHandler, MessageHandler } from '../common/message';
@@ -40,6 +41,7 @@ function Root() {
 	const [insertHunkCommand, setInsertHunkCommand] = useState<{ ts: number, payload: HunkReference[], mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string } | undefined>(undefined);
 	const [insertMultipleHunksCommand, setInsertMultipleHunksCommand] = useState<{ ts: number, payloads: HunkReference[] } | undefined>(undefined);
 	const [assistantStatus, setAssistantStatus] = useState<{ running: boolean; requestId?: string; label?: string; error?: string }>({ running: false });
+	const [viewerInbox, setViewerInbox] = useState<ViewerInboxMessage | undefined>(undefined);
 
 	useEffect(() => {
 		const h = getMessageHandler((message: any) => {
@@ -74,6 +76,12 @@ function Root() {
 					return;
 				case 'codeTourEditor.requestGroupsForQuickPick':
 					setInsertHunkCommand({ ts: Date.now(), payload: message.hunk, mode: 'quickpick' });
+					return;
+				case 'codeTourViewer.threadsLoaded':
+				case 'codeTourViewer.commentPosted':
+				case 'codeTourViewer.replyPosted':
+				case 'codeTourViewer.commentError':
+					setViewerInbox({ ts: Date.now(), message });
 					return;
 				case 'codeTourEditor.assistantEvent': {
 					const ev = message.event;
@@ -243,6 +251,20 @@ function Root() {
 
 	if (!doc) {
 		return <div className="loading-indicator">Loading...</div>;
+	}
+
+	if (!isEditMode) {
+		return (
+			<div style={{ display: 'flex', width: '100%', height: '100%' }}>
+				<CodeTourViewer
+					doc={doc}
+					activePR={activePR}
+					postMessage={msg => handler?.postMessage(msg) ?? Promise.resolve(undefined)}
+					inbox={viewerInbox}
+					onOpenDiff={onOpenDiff}
+				/>
+			</div>
+		);
 	}
 
 	return (

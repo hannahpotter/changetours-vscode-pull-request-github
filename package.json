@@ -3113,22 +3113,22 @@
 				{
 					"command": "pr.openOverviewFromCodeTour",
 					"group": "navigation",
-					"when": "resourceFilename =~ /\\.codetour\\.md$/"
+					"when": "resourceFilename =~ /\\.changetour\\.md$/"
 				},
 				{
 					"command": "pr.openCodeTourViewFromEditor",
 					"group": "navigation",
-					"when": "resourceFilename =~ /\\.codetour\\.md$/"
+					"when": "resourceFilename =~ /\\.changetour\\.md$/"
 				},
 				{
 					"command": "pr.codeTourEditor.toggleEditMode",
 					"group": "navigation",
-					"when": "resourceFilename =~ /\\.codetour\\.md$/"
+					"when": "resourceFilename =~ /\\.changetour\\.md$/"
 				},
 				{
 					"command": "pr.editTourWithClaudeCode",
 					"group": "navigation",
-					"when": "resourceFilename =~ /\\.codetour\\.md$/ && config.changeTour.assistant.enabled"
+					"when": "resourceFilename =~ /\\.changetour\\.md$/ && config.changeTour.assistant.enabled"
 				},
 				{
 					"command": "review.openFile",
