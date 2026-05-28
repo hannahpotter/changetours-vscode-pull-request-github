@@ -10,6 +10,7 @@ dist/browser/test/**
 documentation/**
 node_modules/**
 scripts/**
+!scripts/validate-change-tour.js
 src/**
 webviews/**
 **/test/**

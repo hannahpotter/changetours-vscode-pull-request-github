@@ -5,11 +5,11 @@
 
 import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { serializeHighlightAttribute, type CodeTourDocument, type HighlightRange, type HunkReference, type TourTextNode } from '../../src/github/codeTourMarkdown';
+import { type CodeTourDocument, type HighlightRange, type HunkReference, serializeHighlightAttribute, type TourTextNode } from '../../src/github/codeTourMarkdown';
 import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
 import { DiffTable } from '../common/DiffTable';
-import  { parsePatch, type ParsedDiffLine } from '../common/diffUtils';
-import { addIcon, chevronDownIcon, diffIcon, diffSingleIcon, editIcon, gripperIcon, newCollectionIcon, symbolStringIcon, trashIcon } from '../components/icon';
+import  { type ParsedDiffLine, parsePatch } from '../common/diffUtils';
+import { addIcon, chevronDownIcon, diffIcon, diffSingleIcon, editIcon, gripperIcon, newCollectionIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, trashIcon } from '../components/icon';
 
 type InsertKind = 'text' | 'code' | 'group';
 
@@ -54,6 +54,13 @@ interface EditorDocument {
 	children: EditorNode[];
 }
 
+export interface AssistantStatus {
+	running: boolean;
+	requestId?: string;
+	label?: string;
+	error?: string;
+}
+
 interface CodeTourEditorProps {
 	document: CodeTourDocument;
 	activePR?: { number: number; owner: string; repo: string };
@@ -69,6 +76,10 @@ interface CodeTourEditorProps {
 	onOpenDiff?: (hunk: HunkReference) => void;
 	onCheckoutPR?: () => void;
 	onError?: (message: string) => void;
+	assistantStatus?: AssistantStatus;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
+	onCancelAssistant?: () => void;
+	onDismissAssistantError?: () => void;
 }
 
 const HUNK_MIME_TYPE = 'application/vnd.codetour.hunk+json';
@@ -450,6 +461,8 @@ function HunkBlock({
 	onHighlightsChange,
 	activePR,
 	isEditMode,
+	onRunAssistant,
+	assistantRunning,
 }: {
 	node: EditorHunkNode;
 	doc: EditorDocument;
@@ -458,6 +471,8 @@ function HunkBlock({
 	onHighlightsChange?: (hunkId: string, highlights: HighlightRange[]) => void;
 	activePR?: { number: number; owner: string; repo: string };
 	isEditMode: boolean;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
+	assistantRunning?: boolean;
 }) {
 	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
@@ -562,6 +577,17 @@ function HunkBlock({
 					<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
 				</div>
 				<div className="tour-hunk-actions">
+					{isEditMode && onRunAssistant && (
+						<button
+							type="button"
+							className="tour-action-btn icon-button tour-assistant-button"
+							title="Draft narration for this hunk with AI"
+							disabled={!!assistantRunning}
+							onClick={() => onRunAssistant('narrateHunk', { hunkId: node.id })}
+						>
+							{sparkleIcon}
+						</button>
+					)}
 					{highlightEditingEnabled && (
 						<button
 							type="button"
@@ -733,6 +759,8 @@ function GroupBlock({
 	activePR,
 	isEditMode,
 	onError,
+	onRunAssistant,
+	assistantRunning,
 }: {
 	node: EditorGroupNode;
 	doc: EditorDocument;
@@ -756,6 +784,8 @@ function GroupBlock({
 	isEditMode: boolean;
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
+	assistantRunning?: boolean;
 }) {
 	const [collapsed, setCollapsed] = useState(false);
 	const [groupDropActive, setGroupDropActive] = useState(false);
@@ -841,6 +871,17 @@ function GroupBlock({
 				) : (
 					<span className="tour-group-title-readonly">{node.title || 'Untitled Section'}</span>
 				)}
+				{isEditMode && onRunAssistant && (
+					<button
+						type="button"
+						className="tour-action-btn icon-button tour-assistant-button"
+						title="Improve this section's narration with AI"
+						disabled={!!assistantRunning}
+						onClick={() => onRunAssistant('improveSection', { groupId: node.id })}
+					>
+						{sparkleIcon}
+					</button>
+				)}
 				{isEditMode && (
 					<button className="tour-remove-btn icon-button" title="Remove section" onClick={() => onRemove(node.id)}>
 						{trashIcon}
@@ -885,6 +926,8 @@ function GroupBlock({
 								activePR={activePR}
 								isEditMode={isEditMode}
 								onError={onError}
+								onRunAssistant={onRunAssistant}
+								assistantRunning={assistantRunning}
 							/>
 						</React.Fragment>
 					))}
@@ -928,6 +971,8 @@ function NodeRenderer({
 	activePR,
 	isEditMode,
 	onError,
+	onRunAssistant,
+	assistantRunning,
 }: {
 	node: EditorNode;
 	doc: EditorDocument;
@@ -951,6 +996,8 @@ function NodeRenderer({
 	isEditMode: boolean;
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
+	assistantRunning?: boolean;
 }) {
 	switch (node.type) {
 		case 'group':
@@ -988,6 +1035,8 @@ function NodeRenderer({
 						activePR={activePR}
 						isEditMode={isEditMode}
 						onError={onError}
+						onRunAssistant={onRunAssistant}
+						assistantRunning={assistantRunning}
 					/>
 				</NodeShell>
 			);
@@ -1018,7 +1067,7 @@ function NodeRenderer({
 					onReorder={onReorder}
 					isEditMode={isEditMode}
 				>
-					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} activePR={activePR} isEditMode={isEditMode} />
+					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} activePR={activePR} isEditMode={isEditMode} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} />
 				</NodeShell>
 			);
 		case 'dropzone':
@@ -1137,7 +1186,7 @@ function InsertGap({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError, assistantStatus, onRunAssistant, onCancelAssistant, onDismissAssistantError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [titleDraft, setTitleDraft] = useState(initialDoc.title);
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
@@ -1622,6 +1671,37 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 
 	return (
 		<div className={`code-tour-editor${isEditMode ? ' is-edit-mode' : ''}`}>
+			{assistantStatus?.running && (
+				<div className="tour-assistant-streaming" role="status" aria-live="polite">
+					<span className="tour-assistant-streaming-icon">{sparkleIcon}</span>
+					<span className="tour-assistant-streaming-label">{assistantStatus.label ?? 'Working…'}</span>
+					{onCancelAssistant && (
+						<button
+							type="button"
+							className="tour-action-btn icon-button tour-assistant-stop-button"
+							title="Stop the AI assistant"
+							onClick={onCancelAssistant}
+						>
+							{stopCircleIcon}
+						</button>
+					)}
+				</div>
+			)}
+			{assistantStatus?.error && !assistantStatus.running && (
+				<div className="tour-assistant-error" role="alert">
+					<span>⚠️ {assistantStatus.error}</span>
+					{onDismissAssistantError && (
+						<button
+							type="button"
+							className="tour-action-btn icon-button"
+							title="Dismiss"
+							onClick={onDismissAssistantError}
+						>
+							×
+						</button>
+					)}
+				</div>
+			)}
 			{isMismatch && (
 				<div className="tour-pr-warning">
 					<span>This Code Tour belongs to PR #{doc.prNumber}. "GoTo Diff" is unavailable until the PR is checked out.</span>
@@ -1676,6 +1756,8 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							activePR={activePR}
 							isEditMode={isEditMode}
 							onError={onError}
+							onRunAssistant={onRunAssistant}
+							assistantRunning={!!assistantStatus?.running}
 						/>
 					</React.Fragment>
 				))}
@@ -1684,6 +1766,20 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 						<button className="tour-add-btn icon-button" title="Add text" onClick={() => handleAddText()}>{symbolStringIcon}</button>
 						<button className="tour-add-btn icon-button" title="Add diff" onClick={() => handleAddCode()}>{diffIcon}</button>
 						<button className="tour-add-btn icon-button" title="Add section" onClick={() => handleAddGroup()}>{newCollectionIcon}</button>
+						{onRunAssistant && (
+							<button
+								className="tour-add-btn icon-button tour-assistant-button"
+								title={
+									!doc.isPR || !doc.prNumber
+										? 'Bind the tour to a pull request (via "Pull Request: New Code Tour") to enable AI generation'
+										: 'Auto-generate the full Change Tour with AI'
+								}
+								disabled={!doc.isPR || !doc.prNumber || !!assistantStatus?.running}
+								onClick={() => onRunAssistant('autoGenerate')}
+							>
+								{sparkleIcon}
+							</button>
+						)}
 					</div>
 				)}
 			</div>

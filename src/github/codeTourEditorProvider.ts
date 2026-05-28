@@ -11,6 +11,7 @@ import Logger from '../common/logger';
 import { formatError } from '../common/utils';
 import { generateUuid } from '../common/uuid';
 import { IRequestMessage, WebviewBase } from '../common/webview';
+import { AssistantMode, runAssistant } from '../lm/tourAssistant/orchestrator';
 
 
 export const CODE_TOUR_EDITOR_VIEW_TYPE = 'codeTourEditor';
@@ -22,8 +23,10 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 
 	private static readonly _webviewPanels = new Map<string, vscode.WebviewPanel>();
 	private _pendingWebviewEdits = new Map<string, number>();
+	// Active assistant runs keyed by requestId so the webview's stop button can abort the matching run.
+	private _activeAssistantRuns = new Map<string, AbortController>();
 
-	constructor(private readonly _extensionUri: vscode.Uri, private readonly _reposManager: RepositoriesManager) {
+	constructor(private readonly _extensionUri: vscode.Uri, private readonly _reposManager: RepositoriesManager, private readonly _extensionContext: vscode.ExtensionContext) {
 		super();
 	}
 
@@ -112,7 +115,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	}
 
 	public static register(context: vscode.ExtensionContext, reposManager: RepositoriesManager): vscode.Disposable {
-		const provider = new CodeTourEditorProvider(context.extensionUri, reposManager);
+		const provider = new CodeTourEditorProvider(context.extensionUri, reposManager, context);
 		return vscode.window.registerCustomEditorProvider(
 			CODE_TOUR_EDITOR_VIEW_TYPE,
 			provider,
@@ -314,6 +317,26 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				return;
 			}
 
+			case 'codeTourEditor.runAssistant': {
+				const { mode, hunkId, groupId, requestId } = message.args as {
+					mode: 'autoGenerate' | 'narrateHunk' | 'improveSection';
+					hunkId?: string;
+					groupId?: string;
+					requestId: string;
+				};
+				this._runAssistantForWebview(panel, mode, requestId, { hunkId, groupId });
+				return;
+			}
+
+			case 'codeTourEditor.cancelAssistant': {
+				const { requestId } = message.args as { requestId: string };
+				const controller = this._activeAssistantRuns.get(requestId);
+				if (controller) {
+					controller.abort();
+				}
+				return;
+			}
+
 			case 'codeTourEditor.requestChanges': {
 				try {
 					const parsed = parseCodeTourMarkdown(document.getText());
@@ -379,6 +402,62 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			});
 		} catch (e) {
 			Logger.error(`Error parsing code tour document: ${formatError(e)}`, 'CodeTourEditorProvider');
+		}
+	}
+
+	/**
+	 * Runs the Change Tour assistant orchestrator for a webview-initiated request
+	 * and pipes events back to the webview so it can render a streaming indicator
+	 * and surface errors. Write tools mutate the open document in place; the
+	 * webview will re-render via the existing onDidChangeTextDocument flow.
+	 */
+	private async _runAssistantForWebview(
+		panel: vscode.WebviewPanel,
+		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection',
+		requestId: string,
+		ctx: { hunkId?: string; groupId?: string },
+	): Promise<void> {
+		const controller = new AbortController();
+		this._activeAssistantRuns.set(requestId, controller);
+
+		const send = (event: unknown) => {
+			panel.webview.postMessage({
+				res: { command: 'codeTourEditor.assistantEvent', requestId, event },
+			});
+		};
+
+		const assistantMode: AssistantMode = mode === 'narrateHunk' ? 'narrate' : mode === 'improveSection' ? 'improve' : 'generate';
+		const userPrompt = this._buildAssistantPromptForButton(mode, ctx);
+
+		try {
+			for await (const event of runAssistant(this._extensionContext, {
+				mode: assistantMode,
+				userPrompt,
+				signal: controller.signal,
+			})) {
+				send(event);
+				if (event.type === 'done') {
+					break;
+				}
+			}
+		} catch (err) {
+			send({ type: 'done', reason: 'error', error: err instanceof Error ? err.message : String(err) });
+		} finally {
+			this._activeAssistantRuns.delete(requestId);
+		}
+	}
+
+	private _buildAssistantPromptForButton(
+		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection',
+		ctx: { hunkId?: string; groupId?: string },
+	): string {
+		switch (mode) {
+			case 'autoGenerate':
+				return 'Generate a complete Change Tour for the active pull request, replacing or extending whatever is currently in the document.';
+			case 'narrateHunk':
+				return `Draft narration for the hunk with id "${ctx.hunkId}" and insert it immediately after that hunk.`;
+			case 'improveSection':
+				return `Improve the section with id "${ctx.groupId}" - tighten the narration of its children, add highlights to large hunks where useful, and surface obvious gaps. Do not modify nodes outside this section.`;
 		}
 	}
 

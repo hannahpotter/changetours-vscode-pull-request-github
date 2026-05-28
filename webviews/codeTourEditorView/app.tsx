@@ -15,6 +15,19 @@ export function main() {
 	render(<Root />, document.getElementById('app'));
 }
 
+function toolCallLabel(name: string, input: any): string {
+	switch (name) {
+		case 'changeTour_getCurrentTour': return 'Reading current tour…';
+		case 'changeTour_getAvailablePRHunks': return 'Reading PR hunks…';
+		case 'changeTour_addSectionToTour': return `Adding section "${input?.title ?? ''}"…`;
+		case 'changeTour_addTextNodeToTour': return 'Adding narration…';
+		case 'changeTour_addHunkToTour': return `Adding hunk ${input?.file ?? '?'}:${input?.startLine ?? '?'}-${input?.endLine ?? '?'}…`;
+		case 'changeTour_setHunkHighlights': return 'Updating highlights…';
+		case 'changeTour_removeTourNode': return 'Removing node…';
+		default: return name;
+	}
+}
+
 function Root() {
 	const [doc, setDoc] = useState<CodeTourDocument | undefined>(undefined);
 	const [activePR, setActivePR] = useState<{ number: number; owner: string; repo: string } | undefined>(undefined);
@@ -26,6 +39,7 @@ function Root() {
 	const [activeNodeId, setActiveNodeId] = useState<string | undefined>(undefined);
 	const [insertHunkCommand, setInsertHunkCommand] = useState<{ ts: number, payload: HunkReference[], mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string } | undefined>(undefined);
 	const [insertMultipleHunksCommand, setInsertMultipleHunksCommand] = useState<{ ts: number, payloads: HunkReference[] } | undefined>(undefined);
+	const [assistantStatus, setAssistantStatus] = useState<{ running: boolean; requestId?: string; label?: string; error?: string }>({ running: false });
 
 	useEffect(() => {
 		const h = getMessageHandler((message: any) => {
@@ -61,6 +75,33 @@ function Root() {
 				case 'codeTourEditor.requestGroupsForQuickPick':
 					setInsertHunkCommand({ ts: Date.now(), payload: message.hunk, mode: 'quickpick' });
 					return;
+				case 'codeTourEditor.assistantEvent': {
+					const ev = message.event;
+					const reqId = message.requestId;
+					setAssistantStatus(prev => {
+						// Ignore stale events from a previous request.
+						if (prev.requestId && prev.requestId !== reqId) {
+							return prev;
+						}
+						if (ev.type === 'started') {
+							return { running: true, requestId: reqId, label: `Using ${ev.providerLabel}…` };
+						}
+						if (ev.type === 'tool_call') {
+							return { ...prev, running: true, requestId: reqId, label: toolCallLabel(ev.name, ev.input) };
+						}
+						if (ev.type === 'text') {
+							return { ...prev, running: true, requestId: reqId };
+						}
+						if (ev.type === 'done') {
+							if (ev.reason === 'error') {
+								return { running: false, error: ev.error };
+							}
+							return { running: false };
+						}
+						return prev;
+					});
+					return;
+				}
 			}
 		});
 		setHandler(h);
@@ -174,6 +215,32 @@ function Root() {
 		setInsertMultipleHunksCommand({ ts: Date.now(), payloads: hunks });
 	}, []);
 
+	const onRunAssistant = useCallback((mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => {
+		if (!handler || assistantStatus.running) {
+			return;
+		}
+		const requestId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		setAssistantStatus({ running: true, requestId, label: 'Starting…' });
+		handler.postMessage({
+			command: 'codeTourEditor.runAssistant',
+			args: { mode, hunkId: ctx?.hunkId, groupId: ctx?.groupId, requestId },
+		});
+	}, [handler, assistantStatus.running]);
+
+	const onCancelAssistant = useCallback(() => {
+		if (!handler || !assistantStatus.running || !assistantStatus.requestId) {
+			return;
+		}
+		handler.postMessage({
+			command: 'codeTourEditor.cancelAssistant',
+			args: { requestId: assistantStatus.requestId },
+		});
+	}, [handler, assistantStatus.running, assistantStatus.requestId]);
+
+	const onDismissAssistantError = useCallback(() => {
+		setAssistantStatus(prev => ({ ...prev, error: undefined }));
+	}, []);
+
 	if (!doc) {
 		return <div className="loading-indicator">Loading...</div>;
 	}
@@ -196,6 +263,10 @@ function Root() {
 					onOpenDiff={onOpenDiff}
 					onCheckoutPR={onCheckoutPR}
 					onError={onError}
+					assistantStatus={assistantStatus}
+					onRunAssistant={onRunAssistant}
+					onCancelAssistant={onCancelAssistant}
+					onDismissAssistantError={onDismissAssistantError}
 				/>
 			</div>
 			{isChangesOpen && (

@@ -225,6 +225,13 @@ async function getExtensionConfig(target, mode, env) {
 		plugins.push(new webpack.ProvidePlugin({
 			Buffer: ['buffer', 'Buffer']
 		}));
+		// The Anthropic SDK pulls in `node:child_process` and other Node-only
+		// builtins that don't exist in VS Code Web. Swap our anthropicProvider
+		// module with a stub that yields a clean error if invoked at runtime.
+		plugins.push(new webpack.NormalModuleReplacementPlugin(
+			/[\\/]anthropicProvider(\.ts)?$/,
+			path.resolve(__dirname, 'src', 'lm', 'tourAssistant', 'anthropicProvider.web.ts'),
+		));
 	}
 
 	const entry = {
@@ -384,18 +391,30 @@ async function getExtensionConfig(target, mode, env) {
 			extensions: ['.ts', '.tsx', '.js', '.jsx', '.json'],
 			symlinks: false,
 		},
-		externals: {
-			vscode: 'commonjs vscode',
-			// 'utf-8-validate': 'utf-8-validate',
-			// 'bufferutil': 'bufferutil',
-			// 'encoding': 'encoding',
-			'applicationinsights-native-metrics': 'applicationinsights-native-metrics',
-			'@opentelemetry/tracing': '@opentelemetry/tracing',
-			'@opentelemetry/instrumentation': '@opentelemetry/instrumentation',
-			'@azure/opentelemetry-instrumentation-azure-sdk': '@azure/opentelemetry-instrumentation-azure-sdk',
-			'fs': 'fs',
-			'mocha': 'commonjs mocha',
-		},
+		externals: [
+			{
+				vscode: 'commonjs vscode',
+				// 'utf-8-validate': 'utf-8-validate',
+				// 'bufferutil': 'bufferutil',
+				// 'encoding': 'encoding',
+				'applicationinsights-native-metrics': 'applicationinsights-native-metrics',
+				'@opentelemetry/tracing': '@opentelemetry/tracing',
+				'@opentelemetry/instrumentation': '@opentelemetry/instrumentation',
+				'@azure/opentelemetry-instrumentation-azure-sdk': '@azure/opentelemetry-instrumentation-azure-sdk',
+				'fs': 'fs',
+				'mocha': 'commonjs mocha',
+			},
+			// Pass through any `node:`-prefixed import (e.g. `node:child_process`,
+			// `node:crypto`) as a commonjs external. The Node runtime handles them
+			// natively; webpack 5 otherwise errors with `UnhandledSchemeError`.
+			// Some npm packages (e.g. @anthropic-ai/sdk) use the `node:` form.
+			function ({ request }, callback) {
+				if (request && request.startsWith('node:')) {
+					return callback(null, `commonjs ${request}`);
+				}
+				callback();
+			},
+		],
 		plugins: plugins,
 		stats: {
 			preset: 'errors-warnings',

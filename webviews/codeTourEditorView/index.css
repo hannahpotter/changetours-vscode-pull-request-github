@@ -431,6 +431,83 @@
 	background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
 }
 
+/* - LLM Assistant streaming indicator -------- */
+
+.tour-assistant-streaming {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	margin-bottom: 12px;
+	border-radius: 4px;
+	background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+	border: 1px solid var(--vscode-focusBorder);
+	color: var(--vscode-editor-foreground);
+	font-size: 13px;
+	position: sticky;
+	top: 0;
+	z-index: 20;
+}
+
+.tour-assistant-streaming-icon {
+	display: inline-flex;
+	align-items: center;
+	color: var(--vscode-focusBorder);
+	animation: tour-assistant-pulse 1.4s ease-in-out infinite;
+}
+
+.tour-assistant-streaming-icon .icon {
+	width: 16px;
+	height: 16px;
+}
+
+.tour-assistant-streaming-label {
+	flex: 1;
+	color: var(--vscode-descriptionForeground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tour-assistant-stop-button {
+	margin-left: auto;
+	color: var(--vscode-errorForeground, var(--vscode-foreground));
+}
+
+.tour-assistant-error {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 8px 12px;
+	margin-bottom: 12px;
+	border-radius: 4px;
+	background: var(--vscode-inputValidation-errorBackground, rgba(255, 100, 100, 0.15));
+	border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+	color: var(--vscode-editor-foreground);
+	font-size: 13px;
+}
+
+.tour-assistant-error > span {
+	flex: 1;
+}
+
+/* The sparkle/✨ accent on assistant buttons inherits the standard
+ * .tour-add-btn.icon-button + .tour-action-btn.icon-button toolbar style.
+ * We just tint the icon to the focus-border (theme accent) color so it
+ * reads as "AI/automated" at a glance without breaking layout. */
+.tour-assistant-button {
+	color: var(--vscode-focusBorder);
+}
+
+.tour-assistant-button:disabled {
+	color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+}
+
+@keyframes tour-assistant-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.45; }
+}
+
 /* - PR Warning Banner ---------------------- */
 
 .tour-pr-warning {

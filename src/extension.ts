@@ -39,6 +39,9 @@ import { StateManager } from './issues/stateManager';
 import { IssueContextProvider } from './lm/issueContextProvider';
 import { PullRequestContextProvider } from './lm/pullRequestContextProvider';
 import { registerTools } from './lm/tools/tools';
+import { registerExternalIntegrationCommands } from './lm/tourAssistant/claudeCodeBridge';
+import { registerChangeTourChatParticipant } from './lm/tourAssistant/participant';
+import { registerTourAssistantTools } from './lm/tourAssistant/tools';
 import { migrate } from './migrations';
 import { NotificationsFeatureRegister } from './notifications/notificationsFeatureRegistar';
 import { NotificationsManager } from './notifications/notificationsManager';
@@ -308,6 +311,21 @@ function initChat(context: vscode.ExtensionContext, credentialStore: CredentialS
 		registerTools(context, credentialStore, reposManager);
 	} else {
 		initBasedOnSettingChange(PR_SETTINGS_NAMESPACE, EXPERIMENTAL_CHAT, chatEnabled, () => registerTools(context, credentialStore, reposManager), context.subscriptions);
+	}
+
+	// Change Tour assistant - independent of EXPERIMENTAL_CHAT, gated on its own setting.
+	const TOUR_ASSISTANT_NAMESPACE = 'changeTour.assistant';
+	const TOUR_ASSISTANT_ENABLED = 'enabled';
+	const tourAssistantEnabled = () => vscode.workspace.getConfiguration(TOUR_ASSISTANT_NAMESPACE).get<boolean>(TOUR_ASSISTANT_ENABLED, true);
+	const initTourAssistant = () => {
+		registerTourAssistantTools(context, reposManager);
+		context.subscriptions.push(registerChangeTourChatParticipant(context));
+		registerExternalIntegrationCommands(context);
+	};
+	if (tourAssistantEnabled()) {
+		initTourAssistant();
+	} else {
+		initBasedOnSettingChange(TOUR_ASSISTANT_NAMESPACE, TOUR_ASSISTANT_ENABLED, tourAssistantEnabled, initTourAssistant, context.subscriptions);
 	}
 }
 
