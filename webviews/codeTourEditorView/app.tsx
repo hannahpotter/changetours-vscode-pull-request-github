@@ -32,7 +32,7 @@ function toolCallLabel(name: string, input: any): string {
 function Root() {
 	const [doc, setDoc] = useState<CodeTourDocument | undefined>(undefined);
 	const [activePR, setActivePR] = useState<{ number: number; owner: string; repo: string } | undefined>(undefined);
-	const [isEditMode, setIsEditMode] = useState(true);
+	const [isEditMode, setIsEditMode] = useState(false);
 	const [handler, setHandler] = useState<MessageHandler | undefined>(undefined);
 	const [scrollToNode, setScrollToNode] = useState<{ id: string; ts: number } | undefined>(undefined);
 	const [isChangesOpen, setIsChangesOpen] = useState(false);
@@ -49,6 +49,9 @@ function Root() {
 				case 'codeTourEditor.initialize':
 					setDoc(message.data);
 					setActivePR(message.activePR);
+					if (message.initialEditMode !== undefined) {
+						setIsEditMode(!!message.initialEditMode);
+					}
 					return;
 				case 'codeTourEditor.updateActivePR':
 					setActivePR(message.activePR);

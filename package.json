@@ -1047,6 +1047,11 @@
 				"category": "%command.pull.request.category%"
 			},
 			{
+				"command": "pr.editCodeTour",
+				"title": "%command.pr.editCodeTour.title%",
+				"category": "%command.pull.request.category%"
+			},
+			{
 				"command": "pr.editTourWithClaudeCode",
 				"title": "Edit Change Tour with Claude Code (Terminal)",
 				"category": "Change Tour",
@@ -2165,6 +2170,10 @@
 				},
 				{
 					"command": "pr.newCodeTour",
+					"when": "false"
+				},
+				{
+					"command": "pr.editCodeTour",
 					"when": "false"
 				},
 				{
@@ -3604,12 +3613,17 @@
 				{
 					"command": "pr.openCodeTour",
 					"group": "checkout@0",
-					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu && github:prHasChangeTour"
+				},
+				{
+					"command": "pr.editCodeTour",
+					"group": "checkout@1",
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu && github:prHasChangeTour"
 				},
 				{
 					"command": "pr.newCodeTour",
 					"group": "checkout@1",
-					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu && !github:prHasChangeTour"
 				},
 				{
 					"command": "pr.openChanges",

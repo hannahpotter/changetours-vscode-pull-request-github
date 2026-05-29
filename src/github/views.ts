@@ -114,6 +114,7 @@ export interface PullRequest extends Issue {
 	busy?: boolean;
 	loadingCommit?: string;
 	generateDescriptionTitle?: string;
+	hasChangeTour?: boolean;
 }
 
 export interface ChangedFileInfo {
@@ -198,6 +199,7 @@ export interface BaseContext {
 
 export interface OverviewContext extends BaseContext {
 	'github:checkoutMenu': true;
+	'github:prHasChangeTour': boolean;
 }
 
 export interface ReadyForReviewContext extends BaseContext {

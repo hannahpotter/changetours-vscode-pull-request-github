@@ -205,6 +205,7 @@
 	"command.pr.openChanges.title": "Open Changes",
 	"command.pr.openCodeTour.title": "View Change Tour",
 	"command.pr.newCodeTour.title": "New Change Tour",
+	"command.pr.editCodeTour.title": "Edit Change Tour",
 	"command.pr.openOverviewFromCodeTour.title": "Open Pull Request Overview",
 	"command.pr.openCodeTourViewFromEditor.title": "Open Changes",
 	"command.pr.codeTourEditor.toggleEditMode.title": "Toggle Edit/Show Mode",

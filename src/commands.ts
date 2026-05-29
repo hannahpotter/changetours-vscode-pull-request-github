@@ -21,6 +21,7 @@ import { asTempStorageURI, fromPRUri, fromReviewUri, Schemes, toPRUri } from './
 import { formatError } from './common/utils';
 import { EXTENSION_ID } from './constants';
 import { CodeTourEditorProvider } from './github/codeTourEditorProvider';
+import { ensureChangeTourDir, findExistingChangeTour, getChangeTourUri } from './github/codeTourFileLocator';
 import { parseCodeTourMarkdown } from './github/codeTourMarkdown';
 import { CrossChatSessionWithPR } from './github/copilotApi';
 import { CopilotRemoteAgentManager, SessionIdForPr } from './github/copilotRemoteAgent';
@@ -804,8 +805,30 @@ export function registerCommands(
 		}),
 	);
 
+	// View Change Tour: open the existing tour file for the PR in view mode.
+	// Falls back to a file picker only when invoked without a PR context (e.g. from the
+	// command palette without an active PR overview).
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pr.openCodeTour', async () => {
+		vscode.commands.registerCommand('pr.openCodeTour', async (ctx: BaseContext | undefined) => {
+			if (ctx) {
+				const resolved = await resolvePr(ctx);
+				if (!resolved) {
+					return;
+				}
+				const repoRoot = resolved.folderManager.repository.rootUri;
+				const existing = await findExistingChangeTour(repoRoot, resolved.pr.number, resolved.pr.title);
+				if (!existing) {
+					vscode.window.showInformationMessage(
+						vscode.l10n.t('No Change Tour exists for PR #{0} yet. Use "New Change Tour" to create one.', resolved.pr.number),
+					);
+					return;
+				}
+				CodeTourEditorProvider.requestInitialMode(existing, 'view');
+				await vscode.commands.executeCommand('vscode.openWith', existing, 'codeTourEditor', { preview: false });
+				return;
+			}
+
+			// No PR context - keep the file-picker fallback for ad-hoc use.
 			const uris = await vscode.window.showOpenDialog({
 				canSelectFiles: true,
 				canSelectFolders: false,
@@ -815,13 +838,16 @@ export function registerCommands(
 				},
 				defaultUri: vscode.workspace.workspaceFolders?.[0].uri
 			});
-
 			if (uris && uris.length > 0) {
-				await vscode.commands.executeCommand('vscode.open', uris[0], { preview: false });
+				CodeTourEditorProvider.requestInitialMode(uris[0], 'view');
+				await vscode.commands.executeCommand('vscode.openWith', uris[0], 'codeTourEditor', { preview: false });
 			}
 		}),
 	);
 
+	// New Change Tour: create the canonical tour file for this PR (under
+	// <repo-root>/.changetour/<prNumber>-<sanitized-title>.changetour.md) and open it
+	// in edit mode. If a tour already exists for the PR, just opens it in edit mode.
 	context.subscriptions.push(
 		vscode.commands.registerCommand('pr.newCodeTour', async (ctx: BaseContext | undefined) => {
 			if (!ctx) {
@@ -831,23 +857,51 @@ export function registerCommands(
 			if (!resolved) {
 				return;
 			}
+			const repoRoot = resolved.folderManager.repository.rootUri;
 
-			const defaultUri = vscode.workspace.workspaceFolders?.[0].uri
-				? vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, `${resolved.pr.number}.changetour.md`)
-				: undefined;
-
-			const uri = await vscode.window.showSaveDialog({
-				filters: {
-					'Change Tours': ['changetour.md']
-				},
-				defaultUri
-			});
-
-			if (uri) {
-				const content = `---\nisPR: true\nprNumber: ${resolved.pr.number}\nprOwner: ${resolved.pr.remote.owner}\nprRepo: ${resolved.pr.remote.repositoryName}\nbaseRef: ${resolved.pr.base.ref}\n---\n\n# New Change Tour for PR #${resolved.pr.number}\n\n`;
+			let uri = await findExistingChangeTour(repoRoot, resolved.pr.number, resolved.pr.title);
+			const created = !uri;
+			if (!uri) {
+				uri = getChangeTourUri(repoRoot, resolved.pr.number, resolved.pr.title);
+				await ensureChangeTourDir(repoRoot);
+				const content = `---\nisPR: true\nprNumber: ${resolved.pr.number}\nprOwner: ${resolved.pr.remote.owner}\nprRepo: ${resolved.pr.remote.repositoryName}\nbaseRef: ${resolved.pr.base.ref}\n---\n\n# ${resolved.pr.title}\n\n`;
 				await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
-				await vscode.commands.executeCommand('vscode.open', uri, { preview: false });
 			}
+
+			CodeTourEditorProvider.requestInitialMode(uri, 'edit');
+			await vscode.commands.executeCommand('vscode.openWith', uri, 'codeTourEditor', { preview: false });
+
+			// If we just created the file, push a partial update to the PR overview so its
+			// dropdown swaps from "New Change Tour" to "View / Edit Change Tour" immediately.
+			if (created) {
+				PullRequestOverviewPanel
+					.findPanel(resolved.pr.remote.owner, resolved.pr.remote.repositoryName, resolved.pr.number)
+					?.notifyHasChangeTourChanged(true);
+			}
+		}),
+	);
+
+	// Edit Change Tour: open the existing tour file in edit mode. Errors if no tour exists
+	// (callers should show "New Change Tour" instead in that case via the menu's when clause).
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.editCodeTour', async (ctx: BaseContext | undefined) => {
+			if (!ctx) {
+				return;
+			}
+			const resolved = await resolvePr(ctx);
+			if (!resolved) {
+				return;
+			}
+			const repoRoot = resolved.folderManager.repository.rootUri;
+			const existing = await findExistingChangeTour(repoRoot, resolved.pr.number, resolved.pr.title);
+			if (!existing) {
+				vscode.window.showInformationMessage(
+					vscode.l10n.t('No Change Tour exists for PR #{0} yet. Use "New Change Tour" to create one.', resolved.pr.number),
+				);
+				return;
+			}
+			CodeTourEditorProvider.requestInitialMode(existing, 'edit');
+			await vscode.commands.executeCommand('vscode.openWith', existing, 'codeTourEditor', { preview: false });
 		}),
 	);
 

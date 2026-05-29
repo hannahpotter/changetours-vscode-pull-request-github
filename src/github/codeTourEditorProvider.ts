@@ -23,12 +23,24 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	public static activeDocumentTracker: vscode.TextDocument | undefined = undefined;
 
 	private static readonly _webviewPanels = new Map<string, vscode.WebviewPanel>();
+	// Pre-registered initial mode for a URI; consumed when the webview sends `ready`.
+	// Lets commands like "Edit Change Tour" open the file directly in edit mode without
+	// the user seeing a view → edit flash.
+	private static readonly _pendingInitialMode = new Map<string, 'view' | 'edit'>();
 	private _pendingWebviewEdits = new Map<string, number>();
 	// Active assistant runs keyed by requestId so the webview's stop button can abort the matching run.
 	private _activeAssistantRuns = new Map<string, AbortController>();
 
 	constructor(private readonly _extensionUri: vscode.Uri, private readonly _reposManager: RepositoriesManager, private readonly _extensionContext: vscode.ExtensionContext) {
 		super();
+	}
+
+	/**
+	 * Record the initial mode the next opening of `uri` should use.
+	 * Read once when the webview sends its `ready` message, then cleared.
+	 */
+	public static requestInitialMode(uri: vscode.Uri, mode: 'view' | 'edit'): void {
+		CodeTourEditorProvider._pendingInitialMode.set(uri.toString(), mode);
 	}
 
 	public static toggleEditMode(uri?: vscode.Uri) {
@@ -488,11 +500,23 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				repo: activePR.remote.repositoryName
 			} : undefined;
 
+			// One-shot initial-mode hint from a command (e.g. "Edit Change Tour" → edit).
+			const key = document.uri.toString();
+			const requestedMode = CodeTourEditorProvider._pendingInitialMode.get(key);
+			if (requestedMode !== undefined) {
+				CodeTourEditorProvider._pendingInitialMode.delete(key);
+			}
+
 			webview.postMessage({
 				res: {
 					command: 'codeTourEditor.initialize',
 					data: parsed,
-					activePR: prInfo
+					activePR: prInfo,
+					initialEditMode: requestedMode === 'edit'
+						? true
+						: requestedMode === 'view'
+							? false
+							: undefined,
 				},
 			});
 		} catch (e) {
