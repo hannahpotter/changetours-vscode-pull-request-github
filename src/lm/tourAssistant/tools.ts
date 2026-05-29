@@ -134,9 +134,15 @@ async function applyMutation(mutate: (ctx: MutationContext) => void): Promise<{ 
 	return { doc };
 }
 
-/** Insert a node into the document at the position described by `anchor`. */
-function insertAt(doc: CodeTourDocument, anchor: NodeAnchor, node: TourNode): boolean {
-	if (anchor.endOfDocument) {
+/**
+ * Insert a node into the document at the position described by `anchor`.
+ * Tolerant of a missing anchor: models occasionally drop the field from the
+ * tool call even though the schema marks it required. In that case we fall
+ * back to appending at the end of the document, which is the same behavior
+ * the explicit `{ endOfDocument: true }` anchor produces.
+ */
+function insertAt(doc: CodeTourDocument, anchor: NodeAnchor | undefined, node: TourNode): boolean {
+	if (!anchor || anchor.endOfDocument) {
 		doc.children.push(node);
 		return true;
 	}
@@ -481,10 +487,6 @@ class RemoveNodeTool implements vscode.LanguageModelTool<RemoveNodeParams> {
 		return {
 			invocationMessage: vscode.l10n.t('Removing node {0}', options.input.nodeId),
 			pastTenseMessage: vscode.l10n.t('Removed node {0}', options.input.nodeId),
-			confirmationMessages: {
-				title: vscode.l10n.t('Remove Change Tour node'),
-				message: vscode.l10n.t('Allow the assistant to remove node "{0}" from the Change Tour? You can undo this with Ctrl/Cmd+Z.', options.input.nodeId),
-			},
 		};
 	}
 

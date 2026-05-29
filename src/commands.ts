@@ -819,7 +819,7 @@ export function registerCommands(
 				const existing = await findExistingChangeTour(repoRoot, resolved.pr.number, resolved.pr.title);
 				if (!existing) {
 					vscode.window.showInformationMessage(
-						vscode.l10n.t('No Change Tour exists for PR #{0} yet. Use "New Change Tour" to create one.', resolved.pr.number),
+						vscode.l10n.t('No Change Tour exists for pull request #{0} yet. Use "New Change Tour" to create one.', resolved.pr.number),
 					);
 					return;
 				}
@@ -846,7 +846,7 @@ export function registerCommands(
 	);
 
 	// New Change Tour: create the canonical tour file for this PR (under
-	// <repo-root>/.changetour/<prNumber>-<sanitized-title>.changetour.md) and open it
+	// <repo-root>/.changetours/<prNumber>-<sanitized-title>.changetour.md) and open it
 	// in edit mode. If a tour already exists for the PR, just opens it in edit mode.
 	context.subscriptions.push(
 		vscode.commands.registerCommand('pr.newCodeTour', async (ctx: BaseContext | undefined) => {
@@ -896,7 +896,7 @@ export function registerCommands(
 			const existing = await findExistingChangeTour(repoRoot, resolved.pr.number, resolved.pr.title);
 			if (!existing) {
 				vscode.window.showInformationMessage(
-					vscode.l10n.t('No Change Tour exists for PR #{0} yet. Use "New Change Tour" to create one.', resolved.pr.number),
+					vscode.l10n.t('No Change Tour exists for pull request #{0} yet. Use "New Change Tour" to create one.', resolved.pr.number),
 				);
 				return;
 			}

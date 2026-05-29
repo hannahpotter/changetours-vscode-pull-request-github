@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 
-export const CHANGE_TOUR_DIRNAME = '.changetour';
+export const CHANGE_TOUR_DIRNAME = '.changetours';
 export const CHANGE_TOUR_EXT = '.changetour.md';
 
 /**
@@ -25,9 +25,9 @@ export function sanitizePrTitleForFilename(title: string): string {
 
 /**
  * Canonical path for a PR's change tour file:
- *   <workspaceRoot>/.changetour/<prNumber>-<sanitized-title>.changetour.md
+ *   <workspaceRoot>/.changetours/<prNumber>-<sanitized-title>.changetour.md
  * If the sanitized title is empty (very unusual titles), falls back to
- *   <workspaceRoot>/.changetour/<prNumber>.changetour.md
+ *   <workspaceRoot>/.changetours/<prNumber>.changetour.md
  */
 export function getChangeTourUri(workspaceRoot: vscode.Uri, prNumber: number, prTitle: string): vscode.Uri {
 	const sanitized = sanitizePrTitleForFilename(prTitle);
@@ -39,7 +39,7 @@ export function getChangeTourUri(workspaceRoot: vscode.Uri, prNumber: number, pr
 
 /**
  * Find an existing change tour for a PR, tolerant of title renames.
- * Scans the `.changetour/` directory for any file whose name starts with
+ * Scans the `.changetours/` directory for any file whose name starts with
  * `<prNumber>-` or matches `<prNumber>.changetour.md` exactly.
  * Returns the first match (canonical title first if both exist).
  */
@@ -85,7 +85,7 @@ export async function findExistingChangeTour(
 }
 
 /**
- * Ensure the `.changetour/` directory exists at the workspace root.
+ * Ensure the `.changetours/` directory exists at the workspace root.
  */
 export async function ensureChangeTourDir(workspaceRoot: vscode.Uri): Promise<void> {
 	const dir = vscode.Uri.joinPath(workspaceRoot, CHANGE_TOUR_DIRNAME);

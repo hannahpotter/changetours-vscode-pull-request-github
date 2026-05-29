@@ -66,8 +66,11 @@ function matchesFileSearch(file: ChangedFileInfo, query: string): boolean {
 }
 
 /**
- * Compute the line range covered by each hunk section so we can attach
- * drag data to hunk-header rows.
+ * Compute the new-side line range covered by each hunk section so we can
+ * attach drag data to hunk-header rows AND match against the keys produced
+ * by the in-extension hunk tools (which also use new-side ranges). Using
+ * the new side keeps the coverage logic consistent with how
+ * `resolveHunkInActivePR` matches PR hunks (h.newLineNumber).
  */
 function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: number; endLine: number }> {
 	const ranges = new Map<number, { startLine: number; endLine: number }>();
@@ -83,13 +86,15 @@ function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: nu
 				ranges.set(currentHeaderIdx, { startLine, endLine });
 			}
 			currentHeaderIdx = i;
-			const match = /^@@ -(?<start>\d+)/.exec(line.content);
+			const match = /^@@\s+-\d+(?:,\d+)?\s+\+(?<start>\d+)/.exec(line.content);
 			startLine = match ? parseInt(match.groups!.start, 10) : 0;
-			endLine = startLine;
+			// A pure-deletion hunk has zero new-side lines; report an empty range.
+			endLine = startLine - 1;
 		} else {
-			const ln = line.oldLine ?? line.newLine ?? endLine;
-			if (ln > endLine) {
-				endLine = ln;
+			// Skip deletion lines - they have no new-side line number, so they
+			// must not extend this hunk's new-side range.
+			if (line.newLine !== undefined && line.newLine > endLine) {
+				endLine = line.newLine;
 			}
 		}
 	}

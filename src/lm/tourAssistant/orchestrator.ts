@@ -5,16 +5,18 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import { getSystemPrompt } from './prompts';
+import { AssistantMode, getSystemPrompt } from './prompts';
 import { ChatContentBlock, ChatMessage, resolveProvider, TourAssistantProvider } from './provider';
 import { getTourAssistantToolSpecs } from './tools';
 
-export type AssistantMode = 'generate' | 'suggest' | 'narrate' | 'improve' | 'freeform';
+export type { AssistantMode };
 
 export interface OrchestratorRunArgs {
 	mode: AssistantMode;
 	/** User-supplied prompt (free-form text). For modes like /narrate the participant prefills hunk context here. */
 	userPrompt: string;
+	/** Workspace root used to look up the optional `.changetours/custom-instructions.md` override. */
+	workspaceRoot?: vscode.Uri;
 	/** Optional: pre-resolved chat model from the chat participant request. Bypasses provider selection. */
 	requestedModel?: vscode.LanguageModelChat;
 	/** Abort signal - wire this to the UI's stop button. */
@@ -61,7 +63,7 @@ export async function* runAssistant(
 
 	yield { type: 'started', providerLabel: provider.label };
 
-	const system = getSystemPrompt(args.mode);
+	const system = await getSystemPrompt(context.extensionPath, args.mode, args.workspaceRoot);
 	const tools = getTourAssistantToolSpecs();
 
 	const messages: ChatMessage[] = [

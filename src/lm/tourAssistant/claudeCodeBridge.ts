@@ -6,14 +6,16 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { ANTHROPIC_API_KEY_SECRET } from './provider';
 import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
+import { ANTHROPIC_API_KEY_SECRET } from './provider';
 
 /**
  * Registers commands related to external assistant integrations:
- *   - `pr.editTourWithClaudeCode` - opens the workspace terminal with a
- *     prefilled `claude` CLI invocation so users can drive Claude Code
- *     externally to edit the current Change Tour.
+ *   - `pr.editTourWithClaudeCode` - ensures the project-scoped Claude Code skill
+ *     at `<repoRoot>/.claude/skills/change-tour/SKILL.md` is installed, then
+ *     opens a terminal with a short `claude` invocation that triggers the skill.
+ *     The skill body has the full format contract + bootstrap recipe so users
+ *     can also run the same command from any shell outside VS Code.
  *   - `pr.setAnthropicApiKey` - stores an Anthropic API key in SecretStorage
  *     for the AnthropicProvider fallback.
  */
@@ -21,18 +23,23 @@ export function registerExternalIntegrationCommands(context: vscode.ExtensionCon
 	context.subscriptions.push(
 		vscode.commands.registerCommand('pr.editTourWithClaudeCode', async (uri?: vscode.Uri) => {
 			const tourUri = pickTourUri(uri);
-			if (!tourUri) {
-				vscode.window.showErrorMessage(vscode.l10n.t('Open a Change Tour file first.'));
+			const workspaceRoot = resolveWorkspaceRoot(tourUri);
+			if (!workspaceRoot) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Open a workspace folder first - the Claude Code skill installs into the repo at .claude/skills/change-tour.'));
 				return;
 			}
-			const relPath = vscode.workspace.asRelativePath(tourUri);
-			// Bundle path → absolute path so the validator works regardless of the workspace's cwd.
-			const validatorPath = path.join(context.extensionPath, 'scripts', 'validate-change-tour.js');
-			const prompt = buildClaudeCodePrompt(relPath, validatorPath);
+
+			try {
+				await ensureSkillInstalled(context, workspaceRoot);
+			} catch (err) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Could not install the change-tour Claude Code skill: {0}', err instanceof Error ? err.message : String(err)));
+				return;
+			}
 
 			const terminal = vscode.window.createTerminal({ name: 'Claude Code · Change Tour' });
+			const command = buildClaudeCommand(tourUri);
 			// `false` (no newline) lets the user review/edit the prompt before pressing Enter.
-			terminal.sendText(`claude ${shellQuote(prompt)}`, false);
+			terminal.sendText(command, false);
 			terminal.show();
 		}),
 	);
@@ -77,58 +84,59 @@ export function registerExternalIntegrationCommands(context: vscode.ExtensionCon
 }
 
 /**
- * Build the prefilled prompt for Claude Code. Includes:
- *  - the Change Tour format contract (frontmatter + hunk shape) so Claude Code
- *    knows what "valid" means without us shipping a separate spec doc
- *  - an instruction to run the bundled validator after each significant edit
- *    and fix any reported errors - this is the same validity gate the
- *    in-extension LLM tools enforce, expressed as an external checker
+ * Install the change-tour skill into `<workspaceRoot>/.claude/skills/change-tour/`.
+ * Two files land there:
+ *   - SKILL.md             - the prompt body. User-editable. We only write it if
+ *                            it is missing; existing files are left alone so a
+ *                            user's customizations survive future upgrades.
+ *   - validate-change-tour.js - the bundled validator. Not user-editable - we
+ *                            always overwrite it so it stays in sync with the
+ *                            extension that produced the format the skill writes.
  */
-function buildClaudeCodePrompt(relPath: string, validatorPath: string): string {
-	return [
-		`Edit the Change Tour file @${relPath} to improve it.`,
-		'',
-		'A Change Tour (.changetour.md) is a guided walkthrough of a pull request. It MUST be a valid document with this exact shape:',
-		'',
-		'1. Frontmatter (required, must be the first lines of the file):',
-		'   ---',
-		'   isPR: true',
-		'   prNumber: <integer>',
-		'   prOwner: <github owner>',
-		'   prRepo: <github repo>',
-		'   baseRef: <base branch>',
-		'   ---',
-		'',
-		'2. A single H1 title (# …).',
-		'',
-		'3. An ordered tree of three node kinds:',
-		'   - group: a markdown heading ## through ###### that groups related nodes',
-		'   - text: a paragraph of narration (1-3 sentences explaining the WHY of nearby changes)',
-		'   - hunk: a fenced block referencing one diff hunk from the bound pull request:',
-		'       :::hunk file=<repo/relative/path> lines=<startLine>-<endLine> ref=<ref-or-HEAD> [previousFile=<old/path>] [highlights=new:14-18,old:22-25]',
-		'       <full raw patch starting with the @@ -A,B +C,D @@ header>',
-		'       :::',
-		'',
-		'   Every hunk MUST have a body (the raw patch text) between the opening :::hunk … line and the closing ::: line. The body MUST begin with an @@ -A,B +C,D @@ header. Use `ref=HEAD` unless you have a specific commit SHA.',
-		'',
-		'After EVERY significant edit, run the bundled validator and fix any errors it reports before moving on:',
-		'',
-		`    node ${shellQuote(validatorPath)} ${shellQuote(relPath)}`,
-		'',
-		'The validator catches missing frontmatter, malformed hunk directives, missing patch bodies, and bad highlight syntax. If the `gh` CLI is installed and authenticated, it ALSO cross-checks every hunk against the live pull request diff (via `gh pr diff`) and rejects hunks whose file path or line range does not match a real hunk in the PR - its error messages list the available ranges so you can correct them. Pass `--skip-pr-check` if you want to skip the live diff cross-check (e.g. while working offline). If the validator exits 0, the tour is valid.',
-		'',
-		'Write good narration (focus on WHY, not WHAT - the diff already shows what). Group related changes under descriptive section headings. Skip noise (whitespace-only changes, generated files, trivial reformats).',
-	].join('\n');
+async function ensureSkillInstalled(context: vscode.ExtensionContext, workspaceRoot: vscode.Uri): Promise<void> {
+	const skillDir = vscode.Uri.joinPath(workspaceRoot, '.claude', 'skills', 'change-tour');
+	await vscode.workspace.fs.createDirectory(skillDir);
+
+	const skillFile = vscode.Uri.joinPath(skillDir, 'SKILL.md');
+	let installedSkill = false;
+	try {
+		await vscode.workspace.fs.stat(skillFile);
+	} catch {
+		const templatePath = path.join(context.extensionPath, 'resources', 'changeTour', 'claudeSkillTemplate.md');
+		const template = await vscode.workspace.fs.readFile(vscode.Uri.file(templatePath));
+		await vscode.workspace.fs.writeFile(skillFile, template);
+		installedSkill = true;
+	}
+
+	// Always copy the validator alongside the skill so `node validate-change-tour.js …`
+	// works from any shell, even outside the extension's own repo. Overwriting is safe -
+	// the validator is a tool, not a prompt, and users shouldn't be editing it.
+	const validatorSrc = path.join(context.extensionPath, 'scripts', 'validate-change-tour.js');
+	const validatorDest = vscode.Uri.joinPath(skillDir, 'validate-change-tour.js');
+	const validatorBytes = await vscode.workspace.fs.readFile(vscode.Uri.file(validatorSrc));
+	await vscode.workspace.fs.writeFile(validatorDest, validatorBytes);
+
+	if (installedSkill) {
+		vscode.window.showInformationMessage(vscode.l10n.t('Installed Claude Code skill at .claude/skills/change-tour/.'));
+	}
 }
 
-/**
- * Quote a string for safe inclusion in a POSIX shell command. We embed it
- * in a `claude "<prompt>"` call, so double-quotes inside the prompt are the
- * main hazard.
- */
-function shellQuote(s: string): string {
-	// Use single quotes; escape any single quotes by closing, escaping, reopening.
-	return `'${s.replace(/'/g, `'\\''`)}'`;
+function buildClaudeCommand(tourUri: vscode.Uri | undefined): string {
+	if (!tourUri) {
+		return `claude "Use the change-tour skill to bootstrap a new change tour for the current pull request"`;
+	}
+	const relPath = vscode.workspace.asRelativePath(tourUri);
+	return `claude "Use the change-tour skill to edit @${relPath}"`;
+}
+
+function resolveWorkspaceRoot(tourUri: vscode.Uri | undefined): vscode.Uri | undefined {
+	if (tourUri) {
+		const folder = vscode.workspace.getWorkspaceFolder(tourUri);
+		if (folder) {
+			return folder.uri;
+		}
+	}
+	return vscode.workspace.workspaceFolders?.[0]?.uri;
 }
 
 function pickTourUri(passed?: vscode.Uri): vscode.Uri | undefined {

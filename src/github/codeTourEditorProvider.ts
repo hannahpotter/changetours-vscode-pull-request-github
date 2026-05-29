@@ -337,7 +337,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 					groupId?: string;
 					requestId: string;
 				};
-				this._runAssistantForWebview(panel, mode, requestId, { hunkId, groupId });
+				this._runAssistantForWebview(panel, document, mode, requestId, { hunkId, groupId });
 				return;
 			}
 
@@ -532,6 +532,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	 */
 	private async _runAssistantForWebview(
 		panel: vscode.WebviewPanel,
+		document: vscode.TextDocument,
 		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection',
 		requestId: string,
 		ctx: { hunkId?: string; groupId?: string },
@@ -547,11 +548,13 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 
 		const assistantMode: AssistantMode = mode === 'narrateHunk' ? 'narrate' : mode === 'improveSection' ? 'improve' : 'generate';
 		const userPrompt = this._buildAssistantPromptForButton(mode, ctx);
+		const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri;
 
 		try {
 			for await (const event of runAssistant(this._extensionContext, {
 				mode: assistantMode,
 				userPrompt,
+				workspaceRoot,
 				signal: controller.signal,
 			})) {
 				send(event);

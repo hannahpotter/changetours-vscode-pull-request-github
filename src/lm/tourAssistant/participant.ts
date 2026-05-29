@@ -5,20 +5,26 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import { AssistantMode, runAssistant } from './orchestrator';
+import { parseCodeTourMarkdown } from '../../github/codeTourMarkdown';
 import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
+import { RepositoriesManager } from '../../github/repositoriesManager';
+import { AssistantMode, runAssistant } from './orchestrator';
 
 const PARTICIPANT_ID = 'changeTour.assistant';
+const PR_DESCRIPTION_CAP = 4000;
 
 /**
  * Registers the `@change-tour` chat participant. Routes slash commands to the
  * orchestrator with the appropriate `AssistantMode`. Streams text events back
  * to the chat panel; write tools mutate the open Change Tour editor in place.
  */
-export function registerChangeTourChatParticipant(context: vscode.ExtensionContext): vscode.Disposable {
+export function registerChangeTourChatParticipant(
+	context: vscode.ExtensionContext,
+	reposManager: RepositoriesManager,
+): vscode.Disposable {
 	const handler: vscode.ChatRequestHandler = async (request, _chatContext, response, token) => {
 		const mode = pickMode(request.command);
-		const userPrompt = buildUserPrompt(mode, request.prompt);
+		const userPrompt = await buildUserPrompt(mode, request.prompt, reposManager);
 
 		// Surface a friendly preface when no Change Tour editor is open - most
 		// modes need one. We don't block; the orchestrator's tools will report a
@@ -31,10 +37,15 @@ export function registerChangeTourChatParticipant(context: vscode.ExtensionConte
 		const abortController = new AbortController();
 		const cancelDisposable = token.onCancellationRequested(() => abortController.abort());
 
+		const workspaceRoot = CodeTourEditorProvider.activeDocumentTracker
+			? vscode.workspace.getWorkspaceFolder(CodeTourEditorProvider.activeDocumentTracker.uri)?.uri
+			: vscode.workspace.workspaceFolders?.[0]?.uri;
+
 		try {
 			for await (const event of runAssistant(context, {
 				mode,
 				userPrompt,
+				workspaceRoot,
 				requestedModel: request.model,
 				signal: abortController.signal,
 			})) {
@@ -94,8 +105,21 @@ function pickMode(command: string | undefined): AssistantMode {
 	}
 }
 
-function buildUserPrompt(mode: AssistantMode, rawPrompt: string): string {
+async function buildUserPrompt(
+	mode: AssistantMode,
+	rawPrompt: string,
+	reposManager: RepositoriesManager,
+): Promise<string> {
 	const trimmed = rawPrompt.trim();
+	const base = baseUserPrompt(mode, trimmed);
+	if (mode !== 'generate' && mode !== 'improve') {
+		return base;
+	}
+	const description = await tryGetPRDescriptionBlock(reposManager);
+	return description ? `${description}\n\n${base}` : base;
+}
+
+function baseUserPrompt(mode: AssistantMode, trimmed: string): string {
 	switch (mode) {
 		case 'generate':
 			return trimmed.length > 0
@@ -116,6 +140,44 @@ function buildUserPrompt(mode: AssistantMode, rawPrompt: string): string {
 		case 'freeform':
 		default:
 			return trimmed;
+	}
+}
+
+/**
+ * Fetch the PR title + body for the active Change Tour's bound PR and wrap them
+ * in a `<pr-description>` block the assistant can lean on for framing. Returns
+ * `undefined` if there is no active tour, the PR can't be resolved, or the body
+ * is empty - the prompt then falls through to the unaugmented base prompt.
+ */
+async function tryGetPRDescriptionBlock(reposManager: RepositoriesManager): Promise<string | undefined> {
+	const document = CodeTourEditorProvider.activeDocumentTracker;
+	if (!document) {
+		return undefined;
+	}
+	try {
+		const parsed = parseCodeTourMarkdown(document.getText());
+		if (!parsed.isPR || !parsed.prOwner || !parsed.prRepo || parsed.prNumber === undefined) {
+			return undefined;
+		}
+		const folderManager = reposManager.getManagerForRepository(parsed.prOwner, parsed.prRepo);
+		if (!folderManager) {
+			return undefined;
+		}
+		const prModel = await folderManager.resolvePullRequest(parsed.prOwner, parsed.prRepo, parsed.prNumber);
+		if (!prModel) {
+			return undefined;
+		}
+		const title = (prModel.title ?? '').trim();
+		const body = (prModel.body ?? '').trim();
+		if (!title && !body) {
+			return undefined;
+		}
+		const inner = body
+			? `Title: ${title}\n\n${body}`.slice(0, PR_DESCRIPTION_CAP)
+			: `Title: ${title}`;
+		return `<pr-description>\n${inner}\n</pr-description>`;
+	} catch {
+		return undefined;
 	}
 }
 

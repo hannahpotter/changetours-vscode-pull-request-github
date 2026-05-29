@@ -172,7 +172,11 @@ function serializeDoc(doc: EditorDocument): string {
 					lines.push('');
 					break;
 				case 'hunk': {
-					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
+					// Keep this in lock-step with the extension-side serializer in
+					// src/github/codeTourMarkdown.ts. The line range comes from the
+					// patch body's `@@` header at parse time and ref defaults to
+					// HEAD, so neither needs to be emitted in the directive.
+					let hunkHeader = `:::hunk file=${node.hunk.file}`;
 					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
 					hunkHeader += ` level=${currentLevel}`;
 					const highlightAttr = serializeHighlightAttribute(node.hunk.highlights);

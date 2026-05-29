@@ -43,6 +43,7 @@ const RECOMMENDED_FRONTMATTER_KEYS = ['baseRef'];
 const HUNK_OPEN_RE = /^:::hunk\s+(.*)$/;
 const HUNK_CLOSE_RE = /^:::$/;
 const HUNK_HEADER_LINE_RE = /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/;
+const HUNK_BODY_RANGE_RE = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/;
 
 /* ----- Structural validation ----------------------------------------- */
 
@@ -174,26 +175,26 @@ function validateStructure(text) {
 		const openLine = i + 1;
 		const attrs = parseHunkAttributes(open[1]);
 
-		// Required attributes
+		// Required attributes. `lines=` and `ref=` were required in older
+		// versions but the line range now comes from the patch body's `@@`
+		// header and ref defaults to HEAD - we only error if `lines=` is
+		// present and malformed.
 		let startLine, endLine;
 		if (!attrs.file) {
 			errors.push({ line: openLine, message: 'Hunk directive missing required `file=<path>` attribute.' });
 		}
-		if (!attrs.lines) {
-			errors.push({ line: openLine, message: 'Hunk directive missing required `lines=<start>-<end>` attribute.' });
-		} else if (!/^\d+-\d+$/.test(attrs.lines)) {
-			errors.push({ line: openLine, message: `Hunk \`lines\` attribute must be \`<start>-<end>\` (got \`${attrs.lines}\`).` });
-		} else {
-			[startLine, endLine] = attrs.lines.split('-').map(Number);
-			if (startLine > endLine) {
-				errors.push({ line: openLine, message: `Hunk \`lines=${attrs.lines}\` has start > end.` });
+		if (attrs.lines) {
+			if (!/^\d+-\d+$/.test(attrs.lines)) {
+				errors.push({ line: openLine, message: `Hunk \`lines\` attribute must be \`<start>-<end>\` (got \`${attrs.lines}\`).` });
+			} else {
+				[startLine, endLine] = attrs.lines.split('-').map(Number);
+				if (startLine > endLine) {
+					errors.push({ line: openLine, message: `Hunk \`lines=${attrs.lines}\` has start > end.` });
+				}
+				if (startLine < 1) {
+					errors.push({ line: openLine, message: `Hunk \`lines=${attrs.lines}\` has start < 1 (lines are 1-indexed).` });
+				}
 			}
-			if (startLine < 1) {
-				errors.push({ line: openLine, message: `Hunk \`lines=${attrs.lines}\` has start < 1 (lines are 1-indexed).` });
-			}
-		}
-		if (!attrs.ref) {
-			errors.push({ line: openLine, message: 'Hunk directive missing required `ref=<commit-ish>` attribute (use `ref=HEAD` for the PR head).' });
 		}
 
 		// Optional but checked-if-present attributes
@@ -238,6 +239,19 @@ function validateStructure(text) {
 				line: firstBodyLine,
 				message: 'Hunk body does not start with an `@@ -…,… +…,… @@` header. The editor expects the full raw patch including the hunk header.',
 			});
+		}
+
+		// Derive line range from the @@ +C,D @@ header when not given in the
+		// directive (the new default format). Stays consistent with the editor
+		// and the in-extension `parseCodeTourMarkdown`.
+		if ((startLine === undefined || endLine === undefined) && firstBodyLine > 0) {
+			const rangeMatch = HUNK_BODY_RANGE_RE.exec(lines[firstBodyLine - 1]);
+			if (rangeMatch) {
+				const newStart = parseInt(rangeMatch[1], 10);
+				const newCount = rangeMatch[2] !== undefined ? parseInt(rangeMatch[2], 10) : 1;
+				startLine = newStart;
+				endLine = newStart + Math.max(newCount, 1) - 1;
+			}
 		}
 
 		// Record this hunk for the PR cross-check phase.
@@ -413,10 +427,39 @@ function crossCheckHunks(tourHunks, prFiles) {
 	return issues;
 }
 
+/**
+ * Find hunks present in the PR diff but not in the tour. Returns a list of
+ * `{ file, startLine, endLine }` entries describing the missing hunks.
+ * Used by the coverage check (`/generate` requires that every PR hunk is
+ * represented in the tour - trivial ones grouped into a Miscellaneous section).
+ */
+function findUncoveredHunks(tourHunks, prFiles) {
+	const covered = new Set();
+	for (const h of tourHunks) {
+		covered.add(`${h.file}:${h.startLine}:${h.endLine}`);
+	}
+	const missing = [];
+	for (const [file, entry] of prFiles.entries()) {
+		for (const rh of entry.hunks) {
+			const key = `${file}:${rh.startLine}:${rh.endLine}`;
+			if (!covered.has(key)) {
+				missing.push({ file, startLine: rh.startLine, endLine: rh.endLine });
+			}
+		}
+	}
+	return missing;
+}
+
 /* ----- CLI entry ----------------------------------------------------- */
 
 function parseArgs(argv) {
-	const args = { filePath: undefined, skipPrCheck: false, pr: undefined, repo: undefined };
+	const args = {
+		filePath: undefined,
+		skipPrCheck: false,
+		pr: undefined,
+		repo: undefined,
+		requireFullCoverage: false,
+	};
 	for (let i = 2; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === '--skip-pr-check') {
@@ -425,6 +468,8 @@ function parseArgs(argv) {
 			args.pr = argv[++i];
 		} else if (a === '--repo') {
 			args.repo = argv[++i];
+		} else if (a === '--require-full-coverage') {
+			args.requireFullCoverage = true;
 		} else if (a === '--help' || a === '-h') {
 			args.help = true;
 		} else if (!args.filePath) {
@@ -446,10 +491,12 @@ function printHelp() {
 	console.error('Usage: node validate-change-tour.js <path-to-tour.changetour.md> [options]');
 	console.error('');
 	console.error('Options:');
-	console.error('  --skip-pr-check       Skip the optional cross-check against the live PR diff via `gh`.');
-	console.error('  --pr <number>         Override the prNumber from frontmatter for the cross-check.');
-	console.error('  --repo <owner>/<repo> Override the prOwner/prRepo from frontmatter for the cross-check.');
-	console.error('  -h, --help            Show this help.');
+	console.error('  --skip-pr-check          Skip the optional cross-check against the live PR diff via `gh`.');
+	console.error('  --pr <number>            Override the prNumber from frontmatter for the cross-check.');
+	console.error('  --repo <owner>/<repo>    Override the prOwner/prRepo from frontmatter for the cross-check.');
+	console.error('  --require-full-coverage  Upgrade "PR hunk not covered" warnings to errors. Useful for CI');
+	console.error('                           or strict /generate workflows where every hunk must appear in the tour.');
+	console.error('  -h, --help               Show this help.');
 }
 
 function main(argv) {
@@ -485,6 +532,25 @@ function main(argv) {
 				const prFiles = parsePrDiff(ghResult.out);
 				const crossIssues = crossCheckHunks(structResult.hunks, prFiles);
 				allErrors.push(...crossIssues);
+
+				// Coverage check (PR → tour direction). `/generate` requires every PR
+				// hunk to appear in the tour, with trivial ones grouped under a
+				// Miscellaneous section. By default we report uncovered hunks as
+				// warnings; --require-full-coverage promotes them to errors so CI
+				// or strict workflows can hard-fail incomplete tours.
+				const uncovered = findUncoveredHunks(structResult.hunks, prFiles);
+				if (uncovered.length > 0) {
+					const sink = args.requireFullCoverage ? allErrors : allWarnings;
+					const preview = uncovered
+						.slice(0, 10)
+						.map(h => `${h.file}:${h.startLine}-${h.endLine}`)
+						.join(', ');
+					const more = uncovered.length > 10 ? `, …(+${uncovered.length - 10} more)` : '';
+					sink.push({
+						line: 1,
+						message: `${uncovered.length} PR hunk(s) are not covered by this tour: ${preview}${more}. Add them (use a "Miscellaneous" section for trivial ones) or pass --skip-pr-check to ignore.`,
+					});
+				}
 			} catch (err) {
 				allWarnings.push({
 					line: 1,
@@ -520,4 +586,4 @@ if (require.main === module) {
 	main(process.argv);
 }
 
-module.exports = { validateStructure, parsePrDiff, crossCheckHunks };
+module.exports = { validateStructure, parsePrDiff, crossCheckHunks, findUncoveredHunks };

@@ -7,9 +7,13 @@
 /**
  * Represents a diff hunk reference embedded in a Change Tour document.
  * Stored in the markdown as a fenced block:
- *   :::hunk file=<path> lines=<start>-<end> ref=<commitish> previousFile=<optional previous file path>
- *   <patch content>
+ *   :::hunk file=<path> [previousFile=<old path>] [highlights=…]
+ *   <patch content starting with the @@ -A,B +C,D @@ header>
  *   :::
+ *
+ * The new-side line range is derived from the patch body's @@ header at load
+ * time; older files with explicit `lines=<start>-<end>` and `ref=<commitish>`
+ * attributes are still accepted for backward compatibility.
  */
 export interface HighlightRange {
 	side: 'old' | 'new';
@@ -114,8 +118,54 @@ export interface CodeTourDocument {
 	children: TourNode[];
 }
 
-const HUNK_PATTERN = /^:::hunk\s+file=(?<file>[^\s]+)\s+lines=(?<start>\d+)-(?<end>\d+)\s+ref=(?<ref>[^\s]+)(?:\s+previousFile=(?<previousFile>[^\s]+))?(?:\s+level=(?<level>\d+))?(?:\s+highlights=(?<highlights>[^\s]+))?\s*$/;
+const HUNK_OPEN_PATTERN = /^:::hunk\s+(.+?)\s*$/;
 const HUNK_END_PATTERN = /^:::$/;
+const HUNK_BODY_RANGE_PATTERN = /^@@\s+-\d+(?:,\d+)?\s+\+(?<start>\d+)(?:,(?<count>\d+))?\s+@@/;
+
+interface HunkAttributes {
+	file?: string;
+	lines?: string;
+	ref?: string;
+	previousFile?: string;
+	level?: string;
+	highlights?: string;
+}
+
+/**
+ * Tokenize the attribute list of a `:::hunk` directive. Each attribute is
+ * `key=value`, separated by whitespace, in any order. All attributes are
+ * optional except `file`; missing line range and ref are derived later from
+ * the patch body's `@@` header and frontmatter respectively.
+ */
+function parseHunkAttributes(attributeList: string): HunkAttributes {
+	const out: HunkAttributes = {};
+	const re = /(\w+)=([^\s]+)/g;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(attributeList)) !== null) {
+		const key = m[1] as keyof HunkAttributes;
+		out[key] = m[2];
+	}
+	return out;
+}
+
+/**
+ * Read the new-side line range from the first `@@ -A,B +C,D @@` line of a
+ * patch body. Returns `undefined` if no such line is found.
+ */
+function extractLineRangeFromPatch(patch: string | undefined): { startLine: number; endLine: number } | undefined {
+	if (!patch) {
+		return undefined;
+	}
+	for (const line of patch.split('\n')) {
+		const m = HUNK_BODY_RANGE_PATTERN.exec(line);
+		if (m) {
+			const start = parseInt(m.groups!.start, 10);
+			const count = m.groups!.count !== undefined ? parseInt(m.groups!.count, 10) : 1;
+			return { startLine: start, endLine: start + Math.max(count, 1) - 1 };
+		}
+	}
+	return undefined;
+}
 
 let nextId = 0;
 function genId(): string {
@@ -132,7 +182,7 @@ export function resetIdCounter(): void {
  * Rules:
  * - `# Title` (h1) becomes the document title
  * - `## …` / `### …` etc. become group nodes
- * - `:::hunk file=… lines=…-… ref=…:::` become hunk references
+ * - `:::hunk file=…` … `:::` blocks become hunk references
  * - Everything else is aggregated into text nodes
  */
 export function parseCodeTourMarkdown(text: string): CodeTourDocument {
@@ -179,6 +229,15 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 			return;
 		}
 		const patch = pendingPatchLines.join('\n').trim();
+		// If the directive omitted `lines=` (the new format), derive the range
+		// from the patch body's `@@ -A,B +C,D @@` header.
+		if (!pendingHunk.startLine || !pendingHunk.endLine) {
+			const range = extractLineRangeFromPatch(patch || undefined);
+			if (range) {
+				pendingHunk.startLine = range.startLine;
+				pendingHunk.endLine = range.endLine;
+			}
+		}
 		const hunkNode: TourHunkNode = {
 			type: 'hunk',
 			id: genId(),
@@ -263,29 +322,43 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		}
 
 		// Detect hunk references
-		const hunkMatch = HUNK_PATTERN.exec(line);
-		if (hunkMatch) {
-			flushText();
+		const hunkOpenMatch = HUNK_OPEN_PATTERN.exec(line);
+		if (hunkOpenMatch) {
+			const attrs = parseHunkAttributes(hunkOpenMatch[1]);
+			if (attrs.file) {
+				flushText();
 
-			if (hunkMatch.groups!.level) {
-				const parsedLevel = parseInt(hunkMatch.groups!.level, 10);
-				while (groupStack.length > 0 && groupStack[groupStack.length - 1].level > parsedLevel) {
-					groupStack.pop();
+				if (attrs.level) {
+					const parsedLevel = parseInt(attrs.level, 10);
+					while (groupStack.length > 0 && groupStack[groupStack.length - 1].level > parsedLevel) {
+						groupStack.pop();
+					}
 				}
-			}
 
-			// Multi-line hunk, start accumulating patch content
-			inHunk = true;
-			pendingHunk = {
-				file: hunkMatch.groups!.file,
-				startLine: parseInt(hunkMatch.groups!.start, 10),
-				endLine: parseInt(hunkMatch.groups!.end, 10),
-				ref: hunkMatch.groups!.ref,
-				previousFile: hunkMatch.groups!.previousFile,
-				highlights: parseHighlightAttribute(hunkMatch.groups!.highlights),
-			};
-			pendingPatchLines = [];
-			continue;
+				let startLine = 0;
+				let endLine = 0;
+				if (attrs.lines) {
+					const m = /^(\d+)-(\d+)$/.exec(attrs.lines);
+					if (m) {
+						startLine = parseInt(m[1], 10);
+						endLine = parseInt(m[2], 10);
+					}
+				}
+
+				// Multi-line hunk, start accumulating patch content. Line range
+				// is derived from the patch body at flushHunk() if not present here.
+				inHunk = true;
+				pendingHunk = {
+					file: attrs.file,
+					startLine,
+					endLine,
+					ref: attrs.ref ?? 'HEAD',
+					previousFile: attrs.previousFile,
+					highlights: parseHighlightAttribute(attrs.highlights),
+				};
+				pendingPatchLines = [];
+				continue;
+			}
 		}
 
 		// Everything else is text
@@ -335,7 +408,7 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 					lines.push('');
 					break;
 				case 'hunk': {
-					let hunkHeader = `:::hunk file=${node.hunk.file} lines=${node.hunk.startLine}-${node.hunk.endLine} ref=${node.hunk.ref}`;
+					let hunkHeader = `:::hunk file=${node.hunk.file}`;
 					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
 					hunkHeader += ` level=${currentLevel}`;
 					const highlightAttr = serializeHighlightAttribute(node.hunk.highlights);
@@ -362,7 +435,7 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
  * Create a hunk directive string suitable for inserting into a document.
  */
 export function createHunkDirective(hunk: HunkReference): string {
-	let header = `:::hunk file=${hunk.file} lines=${hunk.startLine}-${hunk.endLine} ref=${hunk.ref}`;
+	let header = `:::hunk file=${hunk.file}`;
 	if (hunk.previousFile) header += ` previousFile=${hunk.previousFile}`;
 	const highlightAttr = serializeHighlightAttribute(hunk.highlights);
 	if (highlightAttr) header += ` highlights=${highlightAttr}`;

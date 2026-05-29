@@ -319,7 +319,7 @@ function initChat(context: vscode.ExtensionContext, credentialStore: CredentialS
 	const tourAssistantEnabled = () => vscode.workspace.getConfiguration(TOUR_ASSISTANT_NAMESPACE).get<boolean>(TOUR_ASSISTANT_ENABLED, true);
 	const initTourAssistant = () => {
 		registerTourAssistantTools(context, reposManager);
-		context.subscriptions.push(registerChangeTourChatParticipant(context));
+		context.subscriptions.push(registerChangeTourChatParticipant(context, reposManager));
 		registerExternalIntegrationCommands(context);
 	};
 	if (tourAssistantEnabled()) {
