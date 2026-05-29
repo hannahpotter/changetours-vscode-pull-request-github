@@ -42,6 +42,7 @@ function Root() {
 	const [insertMultipleHunksCommand, setInsertMultipleHunksCommand] = useState<{ ts: number, payloads: HunkReference[] } | undefined>(undefined);
 	const [assistantStatus, setAssistantStatus] = useState<{ running: boolean; requestId?: string; label?: string; error?: string }>({ running: false });
 	const [viewerInbox, setViewerInbox] = useState<ViewerInboxMessage | undefined>(undefined);
+	const [initialViewedKeys, setInitialViewedKeys] = useState<string[]>([]);
 
 	useEffect(() => {
 		const h = getMessageHandler((message: any) => {
@@ -51,6 +52,9 @@ function Root() {
 					setActivePR(message.activePR);
 					if (message.initialEditMode !== undefined) {
 						setIsEditMode(!!message.initialEditMode);
+					}
+					if (Array.isArray(message.viewedKeys)) {
+						setInitialViewedKeys(message.viewedKeys);
 					}
 					return;
 				case 'codeTourEditor.updateActivePR':
@@ -265,6 +269,8 @@ function Root() {
 					postMessage={msg => handler?.postMessage(msg) ?? Promise.resolve(undefined)}
 					inbox={viewerInbox}
 					onOpenDiff={onOpenDiff}
+					initialViewedKeys={initialViewedKeys}
+					persistViewed={keys => { handler?.postMessage({ command: 'codeTourViewer.persistViewed', args: { keys } }); }}
 				/>
 			</div>
 		);

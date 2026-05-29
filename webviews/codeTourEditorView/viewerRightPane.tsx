@@ -6,13 +6,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InlineCommentComposer } from './inlineCommentComposer';
 import { InlineCommentThread } from './inlineCommentThread';
-import type { FileHunkGroup } from './viewerModel';
+import { hunkKeyFor, type FileHunkGroup } from './viewerModel';
 import { DiffSide, type IReviewThread } from '../../src/common/comment';
 import type { HunkReference, TourHunkNode } from '../../src/github/codeTourMarkdown';
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import { ParsedDiffLine, parsePatch } from '../common/diffUtils';
-import { diffSingleIcon } from '../components/icon';
+import { chevronDownIcon, diffSingleIcon } from '../components/icon';
 
 export interface CommentTarget {
 	line: number;
@@ -32,6 +32,10 @@ interface ViewerRightPaneProps {
 	commentsEnabled: boolean;
 	commentsDisabledReason?: string;
 	emptyMessage?: string;
+	viewedHunks: Set<string>;
+	collapsedHunks: Set<string>;
+	onToggleHunkViewed: (key: string) => void;
+	onToggleHunkCollapsed: (key: string) => void;
 }
 
 export function ViewerRightPane({
@@ -47,6 +51,10 @@ export function ViewerRightPane({
 	commentsEnabled,
 	commentsDisabledReason,
 	emptyMessage,
+	viewedHunks,
+	collapsedHunks,
+	onToggleHunkViewed,
+	onToggleHunkCollapsed,
 }: ViewerRightPaneProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 
@@ -66,11 +74,13 @@ export function ViewerRightPane({
 		<div className="viewer-right" ref={containerRef}>
 			<div className="viewer-right-toolbar">
 				<label className="viewer-toolbar-toggle">
-					<input
-						type="checkbox"
-						checked={showHighlights}
-						onChange={onToggleHighlights}
-					/>
+					<span className="checkbox-wrapper">
+						<input
+							type="checkbox"
+							checked={showHighlights}
+							onChange={onToggleHighlights}
+						/>
+					</span>
 					<span>Show paragraph highlights</span>
 				</label>
 				{!commentsEnabled && commentsDisabledReason && (
@@ -93,6 +103,10 @@ export function ViewerRightPane({
 						onReplyToThread={onReplyToThread}
 						commentsEnabled={commentsEnabled}
 						commentsDisabledReason={commentsDisabledReason}
+						viewedHunks={viewedHunks}
+						collapsedHunks={collapsedHunks}
+						onToggleHunkViewed={onToggleHunkViewed}
+						onToggleHunkCollapsed={onToggleHunkCollapsed}
 					/>
 				))
 			)}
@@ -111,6 +125,10 @@ interface FileGroupBlockProps {
 	onReplyToThread: (thread: IReviewThread, body: string) => Promise<void>;
 	commentsEnabled: boolean;
 	commentsDisabledReason?: string;
+	viewedHunks: Set<string>;
+	collapsedHunks: Set<string>;
+	onToggleHunkViewed: (key: string) => void;
+	onToggleHunkCollapsed: (key: string) => void;
 }
 
 function FileGroupBlock({
@@ -124,24 +142,36 @@ function FileGroupBlock({
 	onReplyToThread,
 	commentsEnabled,
 	commentsDisabledReason,
+	viewedHunks,
+	collapsedHunks,
+	onToggleHunkViewed,
+	onToggleHunkCollapsed,
 }: FileGroupBlockProps) {
 	return (
 		<div className="viewer-file-group">
 			<div className="viewer-file-group-header" title={file}>{file}</div>
-			{hunks.map(node => (
-				<HunkCard
-					key={node.id}
-					node={node}
-					threads={threadsByHunkId.get(node.id) ?? []}
-					associated={associatedHunkIds.has(node.id)}
-					showHighlights={showHighlights}
-					onOpenDiff={onOpenDiff}
-					onPostLineComment={onPostLineComment}
-					onReplyToThread={onReplyToThread}
-					commentsEnabled={commentsEnabled}
-					commentsDisabledReason={commentsDisabledReason}
-				/>
-			))}
+			{hunks.map(node => {
+				const key = hunkKeyFor(node.hunk);
+				return (
+					<HunkCard
+						key={node.id}
+						node={node}
+						threads={threadsByHunkId.get(node.id) ?? []}
+						associated={associatedHunkIds.has(node.id)}
+						showHighlights={showHighlights}
+						onOpenDiff={onOpenDiff}
+						onPostLineComment={onPostLineComment}
+						onReplyToThread={onReplyToThread}
+						commentsEnabled={commentsEnabled}
+						commentsDisabledReason={commentsDisabledReason}
+						hunkKey={key}
+						isViewed={viewedHunks.has(key)}
+						isCollapsed={collapsedHunks.has(key)}
+						onToggleViewed={onToggleHunkViewed}
+						onToggleCollapsed={onToggleHunkCollapsed}
+					/>
+				);
+			})}
 		</div>
 	);
 }
@@ -156,6 +186,11 @@ interface HunkCardProps {
 	onReplyToThread: (thread: IReviewThread, body: string) => Promise<void>;
 	commentsEnabled: boolean;
 	commentsDisabledReason?: string;
+	hunkKey: string;
+	isViewed: boolean;
+	isCollapsed: boolean;
+	onToggleViewed: (key: string) => void;
+	onToggleCollapsed: (key: string) => void;
 }
 
 function targetForLine(line: ParsedDiffLine): CommentTarget | undefined {
@@ -178,9 +213,13 @@ function threadAttachesToLine(thread: IReviewThread, line: ParsedDiffLine): bool
 	return line.newLine !== undefined && line.newLine === thread.endLine;
 }
 
-function HunkCard({ node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason }: HunkCardProps) {
+function HunkCard({ node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
 	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
+	const hunkHeaderText = useMemo(() => {
+		const h = lines.find(l => l.type === 'hunk-header');
+		return h?.content ?? `@@ L${startLine}-${endLine} @@`;
+	}, [lines, startLine, endLine]);
 	const highlightedLineIndices = useMemo(() => {
 		if (!associated || !showHighlights) {
 			return undefined;
@@ -252,37 +291,83 @@ function HunkCard({ node, threads, associated, showHighlights, onOpenDiff, onPos
 		);
 	})() : null;
 
+	const bodyCollapsed = isCollapsed;
+	const handleHeaderClick = bodyCollapsed
+		? (e: React.MouseEvent<HTMLDivElement>) => {
+			// Ignore clicks that originate from inner interactive controls.
+			const target = e.target as HTMLElement;
+			if (target.closest('button, label, input, a')) {
+				return;
+			}
+			onToggleCollapsed(hunkKey);
+		}
+		: undefined;
 	return (
 		<div
 			id={`viewer-hunk-${node.id}`}
-			className={`viewer-hunk-card${associated ? ' viewer-hunk-associated' : ''}`}
+			className={`viewer-hunk-card${associated ? ' viewer-hunk-associated' : ''}${isViewed ? ' viewer-hunk-viewed' : ''}${bodyCollapsed ? ' viewer-hunk-collapsed' : ''}`}
 		>
-			<div className="viewer-hunk-header">
-				<span className="viewer-hunk-lines">L{startLine}-{endLine}</span>
-				<span className="viewer-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
+			<div
+				className="viewer-hunk-header"
+				onClick={handleHeaderClick}
+				title={bodyCollapsed ? `Click to expand (L${startLine}-${endLine} @ ${ref.substring(0, 7)})` : undefined}
+			>
+				<span
+					role="button"
+					tabIndex={0}
+					className={`expand-icon icon-button viewer-hunk-collapse-toggle${bodyCollapsed ? ' closed' : ''}`}
+					title={bodyCollapsed ? 'Expand hunk' : 'Collapse hunk'}
+					onClick={e => { e.stopPropagation(); onToggleCollapsed(hunkKey); }}
+					onKeyDown={e => {
+						if (e.key === 'Enter' || e.key === ' ') {
+							e.preventDefault();
+							e.stopPropagation();
+							onToggleCollapsed(hunkKey);
+						}
+					}}
+				>
+					{chevronDownIcon}
+				</span>
+				<span className="viewer-hunk-summary" title={`${file} (${ref.substring(0, 7)})`}>{hunkHeaderText}</span>
 				<button
 					type="button"
 					className="viewer-hunk-action secondary"
 					title="Open this file's full diff with comments and context"
-					onClick={() => onOpenDiff(node.hunk)}
+					onClick={e => { e.stopPropagation(); onOpenDiff(node.hunk); }}
 				>
 					<span className="viewer-hunk-action-icon">{diffSingleIcon}</span>
 					Open in diff
 				</button>
+				<label
+					className={`viewer-viewed-checkbox${isViewed ? ' is-viewed' : ''}`}
+					title={isViewed ? 'Mark hunk as unviewed' : 'Mark hunk as viewed'}
+					onClick={e => e.stopPropagation()}
+				>
+					<span className="checkbox-wrapper">
+						<input
+							type="checkbox"
+							checked={isViewed}
+							onChange={() => onToggleViewed(hunkKey)}
+						/>
+					</span>
+					<span className="viewer-viewed-checkbox-label">Viewed</span>
+				</label>
 			</div>
-			{lines.length > 0 ? (
-				<DiffTable
-					lines={lines}
-					highlightedLineIndices={highlightedLineIndices}
-					onAddCommentForLine={commentsEnabled ? handleAddCommentForLine : undefined}
-					composerLineIdx={composerLineIdx}
-					composerNode={composerNode}
-					threadWidgetsByLineIdx={threadWidgetsByLineIdx}
-				/>
-			) : (
-				<div className="viewer-hunk-placeholder">
-					Diff hunk from <strong>{file}</strong> lines {startLine}-{endLine}
-				</div>
+			{!bodyCollapsed && (
+				lines.length > 0 ? (
+					<DiffTable
+						lines={lines}
+						highlightedLineIndices={highlightedLineIndices}
+						onAddCommentForLine={commentsEnabled ? handleAddCommentForLine : undefined}
+						composerLineIdx={composerLineIdx}
+						composerNode={composerNode}
+						threadWidgetsByLineIdx={threadWidgetsByLineIdx}
+					/>
+				) : (
+					<div className="viewer-hunk-placeholder">
+						Diff hunk from <strong>{file}</strong> lines {startLine}-{endLine}
+					</div>
+				)
 			)}
 		</div>
 	);

@@ -1230,22 +1230,27 @@ h2 {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	margin-bottom: 4px;
-	font-size: 0.85em;
+	padding: 3px 8px;
+	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(90, 130, 180, 0.1));
 	color: var(--vscode-descriptionForeground);
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 12px;
+	font-style: italic;
+	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
 }
 
-.viewer-hunk-lines {
-	font-family: var(--vscode-editor-font-family, monospace);
+.viewer-hunk-summary {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
-.viewer-hunk-ref {
-	font-family: var(--vscode-editor-font-family, monospace);
-	background: var(--vscode-badge-background);
-	color: var(--vscode-badge-foreground);
-	border-radius: 8px;
-	padding: 0 6px;
-	font-size: 0.85em;
+/* DiffTable renders its own @@ row by default; suppress it inside the viewer
+ * because we render the combined chevron + summary + actions header above. */
+.viewer-hunk-card .diff-table .diff-hunk-header {
+	display: none;
 }
 
 .viewer-hunk-action {
@@ -1259,6 +1264,71 @@ h2 {
 
 .viewer-hunk-action-icon {
 	display: inline-flex;
+}
+
+/* - Mark-as-viewed checkbox (shared by section + hunk headers) ------ */
+
+.viewer-viewed-checkbox {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	cursor: pointer;
+	user-select: none;
+	font-size: 0.85em;
+	color: var(--vscode-descriptionForeground);
+	padding: 1px 4px;
+	border-radius: 3px;
+}
+
+.viewer-viewed-checkbox:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+.viewer-viewed-checkbox input[type='checkbox'] {
+	margin: 0;
+}
+
+.viewer-viewed-checkbox.is-viewed {
+	color: var(--vscode-foreground);
+}
+
+.viewer-viewed-checkbox-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+}
+
+/* In the section header, the viewed checkbox sits flush against the right edge. */
+.viewer-section-header .viewer-viewed-checkbox {
+	margin-left: auto;
+}
+
+/* - Collapsed-hunk + viewed-hunk affordances ---------------------- */
+
+.viewer-hunk-card.viewer-hunk-collapsed {
+	padding-bottom: 6px;
+}
+
+.viewer-hunk-card.viewer-hunk-viewed .viewer-hunk-header {
+	color: var(--vscode-descriptionForeground);
+}
+
+/* When collapsed, the header is the click target to re-expand. */
+.viewer-hunk-card.viewer-hunk-collapsed .viewer-hunk-header {
+	cursor: pointer;
+	border-radius: 3px;
+}
+
+.viewer-hunk-card.viewer-hunk-collapsed .viewer-hunk-header:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+/* Chevron uses the canonical .expand-icon rules from common/diff.css
+ * (16x16, rotates -90deg when .closed). The .viewer-hunk-collapse-toggle
+ * class only exists for hover styling. */
+.viewer-hunk-collapse-toggle:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
 }
 
 .viewer-hunk-placeholder {

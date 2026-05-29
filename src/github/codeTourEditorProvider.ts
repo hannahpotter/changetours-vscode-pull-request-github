@@ -43,6 +43,10 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		CodeTourEditorProvider._pendingInitialMode.set(uri.toString(), mode);
 	}
 
+	private static _viewedStateKey(uri: vscode.Uri): string {
+		return `changetour.viewed:${uri.toString()}`;
+	}
+
 	public static toggleEditMode(uri?: vscode.Uri) {
 		if (uri) {
 			const panel = CodeTourEditorProvider._webviewPanels.get(uri.toString());
@@ -350,6 +354,17 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				return;
 			}
 
+			case 'codeTourViewer.persistViewed': {
+				const { keys } = message.args as { keys: string[] };
+				const stateKey = CodeTourEditorProvider._viewedStateKey(document.uri);
+				if (Array.isArray(keys) && keys.length > 0) {
+					await this._extensionContext.workspaceState.update(stateKey, keys);
+				} else {
+					await this._extensionContext.workspaceState.update(stateKey, undefined);
+				}
+				return;
+			}
+
 			case 'codeTourViewer.loadThreads': {
 				const { prNumber, prOwner, prRepo } = message.args as { prNumber: number; prOwner: string; prRepo: string };
 				try {
@@ -507,6 +522,13 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				CodeTourEditorProvider._pendingInitialMode.delete(key);
 			}
 
+			// Persisted "mark-as-viewed" state for this tour. Stored per document URI
+			// in workspaceState so checkmarks survive editor close/reopen and restarts.
+			const viewedKeys = this._extensionContext.workspaceState.get<string[]>(
+				CodeTourEditorProvider._viewedStateKey(document.uri),
+				[],
+			);
+
 			webview.postMessage({
 				res: {
 					command: 'codeTourEditor.initialize',
@@ -517,6 +539,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 						: requestedMode === 'view'
 							? false
 							: undefined,
+					viewedKeys,
 				},
 			});
 		} catch (e) {

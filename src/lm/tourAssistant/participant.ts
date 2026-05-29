@@ -5,10 +5,10 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import { parseCodeTourMarkdown } from '../../github/codeTourMarkdown';
-import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
-import { RepositoriesManager } from '../../github/repositoriesManager';
 import { AssistantMode, runAssistant } from './orchestrator';
+import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
+import { parseCodeTourMarkdown } from '../../github/codeTourMarkdown';
+import { RepositoriesManager } from '../../github/repositoriesManager';
 
 const PARTICIPANT_ID = 'changeTour.assistant';
 const PR_DESCRIPTION_CAP = 4000;

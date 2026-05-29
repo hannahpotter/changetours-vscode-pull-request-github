@@ -6,8 +6,8 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
 import { ANTHROPIC_API_KEY_SECRET } from './provider';
+import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
 
 /**
  * Registers commands related to external assistant integrations:

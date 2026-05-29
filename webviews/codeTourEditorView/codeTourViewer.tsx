@@ -8,6 +8,7 @@ import { ViewerLeftPane } from './viewerLeftPane';
 import {
 	associatedHunkIds as computeAssociatedHunkIds,
 	dedupAndGroupByFile,
+	descendantHunkKeys,
 	findNode,
 	findParentGroup,
 	flattenHunks,
@@ -15,7 +16,7 @@ import {
 } from './viewerModel';
 import { type CommentTarget, ViewerRightPane } from './viewerRightPane';
 import { DiffSide, type IComment, type IReviewThread } from '../../src/common/comment';
-import type { CodeTourDocument, HunkReference, TourHunkNode } from '../../src/github/codeTourMarkdown';
+import type { CodeTourDocument, HunkReference, TourGroupNode, TourHunkNode } from '../../src/github/codeTourMarkdown';
 
 interface ViewerLoadThreadsMessage {
 	command: 'codeTourViewer.threadsLoaded';
@@ -59,6 +60,8 @@ interface CodeTourViewerProps {
 	postMessage: (msg: ViewerOutboundMessage) => Promise<unknown>;
 	inbox: ViewerInboxMessage | undefined;
 	onOpenDiff: (hunk: HunkReference) => void;
+	initialViewedKeys: string[];
+	persistViewed: (keys: string[]) => void;
 }
 
 interface PendingComment {
@@ -84,13 +87,32 @@ function threadOverlapsHunk(thread: IReviewThread, hunk: HunkReference): boolean
 	return rangesOverlap(thread.startLine, thread.endLine, hunk.startLine, hunk.endLine);
 }
 
-export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff }: CodeTourViewerProps) {
+export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, initialViewedKeys, persistViewed }: CodeTourViewerProps) {
 	const [selectedSectionId, setSelectedSectionId] = useState<string | undefined>(undefined);
 	const [selectedTextNodeId, setSelectedTextNodeId] = useState<string | undefined>(undefined);
 	const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
 	const [showHighlights, setShowHighlights] = useState(true);
 	const [threads, setThreads] = useState<IReviewThread[]>([]);
 	const pendingCommentsRef = useRef<Map<string, PendingComment>>(new Map());
+
+	// Persisted-via-workspaceState "viewed" set, keyed by stable hunk identity.
+	const [viewedHunks, setViewedHunks] = useState<Set<string>>(() => new Set(initialViewedKeys));
+	// Session-only manual collapse for hunks. Auto-set when viewed flips on, but the
+	// reviewer can independently toggle via the hunk header chevron to re-look.
+	const [collapsedHunks, setCollapsedHunks] = useState<Set<string>>(() => new Set(initialViewedKeys));
+	const viewedHunksRef = useRef<Set<string>>(viewedHunks);
+
+	// Re-seed when the host re-sends initial state (e.g. document reopen).
+	useEffect(() => {
+		const seeded = new Set(initialViewedKeys);
+		viewedHunksRef.current = seeded;
+		setViewedHunks(seeded);
+		setCollapsedHunks(new Set(initialViewedKeys));
+	}, [initialViewedKeys]);
+
+	useEffect(() => {
+		viewedHunksRef.current = viewedHunks;
+	}, [viewedHunks]);
 
 	const prBound = !!doc.isPR && !!doc.prNumber && !!doc.prOwner && !!doc.prRepo;
 	const prMatchesActive = prBound && !!activePR
@@ -193,6 +215,85 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff }
 	const handleToggleHighlights = useCallback(() => {
 		setShowHighlights(v => !v);
 	}, []);
+
+	const handleToggleHunkViewed = useCallback((key: string) => {
+		const willBeViewed = !viewedHunksRef.current.has(key);
+		const next = new Set(viewedHunksRef.current);
+		if (willBeViewed) {
+			next.add(key);
+		} else {
+			next.delete(key);
+		}
+		viewedHunksRef.current = next;
+		setViewedHunks(next);
+		setCollapsedHunks(prev => {
+			const nextC = new Set(prev);
+			if (willBeViewed) {
+				nextC.add(key);
+			} else {
+				nextC.delete(key);
+			}
+			return nextC;
+		});
+		persistViewed([...next]);
+	}, [persistViewed]);
+
+	const handleToggleHunkCollapsed = useCallback((key: string) => {
+		setCollapsedHunks(prev => {
+			const next = new Set(prev);
+			if (next.has(key)) {
+				next.delete(key);
+			} else {
+				next.add(key);
+			}
+			return next;
+		});
+	}, []);
+
+	const handleToggleSectionViewed = useCallback((group: TourGroupNode) => {
+		const keys = descendantHunkKeys(group);
+		if (keys.length === 0) {
+			return;
+		}
+		const allViewed = keys.every(k => viewedHunksRef.current.has(k));
+		const next = new Set(viewedHunksRef.current);
+		if (allViewed) {
+			for (const k of keys) {
+				next.delete(k);
+			}
+		} else {
+			for (const k of keys) {
+				next.add(k);
+			}
+		}
+		viewedHunksRef.current = next;
+		setViewedHunks(next);
+		setCollapsedHunks(prev => {
+			const nextC = new Set(prev);
+			if (allViewed) {
+				for (const k of keys) {
+					nextC.delete(k);
+				}
+			} else {
+				for (const k of keys) {
+					nextC.add(k);
+				}
+			}
+			return nextC;
+		});
+		// Cascade auto-collapse on the section itself.
+		setCollapsedSections(prev => {
+			const nextS = new Set(prev);
+			if (allViewed) {
+				nextS.delete(group.id);
+			} else {
+				nextS.add(group.id);
+			}
+			return nextS;
+		});
+		persistViewed([...next]);
+	}, [persistViewed]);
+
 
 	const fileGroups = useMemo(() => {
 		let hunks: TourHunkNode[];
@@ -303,6 +404,8 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff }
 				onSelectSection={handleSelectSection}
 				onSelectTextNode={handleSelectTextNode}
 				onToggleCollapse={handleToggleCollapse}
+				viewedHunks={viewedHunks}
+				onToggleSectionViewed={handleToggleSectionViewed}
 			/>
 			<ViewerRightPane
 				fileGroups={fileGroups}
@@ -317,6 +420,10 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff }
 				commentsEnabled={commentsEnabled}
 				commentsDisabledReason={commentsDisabledReason}
 				emptyMessage={selectedSectionId ? 'This section has no hunks.' : 'No hunks in this tour yet.'}
+				viewedHunks={viewedHunks}
+				collapsedHunks={collapsedHunks}
+				onToggleHunkViewed={handleToggleHunkViewed}
+				onToggleHunkCollapsed={handleToggleHunkCollapsed}
 			/>
 		</div>
 	);

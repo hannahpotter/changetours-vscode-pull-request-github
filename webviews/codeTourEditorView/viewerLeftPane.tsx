@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as marked from 'marked';
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { descendantHunkKeys, isSectionFullyViewed, isSectionPartiallyViewed } from './viewerModel';
 import type {
 	CodeTourDocument,
 	TourGroupNode,
@@ -23,6 +24,8 @@ interface ViewerLeftPaneProps {
 	onSelectSection: (id: string) => void;
 	onSelectTextNode: (textNodeId: string, parentGroupId: string | undefined) => void;
 	onToggleCollapse: (id: string) => void;
+	viewedHunks: Set<string>;
+	onToggleSectionViewed: (group: TourGroupNode) => void;
 }
 
 export function ViewerLeftPane(props: ViewerLeftPaneProps) {
@@ -64,11 +67,26 @@ function GroupBlock({
 	onSelectTextNode,
 	onToggleCollapse,
 	doc,
+	viewedHunks,
+	onToggleSectionViewed,
 }: ViewerLeftPaneProps & { node: TourGroupNode }) {
 	const collapsed = collapsedSections.has(node.id);
 	const selected = selectedSectionId === node.id;
+
+	const hasDescendantHunks = useMemo(() => descendantHunkKeys(node).length > 0, [node]);
+	const fullyViewed = useMemo(() => isSectionFullyViewed(node, viewedHunks), [node, viewedHunks]);
+	const partiallyViewed = useMemo(() => isSectionPartiallyViewed(node, viewedHunks), [node, viewedHunks]);
+
+	// React doesn't expose `indeterminate` as a prop; set it on the DOM element.
+	const checkboxRef = useRef<HTMLInputElement>(null);
+	useEffect(() => {
+		if (checkboxRef.current) {
+			checkboxRef.current.indeterminate = partiallyViewed;
+		}
+	}, [partiallyViewed]);
+
 	return (
-		<div className={`viewer-section viewer-section-level-${node.level}${selected ? ' viewer-section-selected' : ''}`}>
+		<div className={`viewer-section viewer-section-level-${node.level}${selected ? ' viewer-section-selected' : ''}${fullyViewed ? ' viewer-section-viewed' : ''}`}>
 			<div className="viewer-section-header">
 				<span
 					className={`expand-icon icon-button ${collapsed ? 'closed' : ''}`}
@@ -92,6 +110,29 @@ function GroupBlock({
 				>
 					{node.title || 'Untitled Section'}
 				</div>
+				{hasDescendantHunks && (
+					<label
+						className={`viewer-viewed-checkbox${fullyViewed ? ' is-viewed' : ''}`}
+						title={
+							fullyViewed
+								? 'Unmark all hunks in this section'
+								: partiallyViewed
+									? 'Mark remaining hunks in this section as viewed'
+									: 'Mark all hunks in this section as viewed'
+						}
+						onClick={e => e.stopPropagation()}
+					>
+						<span className="checkbox-wrapper">
+							<input
+								ref={checkboxRef}
+								type="checkbox"
+								checked={fullyViewed}
+								onChange={() => onToggleSectionViewed(node)}
+							/>
+						</span>
+						<span className="viewer-viewed-checkbox-label">Viewed</span>
+					</label>
+				)}
 			</div>
 			{!collapsed && (
 				<div className="viewer-section-body">
@@ -107,6 +148,8 @@ function GroupBlock({
 							onSelectSection={onSelectSection}
 							onSelectTextNode={onSelectTextNode}
 							onToggleCollapse={onToggleCollapse}
+							viewedHunks={viewedHunks}
+							onToggleSectionViewed={onToggleSectionViewed}
 						/>
 					))}
 				</div>
