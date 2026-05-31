@@ -21,6 +21,7 @@ export interface CommentTarget {
 
 interface ViewerRightPaneProps {
 	fileGroups: FileHunkGroup[];
+	totalsByFile: Map<string, number>;
 	threadsByHunkId: Map<string, IReviewThread[]>;
 	associatedHunkIds: Set<string>;
 	scrollTargetHunkId: string | undefined;
@@ -33,6 +34,13 @@ interface ViewerRightPaneProps {
 	commentsDisabledReason?: string;
 	openDiffDisabled: boolean;
 	openDiffDisabledReason?: string;
+	isFiltering: boolean;
+	filterLabel?: string;
+	shownHunkCount: number;
+	totalHunkCount: number;
+	shownFileCount: number;
+	totalFileCount: number;
+	onClearFilter: () => void;
 	emptyMessage?: string;
 	viewedHunks: Set<string>;
 	collapsedHunks: Set<string>;
@@ -42,6 +50,7 @@ interface ViewerRightPaneProps {
 
 export function ViewerRightPane({
 	fileGroups,
+	totalsByFile,
 	threadsByHunkId,
 	associatedHunkIds,
 	scrollTargetHunkId,
@@ -54,6 +63,13 @@ export function ViewerRightPane({
 	commentsDisabledReason,
 	openDiffDisabled,
 	openDiffDisabledReason,
+	isFiltering,
+	filterLabel,
+	shownHunkCount,
+	totalHunkCount,
+	shownFileCount,
+	totalFileCount,
+	onClearFilter,
 	emptyMessage,
 	viewedHunks,
 	collapsedHunks,
@@ -76,6 +92,16 @@ export function ViewerRightPane({
 
 	return (
 		<div className="viewer-right" ref={containerRef}>
+			{isFiltering && (
+				<FilterStatusBar
+					label={filterLabel}
+					shownHunkCount={shownHunkCount}
+					totalHunkCount={totalHunkCount}
+					shownFileCount={shownFileCount}
+					totalFileCount={totalFileCount}
+					onClearFilter={onClearFilter}
+				/>
+			)}
 			<div className="viewer-right-toolbar">
 				<label className="viewer-toolbar-toggle">
 					<span className="checkbox-wrapper">
@@ -99,6 +125,7 @@ export function ViewerRightPane({
 						key={group.file}
 						file={group.file}
 						hunks={group.hunks}
+						totalHunksForFile={totalsByFile.get(group.file) ?? group.hunks.length}
 						threadsByHunkId={threadsByHunkId}
 						associatedHunkIds={associatedHunkIds}
 						showHighlights={showHighlights}
@@ -120,9 +147,52 @@ export function ViewerRightPane({
 	);
 }
 
+interface FilterStatusBarProps {
+	label?: string;
+	shownHunkCount: number;
+	totalHunkCount: number;
+	shownFileCount: number;
+	totalFileCount: number;
+	onClearFilter: () => void;
+}
+
+function pluralHunks(n: number): string {
+	return n === 1 ? 'hunk' : 'hunks';
+}
+
+function pluralFiles(n: number): string {
+	return n === 1 ? 'file' : 'files';
+}
+
+function FilterStatusBar({ label, shownHunkCount, totalHunkCount, shownFileCount, totalFileCount, onClearFilter }: FilterStatusBarProps) {
+	return (
+		<div className="viewer-filter-status" role="status" aria-live="polite">
+			<div className="viewer-filter-status-text">
+				<span className="viewer-filter-status-label">
+					Filtered to <strong>{label ?? 'selected section'}</strong>
+				</span>
+				<span className="viewer-filter-status-counts">
+					{shownHunkCount} of {totalHunkCount} {pluralHunks(totalHunkCount)}
+					{' · '}
+					{shownFileCount} of {totalFileCount} {pluralFiles(totalFileCount)}
+				</span>
+			</div>
+			<button
+				type="button"
+				className="viewer-filter-status-clear secondary"
+				onClick={onClearFilter}
+				title="Clear the section filter and show all hunks"
+			>
+				Show all
+			</button>
+		</div>
+	);
+}
+
 interface FileGroupBlockProps {
 	file: string;
 	hunks: TourHunkNode[];
+	totalHunksForFile: number;
 	threadsByHunkId: Map<string, IReviewThread[]>;
 	associatedHunkIds: Set<string>;
 	showHighlights: boolean;
@@ -142,6 +212,7 @@ interface FileGroupBlockProps {
 function FileGroupBlock({
 	file,
 	hunks,
+	totalHunksForFile,
 	threadsByHunkId,
 	associatedHunkIds,
 	showHighlights,
@@ -157,9 +228,17 @@ function FileGroupBlock({
 	onToggleHunkViewed,
 	onToggleHunkCollapsed,
 }: FileGroupBlockProps) {
+	const shown = hunks.length;
+	const total = totalHunksForFile;
+	const countText = total > shown
+		? `${shown} of ${total} ${pluralHunks(total)}`
+		: `${shown} ${pluralHunks(shown)}`;
 	return (
 		<div className="viewer-file-group">
-			<div className="viewer-file-group-header" title={file}>{file}</div>
+			<div className="viewer-file-group-header" title={file}>
+				<span className="viewer-file-group-name">{file}</span>
+				<span className="viewer-file-group-count">{countText}</span>
+			</div>
 			{hunks.map(node => {
 				const key = hunkKeyFor(node.hunk);
 				return (
@@ -345,13 +424,13 @@ function HunkCard({ node, threads, associated, showHighlights, onOpenDiff, onPos
 				<span className="viewer-hunk-summary" title={`${file} (${ref.substring(0, 7)})`}>{hunkHeaderText}</span>
 				<button
 					type="button"
-					className="viewer-hunk-action secondary"
-					title={openDiffDisabled ? openDiffDisabledReason ?? 'Open in file context' : "Open this file's full diff with comments and context"}
+					className="viewer-hunk-action icon-button"
+					title={openDiffDisabled ? openDiffDisabledReason ?? 'Open in file context' : 'Open in file context'}
+					aria-label="Open in file context"
 					disabled={openDiffDisabled}
 					onClick={e => { e.stopPropagation(); onOpenDiff(node.hunk); }}
 				>
-					<span className="viewer-hunk-action-icon">{diffSingleIcon}</span>
-					Open in file context
+					{diffSingleIcon}
 				</button>
 				<label
 					className={`viewer-viewed-checkbox${isViewed ? ' is-viewed' : ''}`}

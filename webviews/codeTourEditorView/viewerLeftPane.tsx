@@ -203,7 +203,7 @@ function TextBlock({
 		? tourCommentsDisabledReason ?? 'Comments unavailable'
 		: !hasSourceLines
 			? 'This paragraph has no known source line range'
-			: 'Comment on this paragraph (posts to GitHub)';
+			: 'Comment on this paragraph';
 
 	return (
 		<div className="viewer-text-wrapper">

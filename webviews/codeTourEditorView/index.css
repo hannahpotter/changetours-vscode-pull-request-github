@@ -1263,15 +1263,71 @@ h2 {
 }
 
 .viewer-file-group-header {
+	display: flex;
+	align-items: baseline;
+	gap: 12px;
 	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 	padding: 6px 10px;
 	font-family: var(--vscode-editor-font-family, monospace);
 	font-size: 0.9em;
 	font-weight: 600;
 	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+}
+
+.viewer-file-group-name {
+	flex: 1;
+	min-width: 0;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+.viewer-file-group-count {
+	flex: 0 0 auto;
+	font-family: var(--vscode-font-family);
+	font-weight: 400;
+	font-size: 0.85em;
+	color: var(--vscode-descriptionForeground);
+}
+
+.viewer-filter-status {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 6px 10px;
+	margin-bottom: 8px;
+	border: 1px solid var(--vscode-focusBorder, var(--vscode-panel-border, transparent));
+	border-left-width: 3px;
+	border-radius: 3px;
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	font-size: 0.9em;
+}
+
+.viewer-filter-status-text {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	align-items: baseline;
+}
+
+.viewer-filter-status-label strong {
+	font-weight: 600;
+}
+
+.viewer-filter-status-counts {
+	color: var(--vscode-descriptionForeground);
+	font-size: 0.9em;
+}
+
+/* Base button styling (background, color, border, hover) comes from the
+ * shared `button.secondary` rules in common.css. Only tweak size + alignment. */
+button.viewer-filter-status-clear {
+	flex: 0 0 auto;
+	padding: 2px 10px;
+	font-size: 0.9em;
+	line-height: 18px;
 }
 
 .viewer-hunk-card {
@@ -1315,17 +1371,46 @@ h2 {
 	display: none;
 }
 
-.viewer-hunk-action {
+/* Icon-only action button in the hunk header (e.g. "Open in file context").
+ * Square 22x22 transparent button mirroring `.tour-action-btn.icon-button`
+ * so hover/focus/disabled don't pick up the global blue button styling. */
+.viewer-hunk-action.icon-button {
 	margin-left: auto;
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
-	padding: 2px 8px;
-	font-size: 0.85em;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--vscode-foreground);
+	line-height: 0;
+	cursor: pointer;
 }
 
-.viewer-hunk-action-icon {
+.viewer-hunk-action.icon-button:hover:not(:disabled) {
+	background: var(--vscode-toolbar-hoverBackground);
+}
+
+.viewer-hunk-action.icon-button:focus,
+.viewer-hunk-action.icon-button:focus-visible {
+	background: transparent;
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+.viewer-hunk-action.icon-button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.viewer-hunk-action.icon-button .icon {
 	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	line-height: 0;
 }
 
 /* - Mark-as-viewed checkbox (shared by section + hunk headers) ------ */

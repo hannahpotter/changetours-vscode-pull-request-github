@@ -16,7 +16,7 @@ import {
 } from './viewerModel';
 import { type CommentTarget, ViewerRightPane } from './viewerRightPane';
 import { DiffSide, type IComment, type IReviewThread } from '../../src/common/comment';
-import type { CodeTourDocument, HunkReference, TourGroupNode, TourHunkNode, TourNode, TourTextNode } from '../../src/github/codeTourMarkdown';
+import type { CodeTourDocument, HunkReference, TourGroupNode, TourNode, TourTextNode } from '../../src/github/codeTourMarkdown';
 
 interface ViewerLoadThreadsMessage {
 	command: 'codeTourViewer.threadsLoaded';
@@ -240,6 +240,8 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		setSelectedTextNodeId(prev => (prev === textNodeId ? undefined : textNodeId));
 		if (parentGroupId) {
 			setSelectedSectionId(prev => prev === parentGroupId ? prev : parentGroupId);
+		} else {
+			setSelectedSectionId(undefined);
 		}
 	}, []);
 
@@ -338,20 +340,42 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 	}, [persistViewed]);
 
 
-	const fileGroups = useMemo(() => {
-		let hunks: TourHunkNode[];
-		if (selectedSectionId) {
-			const section = findNode(doc, selectedSectionId);
-			if (section && section.type === 'group') {
-				hunks = hunksForSection(section);
-			} else {
-				hunks = [];
-			}
-		} else {
-			hunks = flattenHunks(doc);
+	const allFileGroups = useMemo(() => dedupAndGroupByFile(flattenHunks(doc)), [doc]);
+
+	const selectedSection = useMemo(() => {
+		if (!selectedSectionId) {
+			return undefined;
 		}
-		return dedupAndGroupByFile(hunks);
+		const node = findNode(doc, selectedSectionId);
+		return node && node.type === 'group' ? node : undefined;
 	}, [doc, selectedSectionId]);
+
+	const fileGroups = useMemo(() => {
+		if (selectedSectionId) {
+			return dedupAndGroupByFile(selectedSection ? hunksForSection(selectedSection) : []);
+		}
+		return allFileGroups;
+	}, [allFileGroups, selectedSection, selectedSectionId]);
+
+	const totalsByFile = useMemo(() => {
+		const m = new Map<string, number>();
+		for (const fg of allFileGroups) {
+			m.set(fg.file, fg.hunks.length);
+		}
+		return m;
+	}, [allFileGroups]);
+
+	const totalHunkCount = useMemo(() => allFileGroups.reduce((n, fg) => n + fg.hunks.length, 0), [allFileGroups]);
+	const totalFileCount = allFileGroups.length;
+	const shownHunkCount = useMemo(() => fileGroups.reduce((n, fg) => n + fg.hunks.length, 0), [fileGroups]);
+	const shownFileCount = fileGroups.length;
+	const isFiltering = !!selectedSectionId;
+	const filterLabel = isFiltering ? (selectedSection?.title || 'Selected section') : undefined;
+
+	const handleClearFilter = useCallback(() => {
+		setSelectedSectionId(undefined);
+		setSelectedTextNodeId(undefined);
+	}, []);
 
 	const { associatedIds, scrollTargetHunkId } = useMemo(() => {
 		if (!selectedTextNodeId) {
@@ -512,6 +536,7 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 			/>
 			<ViewerRightPane
 				fileGroups={fileGroups}
+				totalsByFile={totalsByFile}
 				threadsByHunkId={threadsByHunkId}
 				associatedHunkIds={associatedIds}
 				scrollTargetHunkId={scrollTargetHunkId}
@@ -524,6 +549,13 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				commentsDisabledReason={commentsDisabledReason}
 				openDiffDisabled={openDiffDisabled}
 				openDiffDisabledReason={openDiffDisabledReason}
+				isFiltering={isFiltering}
+				filterLabel={filterLabel}
+				shownHunkCount={shownHunkCount}
+				totalHunkCount={totalHunkCount}
+				shownFileCount={shownFileCount}
+				totalFileCount={totalFileCount}
+				onClearFilter={handleClearFilter}
 				emptyMessage={selectedSectionId ? 'This section has no hunks.' : 'No hunks in this tour yet.'}
 				viewedHunks={viewedHunks}
 				collapsedHunks={collapsedHunks}
