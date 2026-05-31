@@ -85,7 +85,7 @@ export function ViewerRightPane({
 							onChange={onToggleHighlights}
 						/>
 					</span>
-					<span>Show paragraph highlights</span>
+					<span>Show Change Tour highlights</span>
 				</label>
 				{!commentsEnabled && commentsDisabledReason && (
 					<div className="viewer-right-hint">{commentsDisabledReason}</div>
