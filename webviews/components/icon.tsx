@@ -21,6 +21,7 @@ export const chevronDownIcon = <Icon src={require('../../resources/icons/codicon
 export const circleFilledIcon = <Icon src={require('../../resources/icons/codicons/circle-filled.svg')} className='pending' />;
 export const closeIcon = <Icon src={require('../../resources/icons/codicons/close.svg')} className='close' />;
 export const codeIcon = <Icon src={require('../../resources/icons/codicons/code.svg')} />;
+export const codeReviewIcon = <Icon src={require('../../resources/icons/codicons/code-review.svg')} />;
 export const commentIcon = <Icon src={require('../../resources/icons/codicons/comment.svg')} />;
 export const copilotIcon = <Icon src={require('../../resources/icons/codicons/copilot.svg')} />;
 export const copyIcon = <Icon src={require('../../resources/icons/codicons/copy.svg')} />;
@@ -28,6 +29,8 @@ export const diffIcon = <Icon src={require('../../resources/icons/codicons/diff.
 export const diffSingleIcon = <Icon src={require('../../resources/icons/codicons/diff-single.svg')} />;
 export const editIcon = <Icon src={require('../../resources/icons/codicons/edit.svg')} />;
 export const errorIcon = <Icon src={require('../../resources/icons/codicons/error.svg')} />;
+export const eyeIcon = <Icon src={require('../../resources/icons/codicons/eye.svg')} />;
+export const eyeClosedIcon = <Icon src={require('../../resources/icons/codicons/eye-closed.svg')} />;
 export const feedbackIcon = <Icon src={require('../../resources/icons/codicons/feedback.svg')} />;
 export const gitCommitIcon = <Icon src={require('../../resources/icons/codicons/git-commit.svg')} />;
 export const gitCompareIcon = <Icon src={require('../../resources/icons/codicons/git-compare.svg')} />;

@@ -1066,7 +1066,7 @@
 				"command": "pr.openOverviewFromCodeTour",
 				"title": "%command.pr.openOverviewFromCodeTour.title%",
 				"category": "%command.pull.request.category%",
-				"icon": "$(git-pull-request)"
+				"icon": "$(code-review)"
 			},
 			{
 				"command": "pr.openCodeTourViewFromEditor",

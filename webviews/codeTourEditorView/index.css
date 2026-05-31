@@ -49,6 +49,15 @@
 	gap: 12px;
 }
 
+/* Visual hint while a hunk from the changes picker is being dragged over the
+ * tour body but outside any existing dropzone. The hunk will be appended to
+ * the end of the tour on drop. */
+.tour-body.tour-body-drop-active {
+	outline: 2px dashed var(--vscode-focusBorder, var(--vscode-button-background));
+	outline-offset: 4px;
+	border-radius: 4px;
+}
+
 /* In edit mode, inter-item spacing is owned by the InsertGap component so
  * that the "+" controls land cleanly between siblings. */
 .code-tour-editor.is-edit-mode .tour-body,
@@ -327,12 +336,21 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
+	flex: 1 1 auto;
+	/* Allow the file path to shrink below its intrinsic width in a narrow
+	 * pane; without this the info group stays at its content size and pushes
+	 * the action buttons off the right edge. */
+	min-width: 0;
 }
 
 .tour-hunk-actions {
 	display: flex;
 	align-items: center;
 	gap: 8px;
+	/* Action buttons are pinned to the right and never shrink, so every
+	 * control (assistant, highlight, eye, open-in-diff, remove) stays reachable
+	 * regardless of file-path length. */
+	flex: 0 0 auto;
 }
 
 .tour-hunk-actions button {
@@ -344,6 +362,20 @@
 .tour-hunk-file {
 	font-weight: 600;
 	color: var(--vscode-editor-foreground);
+	/* Truncate long paths with ellipsis (full path stays available via the
+	 * native `title` tooltip set on the span). */
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* The static line range and short ref shouldn't be trimmed first - they're
+ * tiny and identify which hunk this is. Pin them so only the file path
+ * truncates. */
+.tour-hunk-lines,
+.tour-hunk-ref {
+	flex: 0 0 auto;
 }
 
 .tour-hunk-lines {
@@ -381,6 +413,17 @@
 .tour-hunk-highlight-toggle.active,
 .tour-hunk-highlight-toggle.active:hover,
 .tour-hunk-highlight-toggle.active:focus {
+	background-color: var(--vscode-toolbar-hoverBackground);
+	outline: none;
+}
+
+/* "Default collapsed" toggle on each section header. The icon itself (eye vs.
+ * eye-closed) shows the on/off state - what the viewer will see by default -
+ * so no rotation is needed. Keep a persistent toolbar background when active
+ * so the pressed state stays glanceable. */
+.tour-default-collapsed-toggle.active,
+.tour-default-collapsed-toggle.active:hover,
+.tour-default-collapsed-toggle.active:focus {
 	background-color: var(--vscode-toolbar-hoverBackground);
 	outline: none;
 }

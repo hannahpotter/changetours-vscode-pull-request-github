@@ -117,7 +117,24 @@ function collectTextNodes(doc: CodeTourDocument): TourTextNode[] {
 export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, onCheckoutPR, initialViewedKeys, persistViewed, tourFilePath, diffLayout }: CodeTourViewerProps) {
 	const [selectedSectionId, setSelectedSectionId] = useState<string | undefined>(undefined);
 	const [selectedTextNodeId, setSelectedTextNodeId] = useState<string | undefined>(undefined);
-	const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+	// Seed from groups marked `defaultCollapsed` in the doc (the tour creator's
+	// suggested collapsed view). Users can override by clicking to expand - the
+	// override is session-local and never written back to the markdown.
+	const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
+		const out = new Set<string>();
+		const walk = (nodes: TourNode[]) => {
+			for (const n of nodes) {
+				if (n.type === 'group') {
+					if (n.defaultCollapsed) {
+						out.add(n.id);
+					}
+					walk(n.children);
+				}
+			}
+		};
+		walk(doc.children);
+		return out;
+	});
 	const [showHighlights, setShowHighlights] = useState(true);
 	const [threads, setThreads] = useState<IReviewThread[]>([]);
 	const pendingCommentsRef = useRef<Map<string, PendingComment>>(new Map());
@@ -126,7 +143,23 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 	const [viewedHunks, setViewedHunks] = useState<Set<string>>(() => new Set(initialViewedKeys));
 	// Session-only manual collapse for hunks. Auto-set when viewed flips on, but the
 	// reviewer can independently toggle via the hunk header chevron to re-look.
-	const [collapsedHunks, setCollapsedHunks] = useState<Set<string>>(() => new Set(initialViewedKeys));
+	// Also seeded from hunks the creator marked `defaultCollapsed`, so their
+	// suggested initial view is honored on first open (the reviewer can still
+	// expand them - the override is local).
+	const [collapsedHunks, setCollapsedHunks] = useState<Set<string>>(() => {
+		const out = new Set<string>(initialViewedKeys);
+		const walk = (nodes: TourNode[]) => {
+			for (const n of nodes) {
+				if (n.type === 'hunk' && n.hunk.defaultCollapsed) {
+					out.add(hunkKeyFor(n.hunk));
+				} else if (n.type === 'group') {
+					walk(n.children);
+				}
+			}
+		};
+		walk(doc.children);
+		return out;
+	});
 	// Session-only manual collapse for entire file groups (keyed by file path).
 	// Same shape as collapsedHunks: auto-flipped when all of a file's currently-shown
 	// hunks become viewed (and back when one un-views), but independently togglable.

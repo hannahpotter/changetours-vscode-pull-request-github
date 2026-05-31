@@ -29,6 +29,8 @@ export interface HunkReference {
 	patch?: string;
 	previousFile?: string;
 	highlights?: HighlightRange[];
+	/** When true, viewers open the tour with this hunk pre-collapsed (override-able). */
+	defaultCollapsed?: boolean;
 }
 
 /**
@@ -92,6 +94,8 @@ export interface TourGroupNode {
 	title: string;
 	level: number;
 	children: TourNode[];
+	/** When true, viewers open the tour with this section pre-collapsed (override-able). */
+	defaultCollapsed?: boolean;
 	/** 1-indexed line in the source markdown where the heading sits. */
 	sourceStartLine?: number;
 	/** 1-indexed line in the source markdown - same as start for groups (header line only). */
@@ -137,6 +141,7 @@ interface HunkAttributes {
 	previousFile?: string;
 	level?: string;
 	highlights?: string;
+	defaultCollapsed?: string;
 }
 
 /**
@@ -329,15 +334,28 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 				groupStack.pop();
 			}
 
+			// Section authors can mark a section as collapsed-by-default with a
+			// trailing HTML comment: `## My Section <!-- collapsed -->`. We strip
+			// it from the title and stash the flag on the group; viewers seed
+			// their initial collapsed-set from this but can still toggle it open.
+			const trailingCollapsedMarker = /\s*<!--\s*collapsed\s*-->\s*$/;
+			const defaultCollapsed = trailingCollapsedMarker.test(headingText);
+			const cleanedTitle = defaultCollapsed
+				? headingText.replace(trailingCollapsedMarker, '').trim()
+				: headingText;
+
 			const group: TourGroupNode = {
 				type: 'group',
 				id: genId(),
-				title: headingText,
+				title: cleanedTitle,
 				level,
 				children: [],
 				sourceStartLine: lineNo,
 				sourceEndLine: lineNo,
 			};
+			if (defaultCollapsed) {
+				group.defaultCollapsed = true;
+			}
 			currentContainer().push(group);
 			groupStack.push(group);
 			continue;
@@ -377,6 +395,7 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 					ref: attrs.ref ?? 'HEAD',
 					previousFile: attrs.previousFile,
 					highlights: parseHighlightAttribute(attrs.highlights),
+					defaultCollapsed: attrs.defaultCollapsed === 'true' ? true : undefined,
 				};
 				pendingPatchLines = [];
 				continue;
@@ -429,7 +448,8 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 			switch (node.type) {
 				case 'group': {
 					const prefix = '#'.repeat(node.level);
-					lines.push(`${prefix} ${node.title}`);
+					const suffix = node.defaultCollapsed ? ' <!-- collapsed -->' : '';
+					lines.push(`${prefix} ${node.title}${suffix}`);
 					lines.push('');
 					serializeNodes(node.children, node.level);
 					break;
@@ -444,6 +464,7 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 					hunkHeader += ` level=${currentLevel}`;
 					const highlightAttr = serializeHighlightAttribute(node.hunk.highlights);
 					if (highlightAttr) hunkHeader += ` highlights=${highlightAttr}`;
+					if (node.hunk.defaultCollapsed) hunkHeader += ` defaultCollapsed=true`;
 					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
@@ -470,6 +491,7 @@ export function createHunkDirective(hunk: HunkReference): string {
 	if (hunk.previousFile) header += ` previousFile=${hunk.previousFile}`;
 	const highlightAttr = serializeHighlightAttribute(hunk.highlights);
 	if (highlightAttr) header += ` highlights=${highlightAttr}`;
+	if (hunk.defaultCollapsed) header += ` defaultCollapsed=true`;
 
 	if (hunk.patch) {
 		return `${header}\n${hunk.patch}\n:::`;

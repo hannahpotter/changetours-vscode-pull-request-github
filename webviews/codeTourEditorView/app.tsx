@@ -257,6 +257,21 @@ function Root() {
 		});
 	}, [handler]);
 
+	// Open the changes pane (no-op if already open). Used by the editor when
+	// the user clicks "Add diff" so the picker appears automatically instead
+	// of forcing the user to toggle it separately.
+	const onRequestChangesOpen = useCallback(() => {
+		setIsChangesOpen(prev => {
+			if (prev) {
+				return prev;
+			}
+			if (!changesData) {
+				handler?.postMessage({ command: 'codeTourEditor.requestChanges' });
+			}
+			return true;
+		});
+	}, [handler, changesData]);
+
 	const [codeTourHunks, setCodeTourHunks] = useState<HunkReference[]>([]);
 	const onCodeTourHunksChange = useCallback((hunks: HunkReference[]) => {
 		setCodeTourHunks(hunks);
@@ -333,6 +348,7 @@ function Root() {
 					onInsertHunk={onInsertHunk}
 					onOpenDiff={onOpenDiff}
 					onCheckoutPR={onCheckoutPR}
+					onRequestChangesOpen={onRequestChangesOpen}
 					onError={onError}
 					assistantStatus={assistantStatus}
 					onRunAssistant={onRunAssistant}

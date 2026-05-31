@@ -10,7 +10,7 @@ import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelativ
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import  { type ParsedDiffLine, parsePatch } from '../common/diffUtils';
-import { addIcon, chevronDownIcon, codeIcon, diffSingleIcon, editIcon, gripperIcon, newCollectionIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, trashIcon } from '../components/icon';
+import { addIcon, chevronDownIcon, codeIcon, diffSingleIcon, editIcon, eyeClosedIcon, eyeIcon, gripperIcon, newCollectionIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, trashIcon } from '../components/icon';
 
 type InsertKind = 'text' | 'code' | 'group';
 
@@ -34,6 +34,7 @@ interface EditorGroupNode {
 	title: string;
 	level: number;
 	children: EditorNode[];
+	defaultCollapsed?: boolean;
 }
 
 type EditorNode = EditorGroupNode | TourTextNode | EditorHunkNode | TourDropZoneNode;
@@ -77,6 +78,7 @@ interface CodeTourEditorProps {
 	onInsertHunk: (hunks: HunkReference[]) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	onCheckoutPR?: () => void;
+	onRequestChangesOpen?: () => void;
 	onError?: (message: string) => void;
 	assistantStatus?: AssistantStatus;
 	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
@@ -163,7 +165,8 @@ function serializeDoc(doc: EditorDocument): string {
 			switch (node.type) {
 				case 'group': {
 					const prefix = '#'.repeat(node.level);
-					lines.push(`${prefix} ${node.title}`);
+					const suffix = node.defaultCollapsed ? ' <!-- collapsed -->' : '';
+					lines.push(`${prefix} ${node.title}${suffix}`);
 					lines.push('');
 					walk(node.children, node.level);
 					break;
@@ -182,6 +185,7 @@ function serializeDoc(doc: EditorDocument): string {
 					hunkHeader += ` level=${currentLevel}`;
 					const highlightAttr = serializeHighlightAttribute(node.hunk.highlights);
 					if (highlightAttr) hunkHeader += ` highlights=${highlightAttr}`;
+					if (node.hunk.defaultCollapsed) hunkHeader += ` defaultCollapsed=true`;
 					lines.push(hunkHeader);
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
@@ -225,6 +229,7 @@ function NodeShell({
 	onDragStart,
 	onDragEnd,
 	onReorder,
+	onHunkDropAtNode,
 	isEditMode,
 	children,
 }: {
@@ -235,12 +240,13 @@ function NodeShell({
 	onDragStart: (nodeId: string) => void;
 	onDragEnd: () => void;
 	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
+	onHunkDropAtNode?: (payload: HunkPayload, targetId: string, position: DropPosition) => void;
 	isEditMode: boolean;
 	children: React.ReactNode;
 }) {
 	const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
 	const isDraggable = isEditMode;
-	const canAcceptDrop = isEditMode && !!dragState && dragState.nodeId !== node.id;
+	const canAcceptReorder = isEditMode && !!dragState && dragState.nodeId !== node.id;
 
 	useEffect(() => {
 		if (!dragState) {
@@ -259,14 +265,24 @@ function NodeShell({
 		onDragEnd();
 	}, [onDragEnd]);
 
+	// Accept two flavors of drag:
+	//   - In-tour reorder (driven by `dragState`).
+	//   - External hunk from the changes picker (carries HUNK_MIME_TYPE).
+	// Both render the same blue before/after drop bar, so the user gets
+	// fine-grained control of where the hunk lands instead of always being
+	// appended at the end.
 	const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-		if (!canAcceptDrop) {
+		if (!isEditMode) {
+			return;
+		}
+		const isHunkDrag = !dragState && event.dataTransfer.types.includes(HUNK_MIME_TYPE);
+		if (!canAcceptReorder && !(isHunkDrag && onHunkDropAtNode)) {
 			return;
 		}
 		event.preventDefault();
-		event.dataTransfer.dropEffect = 'move';
+		event.dataTransfer.dropEffect = canAcceptReorder ? 'move' : 'copy';
 		setDropPosition(getDropPosition(event));
-	}, [canAcceptDrop]);
+	}, [isEditMode, canAcceptReorder, dragState, onHunkDropAtNode]);
 
 	const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
 		const relatedTarget = event.relatedTarget;
@@ -277,16 +293,32 @@ function NodeShell({
 	}, []);
 
 	const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-		if (!canAcceptDrop || !dragState) {
+		if (!isEditMode) {
+			return;
+		}
+		const isHunkDrag = !dragState && event.dataTransfer.types.includes(HUNK_MIME_TYPE);
+		if (!canAcceptReorder && !(isHunkDrag && onHunkDropAtNode)) {
 			return;
 		}
 		event.preventDefault();
 		event.stopPropagation();
 		const nextDropPosition = dropPosition ?? getDropPosition(event);
-		onReorder(dragState.nodeId, node.id, nextDropPosition);
+		if (canAcceptReorder && dragState) {
+			onReorder(dragState.nodeId, node.id, nextDropPosition);
+			onDragEnd();
+		} else if (isHunkDrag && onHunkDropAtNode) {
+			const raw = event.dataTransfer.getData(HUNK_MIME_TYPE);
+			if (raw) {
+				try {
+					const payload: HunkPayload = JSON.parse(raw);
+					onHunkDropAtNode(payload, node.id, nextDropPosition);
+				} catch {
+					// ignore malformed data
+				}
+			}
+		}
 		setDropPosition(null);
-		onDragEnd();
-	}, [canAcceptDrop, dragState, dropPosition, node.id, onDragEnd, onReorder]);
+	}, [isEditMode, canAcceptReorder, dragState, dropPosition, node.id, onDragEnd, onReorder, onHunkDropAtNode]);
 
 	return (
 		<div
@@ -356,6 +388,9 @@ function DropZoneBlock({
 			return;
 		}
 		e.preventDefault();
+		// Prevent the tour-body's fallback drop handler from also firing,
+		// which would create a duplicate hunk at the end of the tour.
+		e.stopPropagation();
 		setOver(false);
 		const raw = e.dataTransfer.getData(HUNK_MIME_TYPE);
 		if (raw) {
@@ -441,6 +476,7 @@ function HunkBlock({
 	onRemove,
 	onOpenDiff,
 	onHighlightsChange,
+	onToggleHunkDefaultCollapsed,
 	activePR,
 	isEditMode,
 	diffLayout,
@@ -452,6 +488,7 @@ function HunkBlock({
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	onHighlightsChange?: (hunkId: string, highlights: HighlightRange[]) => void;
+	onToggleHunkDefaultCollapsed: (id: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
 	isEditMode: boolean;
 	diffLayout: 'inline' | 'sideBySide';
@@ -468,7 +505,14 @@ function HunkBlock({
 		doc.prRepo?.toLowerCase() !== activePR.repo?.toLowerCase()
 	);
 
-	const [collapsed, setCollapsed] = useState(false);
+	// Seed and re-sync the editor's local collapse state to the hunk's
+	// `defaultCollapsed` flag, so toggling the eye in the action bar also
+	// flips the chevron - the creator sees exactly what the viewer would see.
+	// The user can still manually expand/collapse via the chevron afterwards.
+	const [collapsed, setCollapsed] = useState(() => !!node.hunk.defaultCollapsed);
+	useEffect(() => {
+		setCollapsed(!!node.hunk.defaultCollapsed);
+	}, [node.hunk.defaultCollapsed]);
 	const [highlightMode, setHighlightMode] = useState(false);
 	const [dragStart, setDragStart] = useState<number | null>(null);
 	const [dragEnd, setDragEnd] = useState<number | null>(null);
@@ -556,7 +600,7 @@ function HunkBlock({
 					>
 						{chevronDownIcon}
 					</span>
-					<span className="tour-hunk-file">{file}</span>
+					<span className="tour-hunk-file" title={file}>{file}</span>
 					<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
 					<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
 				</div>
@@ -581,6 +625,19 @@ function HunkBlock({
 							onClick={() => setHighlightMode(m => !m)}
 						>
 							{editIcon}
+						</button>
+					)}
+					{isEditMode && (
+						<button
+							type="button"
+							className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.hunk.defaultCollapsed ? ' active' : ''}`}
+							title={node.hunk.defaultCollapsed
+								? "Viewer won't see this hunk by default - click to make viewer see it by default"
+								: 'Viewer sees this hunk by default - click to make viewer not see it by default'}
+							aria-pressed={!!node.hunk.defaultCollapsed}
+							onClick={() => onToggleHunkDefaultCollapsed(node.id)}
+						>
+							{node.hunk.defaultCollapsed ? eyeClosedIcon : eyeIcon}
 						</button>
 					)}
 					{onOpenDiff && (
@@ -733,7 +790,10 @@ function GroupBlock({
 	onMoveToGroupEnd,
 	onTextChange,
 	onGroupTitleCommit,
+	onToggleDefaultCollapsed,
+	onToggleHunkDefaultCollapsed,
 	onDropZoneDrop,
+	onHunkDropAtNode,
 	onAddText,
 	onAddCode,
 	onAddGroup,
@@ -759,7 +819,10 @@ function GroupBlock({
 	onMoveToGroupEnd: (draggedId: string, groupId: string) => void;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleCommit: (id: string, title: string) => void;
+	onToggleDefaultCollapsed: (id: string) => void;
+	onToggleHunkDefaultCollapsed: (id: string) => void;
 	onDropZoneDrop: (id: string, payload: HunkPayload) => void;
+	onHunkDropAtNode?: (payload: HunkPayload, targetId: string, position: DropPosition) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
@@ -774,7 +837,14 @@ function GroupBlock({
 	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
 	assistantRunning?: boolean;
 }) {
-	const [collapsed, setCollapsed] = useState(false);
+	// Seed and re-sync the editor's local collapse state to the section's
+	// `defaultCollapsed` flag, so toggling the eye in the section header also
+	// flips the chevron - the creator sees exactly what the viewer would see.
+	// The user can still manually expand/collapse via the chevron afterwards.
+	const [collapsed, setCollapsed] = useState(() => !!node.defaultCollapsed);
+	useEffect(() => {
+		setCollapsed(!!node.defaultCollapsed);
+	}, [node.defaultCollapsed]);
 	const [groupDropActive, setGroupDropActive] = useState(false);
 	const [titleDraft, setTitleDraft] = useState(node.title);
 
@@ -853,10 +923,31 @@ function GroupBlock({
 						onChange={e => setTitleDraft(e.target.value)}
 						onBlur={commitTitle}
 						onKeyDown={handleTitleKeyDown}
+						onFocus={e => {
+							// Newly-added sections start as "New Section". Treat that
+							// literal as a placeholder and select it on focus so the
+							// next keystroke replaces it instead of appending.
+							if (e.target.value === 'New Section') {
+								e.target.select();
+							}
+						}}
 						placeholder="Section title"
 					/>
 				) : (
 					<span className="tour-group-title-readonly">{node.title || 'Untitled Section'}</span>
+				)}
+				{isEditMode && (
+					<button
+						type="button"
+						className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.defaultCollapsed ? ' active' : ''}`}
+						title={node.defaultCollapsed
+							? "Viewer won't see this section by default - click to make viewer see it by default"
+							: 'Viewer sees this section by default - click to make viewer not see it by default'}
+						aria-pressed={!!node.defaultCollapsed}
+						onClick={() => onToggleDefaultCollapsed(node.id)}
+					>
+						{node.defaultCollapsed ? eyeClosedIcon : eyeIcon}
+					</button>
 				)}
 				{isEditMode && onRunAssistant && (
 					<button
@@ -902,7 +993,10 @@ function GroupBlock({
 								onMoveToGroupEnd={onMoveToGroupEnd}
 								onTextChange={onTextChange}
 								onGroupTitleCommit={onGroupTitleCommit}
+								onToggleDefaultCollapsed={onToggleDefaultCollapsed}
+								onToggleHunkDefaultCollapsed={onToggleHunkDefaultCollapsed}
 								onDropZoneDrop={onDropZoneDrop}
+								onHunkDropAtNode={onHunkDropAtNode}
 								onAddText={onAddText}
 								onAddCode={onAddCode}
 								onAddGroup={onAddGroup}
@@ -948,7 +1042,10 @@ function NodeRenderer({
 	onMoveToGroupEnd,
 	onTextChange,
 	onGroupTitleCommit,
+	onToggleDefaultCollapsed,
+	onToggleHunkDefaultCollapsed,
 	onDropZoneDrop,
+	onHunkDropAtNode,
 	onAddText,
 	onAddCode,
 	onAddGroup,
@@ -974,7 +1071,10 @@ function NodeRenderer({
 	onMoveToGroupEnd: (draggedId: string, groupId: string) => void;
 	onTextChange: (id: string, content: string) => void;
 	onGroupTitleCommit: (id: string, title: string) => void;
+	onToggleDefaultCollapsed: (id: string) => void;
+	onToggleHunkDefaultCollapsed: (id: string) => void;
 	onDropZoneDrop: (id: string, payload: HunkPayload) => void;
+	onHunkDropAtNode?: (payload: HunkPayload, targetId: string, position: DropPosition) => void;
 	onAddText: (groupId?: string) => void;
 	onAddCode: (groupId?: string) => void;
 	onAddGroup: (parentGroupId?: string) => void;
@@ -1000,6 +1100,7 @@ function NodeRenderer({
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
+					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
 				>
 					<GroupBlock
@@ -1014,7 +1115,10 @@ function NodeRenderer({
 						onMoveToGroupEnd={onMoveToGroupEnd}
 						onTextChange={onTextChange}
 						onGroupTitleCommit={onGroupTitleCommit}
+						onToggleDefaultCollapsed={onToggleDefaultCollapsed}
+						onToggleHunkDefaultCollapsed={onToggleHunkDefaultCollapsed}
 						onDropZoneDrop={onDropZoneDrop}
+						onHunkDropAtNode={onHunkDropAtNode}
 						onAddText={onAddText}
 						onAddCode={onAddCode}
 						onAddGroup={onAddGroup}
@@ -1041,6 +1145,7 @@ function NodeRenderer({
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
+					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
 				>
 					<TextBlock node={node as TourTextNode} onChange={onTextChange} onRemove={onRemove} isEditMode={isEditMode} />
@@ -1056,9 +1161,10 @@ function NodeRenderer({
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
+					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
 				>
-					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} activePR={activePR} isEditMode={isEditMode} diffLayout={diffLayout} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} />
+					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} onToggleHunkDefaultCollapsed={onToggleHunkDefaultCollapsed} activePR={activePR} isEditMode={isEditMode} diffLayout={diffLayout} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} />
 				</NodeShell>
 			);
 		case 'dropzone':
@@ -1072,6 +1178,7 @@ function NodeRenderer({
 					onDragStart={onNodeDragStart}
 					onDragEnd={onNodeDragEnd}
 					onReorder={onReorder}
+					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
 				>
 					<DropZoneBlock node={node} doc={doc} onDrop={onDropZoneDrop} onRemove={onRemove} onError={onError} />
@@ -1177,10 +1284,11 @@ function InsertGap({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, diffLayout = 'inline', scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError, assistantStatus, onRunAssistant, onCancelAssistant, onDismissAssistantError }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, onRequestChangesOpen, activePR, isEditMode = true, diffLayout = 'inline', scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError, assistantStatus, onRunAssistant, onCancelAssistant, onDismissAssistantError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [titleDraft, setTitleDraft] = useState(initialDoc.title);
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
+	const editorRootRef = useRef<HTMLDivElement>(null);
 	const [activeNodeId, setActiveNodeId] = useState<string | undefined>(undefined);
 	const [justInsertedId, setJustInsertedId] = useState<string | undefined>(undefined);
 	const isLocalEdit = useRef(false);
@@ -1217,6 +1325,76 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			onActiveNodeChanged(activeNodeId);
 		}
 	}, [activeNodeId, onActiveNodeChanged]);
+
+	// Auto-scroll the nearest scrollable ancestor while a reorder drag is in
+	// progress. Without this, dragging an item past the visible area is
+	// impossible: the cursor leaves every drop target, dropPosition clears,
+	// and a release outside any target cancels the operation - exactly the
+	// "drag state lost" symptom users see when reordering past the fold.
+	useEffect(() => {
+		if (!dragState) {
+			return;
+		}
+		const findScrollContainer = (start: HTMLElement | null): HTMLElement | null => {
+			let current: HTMLElement | null = start;
+			while (current && current !== document.body) {
+				const style = window.getComputedStyle(current);
+				const overflowY = style.overflowY;
+				if (
+					(overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+					current.scrollHeight > current.clientHeight
+				) {
+					return current;
+				}
+				current = current.parentElement;
+			}
+			return null;
+		};
+		const container = findScrollContainer(editorRootRef.current);
+		const SCROLL_ZONE = 60;
+		const MAX_SPEED = 18;
+		let velocity = 0;
+		let rafId: number | null = null;
+
+		const tick = () => {
+			if (velocity !== 0) {
+				if (container) {
+					container.scrollTop += velocity;
+				} else {
+					window.scrollBy(0, velocity);
+				}
+			}
+			rafId = window.requestAnimationFrame(tick);
+		};
+
+		const handleDragOver = (e: DragEvent) => {
+			const rect = container
+				? container.getBoundingClientRect()
+				: { top: 0, bottom: window.innerHeight } as DOMRect;
+			const top = rect.top;
+			const bottom = rect.bottom;
+			const y = e.clientY;
+			if (y < top + SCROLL_ZONE) {
+				const dist = (top + SCROLL_ZONE) - y;
+				velocity = -Math.min(MAX_SPEED, (dist / SCROLL_ZONE) * MAX_SPEED);
+			} else if (y > bottom - SCROLL_ZONE) {
+				const dist = y - (bottom - SCROLL_ZONE);
+				velocity = Math.min(MAX_SPEED, (dist / SCROLL_ZONE) * MAX_SPEED);
+			} else {
+				velocity = 0;
+			}
+		};
+
+		document.addEventListener('dragover', handleDragOver);
+		rafId = window.requestAnimationFrame(tick);
+
+		return () => {
+			document.removeEventListener('dragover', handleDragOver);
+			if (rafId !== null) {
+				window.cancelAnimationFrame(rafId);
+			}
+		};
+	}, [dragState]);
 
 	useEffect(() => {
 		if (scrollToNode && scrollToNode.id) {
@@ -1460,7 +1638,14 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 	}, []);
 
 	// Helper: apply a local edit (sets the flag before updating state).
-	const applyLocal = useCallback((updater: (prev: EditorDocument) => EditorDocument) => {
+	// Discrete one-shot edits (toggle eye, add/remove node, drop hunk, etc.)
+	// pass nothing and sync to the host synchronously, so a quick Ctrl+S never
+	// races the debounce. Rapid-fire keystroke edits (text and title typing)
+	// pass `{ defer: true }` to keep the 180ms debounce that batches them.
+	const applyLocal = useCallback((updater: (prev: EditorDocument) => EditorDocument, options?: { defer?: boolean }) => {
+		if (!options?.defer) {
+			flushImmediateRef.current = true;
+		}
 		isLocalEdit.current = true;
 		setDoc(updater);
 	}, []);
@@ -1501,6 +1686,44 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		}));
 	}, [applyLocal]);
 
+	const handleToggleDefaultCollapsed = useCallback((id: string) => {
+		applyLocal(prev => ({
+			...prev,
+			children: updateNodeInList(prev.children, id, n => {
+				if (n.type !== 'group') {
+					return n;
+				}
+				const next = !n.defaultCollapsed;
+				const updated: EditorGroupNode = { ...n };
+				if (next) {
+					updated.defaultCollapsed = true;
+				} else {
+					delete updated.defaultCollapsed;
+				}
+				return updated;
+			}),
+		}));
+	}, [applyLocal]);
+
+	const handleToggleHunkDefaultCollapsed = useCallback((id: string) => {
+		applyLocal(prev => ({
+			...prev,
+			children: updateNodeInList(prev.children, id, n => {
+				if (n.type !== 'hunk') {
+					return n;
+				}
+				const next = !n.hunk.defaultCollapsed;
+				const updatedHunk: HunkReference = { ...n.hunk };
+				if (next) {
+					updatedHunk.defaultCollapsed = true;
+				} else {
+					delete updatedHunk.defaultCollapsed;
+				}
+				return { ...n, hunk: updatedHunk };
+			}),
+		}));
+	}, [applyLocal]);
+
 	/* - Text editing ------------------------- */
 
 	const handleTextChange = useCallback((id: string, content: string) => {
@@ -1509,7 +1732,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			children: updateNodeInList(prev.children, id, n =>
 				n.type === 'text' ? { ...n, content } : n
 			),
-		}));
+		}), { defer: true });
 	}, [applyLocal]);
 
 	/* - Add text block ------------------------ */
@@ -1596,8 +1819,11 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				setJustInsertedId(newId);
 				return { ...prev, children: nextChildren };
 			});
+			if (kind === 'code') {
+				onRequestChangesOpen?.();
+			}
 		},
-		[applyLocal],
+		[applyLocal, onRequestChangesOpen],
 	);
 
 	/* - Hunk highlights ------------------------ */
@@ -1659,7 +1885,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					: appendToList(prev.children, dzNode),
 			};
 		});
-	}, [applyLocal]);
+		// Surface the diff picker so the user can drag a hunk into the new
+		// dropzone without having to manually toggle the changes pane.
+		onRequestChangesOpen?.();
+	}, [applyLocal, onRequestChangesOpen]);
 
 	/* - Drop zone receives a hunk (replaces the dropzone node) --- */
 
@@ -1694,8 +1923,166 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		});
 	}, [applyLocal]);
 
+	// Validate that a dropped hunk payload comes from the same PR the tour is
+	// bound to. Returns true on success, surfaces an error on mismatch.
+	const validateHunkPayloadPR = useCallback((payload: HunkPayload): boolean => {
+		if (!doc.isPR) {
+			return true;
+		}
+		const prNumberMatches = !doc.prNumber || !payload.prNumber || String(doc.prNumber) === String(payload.prNumber);
+		const prOwnerMatches = !doc.prOwner || !payload.prOwner || doc.prOwner === payload.prOwner;
+		const prRepoMatches = !doc.prRepo || !payload.prRepo || doc.prRepo === payload.prRepo;
+		if (!prNumberMatches || !prOwnerMatches || !prRepoMatches) {
+			const msg = `Cannot drop a hunk from a different pull request. Expected PR #${doc.prNumber} (${doc.prOwner}/${doc.prRepo}), but got PR #${payload.prNumber} (${payload.prOwner}/${payload.prRepo})`;
+			if (onError) {
+				onError(msg);
+			} else {
+				window.alert(msg);
+			}
+			return false;
+		}
+		return true;
+	}, [doc.isPR, doc.prNumber, doc.prOwner, doc.prRepo, onError]);
+
+	// Insert a dropped hunk payload immediately before/after a specific node,
+	// matching the fine-grained drop indicator the reorder UI already uses.
+	// The caller (NodeShell) handles the drop-position display; we just
+	// apply the insertion at the requested spot.
+	const handleHunkDropAtNode = useCallback((payload: HunkPayload, targetId: string, position: DropPosition) => {
+		if (!validateHunkPayloadPR(payload)) {
+			return;
+		}
+		applyLocal(prev => {
+			const newId = localId();
+			const hunkNode: EditorHunkNode = {
+				type: 'hunk',
+				id: newId,
+				hunk: {
+					file: payload.file,
+					startLine: payload.startLine,
+					endLine: payload.endLine,
+					ref: payload.ref,
+					patch: payload.patch,
+					previousFile: payload.previousFile,
+				},
+			};
+			const result = insertNodeRelative(prev.children, targetId, hunkNode, position);
+			if (!result.inserted) {
+				return prev;
+			}
+			const updated: EditorDocument = { ...prev, children: result.nodes };
+			if (updated.isPR === undefined && payload.isPR !== undefined) {
+				updated.isPR = payload.isPR;
+				updated.prNumber = payload.prNumber;
+				updated.prOwner = payload.prOwner;
+				updated.prRepo = payload.prRepo;
+				updated.baseRef = payload.baseRef;
+			}
+			setJustInsertedId(newId);
+			return updated;
+		});
+	}, [applyLocal, validateHunkPayloadPR]);
+
+	// Append a hunk payload as a new hunk node at the end of the tour root.
+	// Used when the user drags from the diff picker without first creating a
+	// dropzone - they shouldn't have to set up a landing zone first.
+	const handleAppendHunkPayload = useCallback((payload: HunkPayload) => {
+		applyLocal(prev => {
+			const newId = localId();
+			const hunkNode: EditorHunkNode = {
+				type: 'hunk',
+				id: newId,
+				hunk: {
+					file: payload.file,
+					startLine: payload.startLine,
+					endLine: payload.endLine,
+					ref: payload.ref,
+					patch: payload.patch,
+					previousFile: payload.previousFile,
+				},
+			};
+			const updated: EditorDocument = {
+				...prev,
+				children: appendToList(prev.children, hunkNode),
+			};
+			if (updated.isPR === undefined && payload.isPR !== undefined) {
+				updated.isPR = payload.isPR;
+				updated.prNumber = payload.prNumber;
+				updated.prOwner = payload.prOwner;
+				updated.prRepo = payload.prRepo;
+				updated.baseRef = payload.baseRef;
+			}
+			setJustInsertedId(newId);
+			return updated;
+		});
+	}, [applyLocal]);
+
+	// Drop target on the tour body itself: lets the user drag a hunk from the
+	// changes picker and drop it anywhere in the empty tour area, not just on
+	// an existing dropzone. DropZoneBlock's own handler runs first (it calls
+	// e.stopPropagation), so this only fires for drops outside a dropzone.
+	const [tourBodyDropActive, setTourBodyDropActive] = useState(false);
+	// When the user drops on a child NodeShell (fine-grained insert), that
+	// drop handler stopPropagation()s, so the body's `onDrop` never fires and
+	// the dashed body outline sticks around. Listen at the window level for
+	// any drag-end / drop while the outline is showing and clear the state
+	// no matter which target finally received the release.
+	useEffect(() => {
+		if (!tourBodyDropActive) {
+			return;
+		}
+		const clear = () => setTourBodyDropActive(false);
+		window.addEventListener('dragend', clear);
+		window.addEventListener('drop', clear, true);
+		return () => {
+			window.removeEventListener('dragend', clear);
+			window.removeEventListener('drop', clear, true);
+		};
+	}, [tourBodyDropActive]);
+	const handleTourBodyDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+		if (!isEditMode) {
+			return;
+		}
+		if (!e.dataTransfer.types.includes(HUNK_MIME_TYPE)) {
+			return;
+		}
+		e.preventDefault();
+		e.dataTransfer.dropEffect = 'copy';
+		setTourBodyDropActive(true);
+	}, [isEditMode]);
+	const handleTourBodyDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+		const relatedTarget = e.relatedTarget;
+		if (relatedTarget instanceof Node && e.currentTarget.contains(relatedTarget)) {
+			return;
+		}
+		setTourBodyDropActive(false);
+	}, []);
+	const handleTourBodyDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+		if (!isEditMode) {
+			return;
+		}
+		if (!e.dataTransfer.types.includes(HUNK_MIME_TYPE)) {
+			return;
+		}
+		e.preventDefault();
+		setTourBodyDropActive(false);
+		const raw = e.dataTransfer.getData(HUNK_MIME_TYPE);
+		if (!raw) {
+			return;
+		}
+		try {
+			const payload: HunkPayload = JSON.parse(raw);
+			if (!validateHunkPayloadPR(payload)) {
+				return;
+			}
+			handleAppendHunkPayload(payload);
+		} catch {
+			// ignore malformed data
+		}
+	}, [isEditMode, validateHunkPayloadPR, handleAppendHunkPayload]);
+
 	return (
-		<div className={`code-tour-editor${isEditMode ? ' is-edit-mode' : ''}`}>
+		<div ref={editorRootRef} className={`code-tour-editor${isEditMode ? ' is-edit-mode' : ''}`}>
 			{assistantStatus?.running && (
 				<div className="tour-assistant-streaming" role="status" aria-live="polite">
 					<span className="tour-assistant-streaming-icon">{sparkleIcon}</span>
@@ -1744,12 +2131,25 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					onChange={e => setTitleDraft(e.target.value)}
 					onBlur={commitTitle}
 					onKeyDown={handleTitleKeyDown}
+					onFocus={e => {
+						// "Untitled Change Tour" is the parser's fallback for tours
+						// that never got a real title; auto-select on focus so the
+						// next keystroke replaces it.
+						if (e.target.value === 'Untitled Change Tour') {
+							e.target.select();
+						}
+					}}
 					placeholder="Change Tour Title"
 				/>
 			) : (
 				<h1 className="tour-title-readonly">{doc.title || 'Untitled Change Tour'}</h1>
 			)}
-			<div className="tour-body">
+			<div
+				className={`tour-body${tourBodyDropActive ? ' tour-body-drop-active' : ''}`}
+				onDragOver={isEditMode ? handleTourBodyDragOver : undefined}
+				onDragLeave={isEditMode ? handleTourBodyDragLeave : undefined}
+				onDrop={isEditMode ? handleTourBodyDrop : undefined}
+			>
 				{doc.children.map(node => (
 					<React.Fragment key={node.id}>
 						{isEditMode && (
@@ -1770,7 +2170,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							onMoveToGroupEnd={handleMoveToGroupEnd}
 							onTextChange={handleTextChange}
 							onGroupTitleCommit={handleGroupTitleCommit}
+							onToggleDefaultCollapsed={handleToggleDefaultCollapsed}
+							onToggleHunkDefaultCollapsed={handleToggleHunkDefaultCollapsed}
 							onDropZoneDrop={handleDropZoneDrop}
+							onHunkDropAtNode={handleHunkDropAtNode}
 							onAddText={handleAddText}
 							onAddCode={handleAddCode}
 							onAddGroup={handleAddGroup}
