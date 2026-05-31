@@ -584,7 +584,7 @@ function HunkBlock({
 						<button
 							className="tour-action-btn icon-button"
 							disabled={isMismatch}
-							title={isMismatch ? 'Checkout the associated PR to view the diff' : 'GoTo Diff'}
+							title={isMismatch ? 'Checkout the associated PR to open in file context' : 'Open in file context'}
 							onClick={() => onOpenDiff(node.hunk)}
 						>
 							{diffSingleIcon}
