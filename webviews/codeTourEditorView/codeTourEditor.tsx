@@ -10,7 +10,7 @@ import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelativ
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import  { type ParsedDiffLine, parsePatch } from '../common/diffUtils';
-import { addIcon, chevronDownIcon, diffIcon, diffSingleIcon, editIcon, gripperIcon, newCollectionIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, trashIcon } from '../components/icon';
+import { addIcon, chevronDownIcon, codeIcon, diffSingleIcon, editIcon, gripperIcon, newCollectionIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, trashIcon } from '../components/icon';
 
 type InsertKind = 'text' | 'code' | 'group';
 
@@ -66,6 +66,7 @@ interface CodeTourEditorProps {
 	document: CodeTourDocument;
 	activePR?: { number: number; owner: string; repo: string };
 	isEditMode?: boolean;
+	diffLayout?: 'inline' | 'sideBySide';
 	scrollToNode?: { id: string; ts: number };
 	insertHunkCommand?: { ts: number, payload: HunkReference[], mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string };
 	insertMultipleHunksCommand?: { ts: number, payloads: HunkReference[] };
@@ -442,6 +443,7 @@ function HunkBlock({
 	onHighlightsChange,
 	activePR,
 	isEditMode,
+	diffLayout,
 	onRunAssistant,
 	assistantRunning,
 }: {
@@ -452,6 +454,7 @@ function HunkBlock({
 	onHighlightsChange?: (hunkId: string, highlights: HighlightRange[]) => void;
 	activePR?: { number: number; owner: string; repo: string };
 	isEditMode: boolean;
+	diffLayout: 'inline' | 'sideBySide';
 	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
 	assistantRunning?: boolean;
 }) {
@@ -600,6 +603,7 @@ function HunkBlock({
 			{!collapsed && (
 				lines.length > 0 ? (
 					<DiffTable
+						layout={diffLayout}
 						lines={lines}
 						highlightedLineIndices={highlightedLineIndices}
 						highlightMode={highlightEditingEnabled && highlightMode}
@@ -739,6 +743,7 @@ function GroupBlock({
 	onOpenDiff,
 	activePR,
 	isEditMode,
+	diffLayout,
 	onError,
 	onRunAssistant,
 	assistantRunning,
@@ -763,6 +768,7 @@ function GroupBlock({
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	isEditMode: boolean;
+	diffLayout: 'inline' | 'sideBySide';
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
 	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
@@ -906,6 +912,7 @@ function GroupBlock({
 								onOpenDiff={onOpenDiff}
 								activePR={activePR}
 								isEditMode={isEditMode}
+								diffLayout={diffLayout}
 								onError={onError}
 								onRunAssistant={onRunAssistant}
 								assistantRunning={assistantRunning}
@@ -915,7 +922,7 @@ function GroupBlock({
 					{isEditMode && (
 						<div className="tour-group-actions">
 							<button className="tour-add-btn icon-button" title="Add text" onClick={() => onAddText(node.id)}>{symbolStringIcon}</button>
-							<button className="tour-add-btn icon-button" title="Add diff" onClick={() => onAddCode(node.id)}>{diffIcon}</button>
+							<button className="tour-add-btn icon-button" title="Add diff" onClick={() => onAddCode(node.id)}>{codeIcon}</button>
 							{node.level < 6 && (
 								<button className="tour-add-btn icon-button" title="Add section" onClick={() => onAddGroup(node.id)}>{newCollectionIcon}</button>
 							)}
@@ -951,6 +958,7 @@ function NodeRenderer({
 	onOpenDiff,
 	activePR,
 	isEditMode,
+	diffLayout,
 	onError,
 	onRunAssistant,
 	assistantRunning,
@@ -975,6 +983,7 @@ function NodeRenderer({
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	isEditMode: boolean;
+	diffLayout: 'inline' | 'sideBySide';
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
 	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
@@ -1015,6 +1024,7 @@ function NodeRenderer({
 						onOpenDiff={onOpenDiff}
 						activePR={activePR}
 						isEditMode={isEditMode}
+						diffLayout={diffLayout}
 						onError={onError}
 						onRunAssistant={onRunAssistant}
 						assistantRunning={assistantRunning}
@@ -1048,7 +1058,7 @@ function NodeRenderer({
 					onReorder={onReorder}
 					isEditMode={isEditMode}
 				>
-					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} activePR={activePR} isEditMode={isEditMode} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} />
+					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} activePR={activePR} isEditMode={isEditMode} diffLayout={diffLayout} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} />
 				</NodeShell>
 			);
 		case 'dropzone':
@@ -1146,7 +1156,7 @@ function InsertGap({
 						role="menuitem"
 						onClick={() => select('code')}
 					>
-						{diffIcon}
+						{codeIcon}
 					</button>
 					{parentLevel < 6 && (
 						<button
@@ -1167,7 +1177,7 @@ function InsertGap({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError, assistantStatus, onRunAssistant, onCancelAssistant, onDismissAssistantError }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, activePR, isEditMode = true, diffLayout = 'inline', scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError, assistantStatus, onRunAssistant, onCancelAssistant, onDismissAssistantError }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [titleDraft, setTitleDraft] = useState(initialDoc.title);
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
@@ -1176,6 +1186,15 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 	const isLocalEdit = useRef(false);
 	const pendingDocumentSyncTimerRef = useRef<number | undefined>(undefined);
 	const lastSyncedMarkdownRef = useRef<string | undefined>(undefined);
+	// One-shot flag: when set, the next sync pass skips the typing-debounce
+	// and pushes onDocumentChange synchronously. Used for discrete edits like
+	// committing a paragraph highlight where we want Ctrl+S to never race.
+	const flushImmediateRef = useRef(false);
+	// Counter of self-pushed markdowns that we expect to come back through the
+	// initialDoc prop (app.tsx re-parses on every onDocumentChange so the doc
+	// state survives mode toggles). The initialDoc effect decrements and skips
+	// override when this is > 0, keeping local node IDs stable.
+	const selfEchoCountRef = useRef(0);
 
 	useEffect(() => {
 		if (justInsertedId) {
@@ -1360,6 +1379,14 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		if (isLocalEdit.current) {
 			return;
 		}
+		// Self-echo: app.tsx re-parses every local push and sets its doc state,
+		// which loops back as an initialDoc change. Skip exactly one such echo
+		// per push so local node IDs (and any selection state keyed to them)
+		// survive the re-parse round-trip.
+		if (selfEchoCountRef.current > 0) {
+			selfEchoCountRef.current--;
+			return;
+		}
 		if (pendingDocumentSyncTimerRef.current !== undefined) {
 			window.clearTimeout(pendingDocumentSyncTimerRef.current);
 			pendingDocumentSyncTimerRef.current = undefined;
@@ -1395,6 +1422,21 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		const markdown = serializeDoc(doc);
 		if (pendingDocumentSyncTimerRef.current !== undefined) {
 			window.clearTimeout(pendingDocumentSyncTimerRef.current);
+			pendingDocumentSyncTimerRef.current = undefined;
+		}
+
+		// Discrete one-shot edits (e.g. committing a paragraph highlight) set
+		// flushImmediateRef so the sync bypasses the typing-friendly 180ms
+		// debounce. Without this, a quick Ctrl+S right after a drag-commit
+		// races the timer and the saved markdown still has the old highlights.
+		if (flushImmediateRef.current) {
+			flushImmediateRef.current = false;
+			if (lastSyncedMarkdownRef.current !== markdown) {
+				lastSyncedMarkdownRef.current = markdown;
+				selfEchoCountRef.current++;
+				onDocumentChange(markdown);
+			}
+			return;
 		}
 
 		pendingDocumentSyncTimerRef.current = window.setTimeout(() => {
@@ -1402,6 +1444,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				return;
 			}
 
+			selfEchoCountRef.current++;
 			onDocumentChange(markdown);
 			lastSyncedMarkdownRef.current = markdown;
 			pendingDocumentSyncTimerRef.current = undefined;
@@ -1561,6 +1604,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 
 	const handleHighlightsChange = useCallback(
 		(hunkId: string, highlights: HighlightRange[]) => {
+			flushImmediateRef.current = true;
 			applyLocal(prev => ({
 				...prev,
 				children: updateNodeInList(prev.children, hunkId, n =>
@@ -1736,6 +1780,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							onOpenDiff={onOpenDiff}
 							activePR={activePR}
 							isEditMode={isEditMode}
+							diffLayout={diffLayout}
 							onError={onError}
 							onRunAssistant={onRunAssistant}
 							assistantRunning={!!assistantStatus?.running}
@@ -1745,7 +1790,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				{isEditMode && (
 					<div className="tour-root-actions">
 						<button className="tour-add-btn icon-button" title="Add text" onClick={() => handleAddText()}>{symbolStringIcon}</button>
-						<button className="tour-add-btn icon-button" title="Add diff" onClick={() => handleAddCode()}>{diffIcon}</button>
+						<button className="tour-add-btn icon-button" title="Add diff" onClick={() => handleAddCode()}>{codeIcon}</button>
 						<button className="tour-add-btn icon-button" title="Add section" onClick={() => handleAddGroup()}>{newCollectionIcon}</button>
 						{onRunAssistant && (
 							<button

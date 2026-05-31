@@ -128,3 +128,134 @@
 .diff-context .diff-line-content {
 	color: var(--vscode-editor-foreground);
 }
+
+/* - Side-by-side layout --------------------------------------------------- *
+ * In side-by-side mode the row is { leftLineNum | leftContent | rightLineNum | rightContent }.
+ * Column widths come from <colgroup> so the hunk-header row (a single colspan=4
+ * cell) doesn't collapse the rest of the table into one column. Background
+ * colors are applied per-cell so each side can be tinted independently. */
+.diff-table-side-by-side {
+	table-layout: fixed;
+}
+
+.diff-table-side-by-side .diff-col-num {
+	width: 48px;
+}
+
+/* Override the inline-mode 86px so the line-num cells match the colgroup
+ * width even if the browser falls back from <col> sizing. */
+.diff-table-side-by-side .diff-line-num,
+.diff-table-side-by-side .diff-line-num-left,
+.diff-table-side-by-side .diff-line-num-right,
+.diff-table-side-by-side .diff-line-num-empty {
+	width: 48px;
+	min-width: 48px;
+}
+
+.diff-table-side-by-side .diff-line-num-left,
+.diff-table-side-by-side .diff-line-num-right {
+	border-right: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+}
+
+/* The hunk-header chevron sits in a single line-num cell; line up the
+ * action span the same way the inline header does. */
+.diff-table-side-by-side .diff-hunk-header-actions {
+	border-right: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+	text-align: left;
+	padding-left: 4px;
+}
+
+/* The inline-mode `.diff-hunk-header .diff-line-content { display: flex }`
+ * rule above breaks colSpan on the title cell in side-by-side mode (the cell
+ * leaves table-cell layout and only fills one column). Force it back so the
+ * colSpan={3} title actually spans the right side too. */
+.diff-table-side-by-side .diff-hunk-header .diff-line-content {
+	display: table-cell;
+	font-style: italic;
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.diff-table-side-by-side .diff-line-content.diff-add {
+	background: var(--vscode-diffEditor-insertedLineBackground, rgba(40, 167, 69, 0.15));
+	color: var(--vscode-gitDecoration-addedResourceForeground, #28a745);
+}
+
+.diff-table-side-by-side .diff-line-content.diff-delete {
+	background: var(--vscode-diffEditor-removedLineBackground, rgba(215, 58, 73, 0.15));
+	color: var(--vscode-gitDecoration-deletedResourceForeground, #d73a49);
+}
+
+.diff-table-side-by-side .diff-line-content.diff-context {
+	color: var(--vscode-editor-foreground);
+}
+
+.diff-table-side-by-side .diff-line-empty {
+	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(127, 127, 127, 0.05));
+}
+
+.diff-table-side-by-side .diff-line-num-empty {
+	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(127, 127, 127, 0.05));
+}
+
+.diff-table-side-by-side .diff-line.diff-hunk-header td {
+	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(90, 130, 180, 0.1));
+}
+
+/* Per-side paragraph highlights. The full-row .diff-line-highlighted rule
+ * (defined in index.css) handles context rows where both sides are highlighted;
+ * these rules cover change rows where only one side may be highlighted.
+ *
+ * Uses CSS variables so adjacent-row collapse can set top and bottom edges
+ * independently - a middle row in a run ends up with both transparent and
+ * the box-shadow paints nothing, leaving a single continuous bracket. */
+.diff-line-highlighted-left {
+	--hl-left-edge: rgba(0, 144, 241, 0.7);
+	--hl-left-top: var(--hl-left-edge);
+	--hl-left-bottom: var(--hl-left-edge);
+}
+
+.diff-line-highlighted-right {
+	--hl-right-edge: rgba(0, 144, 241, 0.7);
+	--hl-right-top: var(--hl-right-edge);
+	--hl-right-bottom: var(--hl-right-edge);
+}
+
+.diff-line-highlighted-left > td:nth-child(1),
+.diff-line-highlighted-left > td:nth-child(2) {
+	box-shadow:
+		inset 0 1px 0 var(--hl-left-top, transparent),
+		inset 0 -1px 0 var(--hl-left-bottom, transparent);
+}
+
+.diff-line-highlighted-right > td:nth-child(3),
+.diff-line-highlighted-right > td:nth-child(4) {
+	box-shadow:
+		inset 0 1px 0 var(--hl-right-top, transparent),
+		inset 0 -1px 0 var(--hl-right-bottom, transparent);
+}
+
+.diff-line-highlighted-left > td:nth-child(1) {
+	background: rgba(0, 144, 241, 0.15);
+}
+
+.diff-line-highlighted-right > td:nth-child(3) {
+	background: rgba(0, 144, 241, 0.15);
+}
+
+/* Collapse internal edges between adjacent same-side highlight rows. */
+.diff-line-highlighted-left + .diff-line-highlighted-left {
+	--hl-left-top: transparent;
+}
+
+.diff-line-highlighted-left:has(+ .diff-line-highlighted-left) {
+	--hl-left-bottom: transparent;
+}
+
+.diff-line-highlighted-right + .diff-line-highlighted-right {
+	--hl-right-top: transparent;
+}
+
+.diff-line-highlighted-right:has(+ .diff-line-highlighted-right) {
+	--hl-right-bottom: transparent;
+}

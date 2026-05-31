@@ -1081,6 +1081,12 @@
 				"icon": "$(edit)"
 			},
 			{
+				"command": "pr.codeTourEditor.toggleDiffLayout",
+				"title": "%command.pr.codeTourEditor.toggleDiffLayout.title%",
+				"category": "%command.pull.request.category%",
+				"icon": "$(diff)"
+			},
+			{
 				"command": "codetour.scrollToSection",
 				"title": "Scroll to Section"
 			},
@@ -3127,10 +3133,15 @@
 				{
 					"command": "pr.openCodeTourViewFromEditor",
 					"group": "navigation",
-					"when": "resourceFilename =~ /\\.changetour\\.md$/"
+					"when": "resourceFilename =~ /\\.changetour\\.md$/ && changeTourEditMode"
 				},
 				{
 					"command": "pr.codeTourEditor.toggleEditMode",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/"
+				},
+				{
+					"command": "pr.codeTourEditor.toggleDiffLayout",
 					"group": "navigation",
 					"when": "resourceFilename =~ /\\.changetour\\.md$/"
 				},

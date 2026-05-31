@@ -984,6 +984,25 @@ export function registerCommands(
 	);
 
 	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.codeTourEditor.toggleDiffLayout', (uri?: unknown) => {
+			let docUri: vscode.Uri | undefined;
+			if (uri instanceof vscode.Uri) {
+				docUri = uri;
+			} else if (uri && typeof uri === 'object') {
+				const obj = uri as { uri?: unknown };
+				if (obj.uri instanceof vscode.Uri) {
+					docUri = obj.uri;
+				}
+			}
+
+			if (!docUri) {
+				docUri = vscode.window.activeTextEditor?.document.uri;
+			}
+			CodeTourEditorProvider.toggleDiffLayout(docUri);
+		})
+	);
+
+	context.subscriptions.push(
 		vscode.commands.registerCommand('pr.openCodeTourViewFromEditor', async (uri?: unknown) => {
 			let docUri: vscode.Uri | undefined;
 			if (uri instanceof vscode.Uri) {

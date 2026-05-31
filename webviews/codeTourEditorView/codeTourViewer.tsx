@@ -73,6 +73,7 @@ interface CodeTourViewerProps {
 	initialViewedKeys: string[];
 	persistViewed: (keys: string[]) => void;
 	tourFilePath: string | undefined;
+	diffLayout: 'inline' | 'sideBySide';
 }
 
 interface PendingComment {
@@ -113,7 +114,7 @@ function collectTextNodes(doc: CodeTourDocument): TourTextNode[] {
 	return out;
 }
 
-export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, onCheckoutPR, initialViewedKeys, persistViewed, tourFilePath }: CodeTourViewerProps) {
+export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, onCheckoutPR, initialViewedKeys, persistViewed, tourFilePath, diffLayout }: CodeTourViewerProps) {
 	const [selectedSectionId, setSelectedSectionId] = useState<string | undefined>(undefined);
 	const [selectedTextNodeId, setSelectedTextNodeId] = useState<string | undefined>(undefined);
 	const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
@@ -628,6 +629,7 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				tourCommentsDisabledReason={tourCommentsDisabledReason}
 			/>
 			<ViewerRightPane
+				diffLayout={diffLayout}
 				fileGroups={fileGroups}
 				totalsByFile={totalsByFile}
 				threadsByHunkId={threadsByHunkId}

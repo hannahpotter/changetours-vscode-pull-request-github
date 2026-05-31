@@ -9,7 +9,7 @@ import { ChangedFilesOverview } from './changesOverview';
 import { CodeTourEditor } from './codeTourEditor';
 import { CodeTourViewer, type ViewerInboxMessage } from './codeTourViewer';
 
-import type { CodeTourDocument, HunkReference, TourNode } from '../../src/github/codeTourMarkdown';
+import { type CodeTourDocument, type HunkReference, parseCodeTourMarkdown, type TourNode } from '../../src/github/codeTourMarkdown';
 import { getMessageHandler, MessageHandler } from '../common/message';
 
 export function main() {
@@ -44,6 +44,17 @@ function Root() {
 	const [viewerInbox, setViewerInbox] = useState<ViewerInboxMessage | undefined>(undefined);
 	const [initialViewedKeys, setInitialViewedKeys] = useState<string[]>([]);
 	const [tourFilePath, setTourFilePath] = useState<string | undefined>(undefined);
+	const [diffLayout, setDiffLayout] = useState<'inline' | 'sideBySide'>('inline');
+
+	useEffect(() => {
+		if (!handler || !doc) {
+			return;
+		}
+		handler.postMessage({
+			command: 'codeTourEditor.setEditMode',
+			args: { isEditMode },
+		});
+	}, [handler, doc, isEditMode]);
 
 	useEffect(() => {
 		const h = getMessageHandler((message: any) => {
@@ -62,9 +73,17 @@ function Root() {
 					} else if (message.tourFilePath === undefined) {
 						setTourFilePath(undefined);
 					}
+					if (message.diffLayout === 'inline' || message.diffLayout === 'sideBySide') {
+						setDiffLayout(message.diffLayout);
+					}
 					return;
 				case 'codeTourEditor.updateActivePR':
 					setActivePR(message.activePR);
+					return;
+				case 'codeTourEditor.updateDiffLayout':
+					if (message.diffLayout === 'inline' || message.diffLayout === 'sideBySide') {
+						setDiffLayout(message.diffLayout);
+					}
 					return;
 				case 'codeTourEditor.toggleEditMode':
 					setIsEditMode(prev => !prev);
@@ -130,6 +149,17 @@ function Root() {
 	}, []);
 
 	const onDocumentChange = useCallback((markdown: string) => {
+		// Keep app-level doc in sync with what the editor just synced. Without
+		// this, toggling to view mode and back remounts CodeTourEditor with the
+		// stale initial parse, losing every local edit the user made (e.g. a
+		// fresh paragraph highlight). CodeTourEditor's initialDoc effect
+		// recognizes the self-echo via a markdown comparison and skips the
+		// override, so local node IDs survive.
+		try {
+			setDoc(parseCodeTourMarkdown(markdown));
+		} catch {
+			// ignore parse failures; the host will surface them
+		}
 		handler?.postMessage({
 			command: 'codeTourEditor.updateDocument',
 			args: { markdown },
@@ -279,6 +309,7 @@ function Root() {
 					initialViewedKeys={initialViewedKeys}
 					persistViewed={keys => { handler?.postMessage({ command: 'codeTourViewer.persistViewed', args: { keys } }); }}
 					tourFilePath={tourFilePath}
+					diffLayout={diffLayout}
 				/>
 			</div>
 		);
@@ -291,6 +322,7 @@ function Root() {
 					document={doc}
 					activePR={activePR}
 					isEditMode={isEditMode}
+					diffLayout={diffLayout}
 					scrollToNode={scrollToNode}
 					insertHunkCommand={insertHunkCommand}
 					insertMultipleHunksCommand={insertMultipleHunksCommand}

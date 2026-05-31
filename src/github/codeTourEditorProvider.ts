@@ -25,6 +25,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	public static activeDocumentTracker: vscode.TextDocument | undefined = undefined;
 
 	private static readonly _webviewPanels = new Map<string, vscode.WebviewPanel>();
+	private static readonly _editModeByDocument = new Map<string, boolean>();
 	// Pre-registered initial mode for a URI; consumed when the webview sends `ready`.
 	// Lets commands like "Edit Change Tour" open the file directly in edit mode without
 	// the user seeing a view → edit flash.
@@ -47,6 +48,17 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 
 	private static _viewedStateKey(uri: vscode.Uri): string {
 		return `changetour.viewed:${uri.toString()}`;
+	}
+
+	private static _setEditModeContext(value: boolean): void {
+		vscode.commands.executeCommand('setContext', 'changeTourEditMode', value);
+	}
+
+	/** Workspace-state key for the user's preferred diff layout. Shared across all tours. */
+	private static readonly _diffLayoutStateKey = 'changetour.diffLayout';
+	private static _readDiffLayout(ctx: vscode.ExtensionContext): 'inline' | 'sideBySide' {
+		const v = ctx.workspaceState.get<string>(CodeTourEditorProvider._diffLayoutStateKey, 'inline');
+		return v === 'sideBySide' ? 'sideBySide' : 'inline';
 	}
 
 	/**
@@ -88,6 +100,25 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				});
 				return;
 			}
+		}
+	}
+
+	/**
+	 * Flip the persisted diff layout (inline ↔ side-by-side) and broadcast the new value
+	 * to every open Change Tour panel so the toggle applies everywhere at once.
+	 */
+	public static toggleDiffLayout(_uri?: vscode.Uri) {
+		const provider = CodeTourEditorProvider._instance;
+		if (!provider) {
+			return;
+		}
+		const current = CodeTourEditorProvider._readDiffLayout(provider._extensionContext);
+		const next = current === 'inline' ? 'sideBySide' : 'inline';
+		provider._extensionContext.workspaceState.update(CodeTourEditorProvider._diffLayoutStateKey, next);
+		for (const panel of CodeTourEditorProvider._webviewPanels.values()) {
+			panel.webview.postMessage({
+				res: { command: 'codeTourEditor.updateDiffLayout', diffLayout: next }
+			});
 		}
 	}
 
@@ -154,8 +185,11 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		}
 	}
 
+	private static _instance: CodeTourEditorProvider | undefined;
+
 	public static register(context: vscode.ExtensionContext, reposManager: RepositoriesManager): vscode.Disposable {
 		const provider = new CodeTourEditorProvider(context.extensionUri, reposManager, context);
+		CodeTourEditorProvider._instance = provider;
 		return vscode.window.registerCustomEditorProvider(
 			CODE_TOUR_EDITOR_VIEW_TYPE,
 			provider,
@@ -178,6 +212,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			CodeTourEditorProvider.activeDocumentTracker = document;
 			CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(document);
 			vscode.commands.executeCommand('setContext', 'activeCodeTour', true);
+			CodeTourEditorProvider._setEditModeContext(CodeTourEditorProvider._editModeByDocument.get(key) ?? false);
 		}
 
 		const viewStateDisposable = webviewPanel.onDidChangeViewState(e => {
@@ -185,10 +220,12 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				CodeTourEditorProvider.activeDocumentTracker = document;
 				CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(document);
 				vscode.commands.executeCommand('setContext', 'activeCodeTour', true);
+				CodeTourEditorProvider._setEditModeContext(CodeTourEditorProvider._editModeByDocument.get(key) ?? false);
 			} else if (CodeTourEditorProvider.activeDocumentTracker === document) {
 				CodeTourEditorProvider.activeDocumentTracker = undefined;
 				CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(undefined);
 				vscode.commands.executeCommand('setContext', 'activeCodeTour', false);
+				CodeTourEditorProvider._setEditModeContext(false);
 			}
 		});
 
@@ -256,6 +293,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 
 		webviewPanel.onDidDispose(() => {
 			CodeTourEditorProvider._webviewPanels.delete(key);
+			CodeTourEditorProvider._editModeByDocument.delete(key);
 			messageDisposable.dispose();
 			changeDisposable.dispose();
 			viewStateDisposable.dispose();
@@ -263,6 +301,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				CodeTourEditorProvider.activeDocumentTracker = undefined;
 				CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(undefined);
 				vscode.commands.executeCommand('setContext', 'activeCodeTour', false);
+				CodeTourEditorProvider._setEditModeContext(false);
 			}
 			disposables.forEach(d => d.dispose());
 		});
@@ -359,6 +398,16 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				const controller = this._activeAssistantRuns.get(requestId);
 				if (controller) {
 					controller.abort();
+				}
+				return;
+			}
+
+			case 'codeTourEditor.setEditMode': {
+				const { isEditMode } = message.args as { isEditMode: boolean };
+				const docKey = document.uri.toString();
+				CodeTourEditorProvider._editModeByDocument.set(docKey, isEditMode);
+				if (CodeTourEditorProvider.activeDocumentTracker?.uri.toString() === docKey) {
+					CodeTourEditorProvider._setEditModeContext(isEditMode);
 				}
 				return;
 			}
@@ -584,6 +633,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 							: undefined,
 					viewedKeys,
 					tourFilePath,
+					diffLayout: CodeTourEditorProvider._readDiffLayout(this._extensionContext),
 				},
 			});
 		} catch (e) {
