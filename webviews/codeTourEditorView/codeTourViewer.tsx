@@ -69,6 +69,7 @@ interface CodeTourViewerProps {
 	postMessage: (msg: ViewerOutboundMessage) => Promise<unknown>;
 	inbox: ViewerInboxMessage | undefined;
 	onOpenDiff: (hunk: HunkReference) => void;
+	onCheckoutPR?: () => void;
 	initialViewedKeys: string[];
 	persistViewed: (keys: string[]) => void;
 	tourFilePath: string | undefined;
@@ -112,7 +113,7 @@ function collectTextNodes(doc: CodeTourDocument): TourTextNode[] {
 	return out;
 }
 
-export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, initialViewedKeys, persistViewed, tourFilePath }: CodeTourViewerProps) {
+export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, onCheckoutPR, initialViewedKeys, persistViewed, tourFilePath }: CodeTourViewerProps) {
 	const [selectedSectionId, setSelectedSectionId] = useState<string | undefined>(undefined);
 	const [selectedTextNodeId, setSelectedTextNodeId] = useState<string | undefined>(undefined);
 	const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
@@ -599,6 +600,17 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 
 	return (
 		<div className="viewer-root">
+			{openDiffDisabled && (
+				<div className="tour-pr-warning viewer-pr-warning">
+					<span>This Change Tour belongs to PR #{doc.prNumber}. Check out the PR to open hunks in file context and add comments.</span>
+					{onCheckoutPR && (
+						<button className="tour-action-btn" onClick={onCheckoutPR}>
+							Checkout PR
+						</button>
+					)}
+				</div>
+			)}
+			<div className="viewer-panes">
 			<ViewerLeftPane
 				doc={doc}
 				selectedSectionId={selectedSectionId}
@@ -645,6 +657,7 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				onToggleHunkCollapsed={handleToggleHunkCollapsed}
 				onToggleFileCollapsed={handleToggleFileCollapsed}
 			/>
+			</div>
 		</div>
 	);
 }

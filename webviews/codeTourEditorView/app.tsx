@@ -275,6 +275,7 @@ function Root() {
 					postMessage={msg => handler?.postMessage(msg) ?? Promise.resolve(undefined)}
 					inbox={viewerInbox}
 					onOpenDiff={onOpenDiff}
+					onCheckoutPR={onCheckoutPR}
 					initialViewedKeys={initialViewedKeys}
 					persistViewed={keys => { handler?.postMessage({ command: 'codeTourViewer.persistViewed', args: { keys } }); }}
 					tourFilePath={tourFilePath}
