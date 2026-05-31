@@ -31,6 +31,8 @@ interface ViewerRightPaneProps {
 	onReplyToThread: (thread: IReviewThread, body: string) => Promise<void>;
 	commentsEnabled: boolean;
 	commentsDisabledReason?: string;
+	openDiffDisabled: boolean;
+	openDiffDisabledReason?: string;
 	emptyMessage?: string;
 	viewedHunks: Set<string>;
 	collapsedHunks: Set<string>;
@@ -50,6 +52,8 @@ export function ViewerRightPane({
 	onReplyToThread,
 	commentsEnabled,
 	commentsDisabledReason,
+	openDiffDisabled,
+	openDiffDisabledReason,
 	emptyMessage,
 	viewedHunks,
 	collapsedHunks,
@@ -103,6 +107,8 @@ export function ViewerRightPane({
 						onReplyToThread={onReplyToThread}
 						commentsEnabled={commentsEnabled}
 						commentsDisabledReason={commentsDisabledReason}
+						openDiffDisabled={openDiffDisabled}
+						openDiffDisabledReason={openDiffDisabledReason}
 						viewedHunks={viewedHunks}
 						collapsedHunks={collapsedHunks}
 						onToggleHunkViewed={onToggleHunkViewed}
@@ -125,6 +131,8 @@ interface FileGroupBlockProps {
 	onReplyToThread: (thread: IReviewThread, body: string) => Promise<void>;
 	commentsEnabled: boolean;
 	commentsDisabledReason?: string;
+	openDiffDisabled: boolean;
+	openDiffDisabledReason?: string;
 	viewedHunks: Set<string>;
 	collapsedHunks: Set<string>;
 	onToggleHunkViewed: (key: string) => void;
@@ -142,6 +150,8 @@ function FileGroupBlock({
 	onReplyToThread,
 	commentsEnabled,
 	commentsDisabledReason,
+	openDiffDisabled,
+	openDiffDisabledReason,
 	viewedHunks,
 	collapsedHunks,
 	onToggleHunkViewed,
@@ -164,6 +174,8 @@ function FileGroupBlock({
 						onReplyToThread={onReplyToThread}
 						commentsEnabled={commentsEnabled}
 						commentsDisabledReason={commentsDisabledReason}
+						openDiffDisabled={openDiffDisabled}
+						openDiffDisabledReason={openDiffDisabledReason}
 						hunkKey={key}
 						isViewed={viewedHunks.has(key)}
 						isCollapsed={collapsedHunks.has(key)}
@@ -186,6 +198,8 @@ interface HunkCardProps {
 	onReplyToThread: (thread: IReviewThread, body: string) => Promise<void>;
 	commentsEnabled: boolean;
 	commentsDisabledReason?: string;
+	openDiffDisabled: boolean;
+	openDiffDisabledReason?: string;
 	hunkKey: string;
 	isViewed: boolean;
 	isCollapsed: boolean;
@@ -213,7 +227,7 @@ function threadAttachesToLine(thread: IReviewThread, line: ParsedDiffLine): bool
 	return line.newLine !== undefined && line.newLine === thread.endLine;
 }
 
-function HunkCard({ node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
+function HunkCard({ node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, openDiffDisabled, openDiffDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
 	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 	const hunkHeaderText = useMemo(() => {
@@ -332,11 +346,12 @@ function HunkCard({ node, threads, associated, showHighlights, onOpenDiff, onPos
 				<button
 					type="button"
 					className="viewer-hunk-action secondary"
-					title="Open this file's full diff with comments and context"
+					title={openDiffDisabled ? openDiffDisabledReason ?? 'Open in file context' : "Open this file's full diff with comments and context"}
+					disabled={openDiffDisabled}
 					onClick={e => { e.stopPropagation(); onOpenDiff(node.hunk); }}
 				>
 					<span className="viewer-hunk-action-icon">{diffSingleIcon}</span>
-					Open in diff
+					Open in file context
 				</button>
 				<label
 					className={`viewer-viewed-checkbox${isViewed ? ' is-viewed' : ''}`}

@@ -164,6 +164,10 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		: !prMatchesActive
 			? `Checkout PR #${doc.prNumber} to add or load comments.`
 			: undefined;
+	const openDiffDisabled = prBound && !prMatchesActive;
+	const openDiffDisabledReason = openDiffDisabled
+		? `Checkout PR #${doc.prNumber} to open in file context.`
+		: undefined;
 
 	useEffect(() => {
 		if (!commentsEnabled) {
@@ -518,6 +522,8 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				onReplyToThread={handleReplyToThread}
 				commentsEnabled={commentsEnabled}
 				commentsDisabledReason={commentsDisabledReason}
+				openDiffDisabled={openDiffDisabled}
+				openDiffDisabledReason={openDiffDisabledReason}
 				emptyMessage={selectedSectionId ? 'This section has no hunks.' : 'No hunks in this tour yet.'}
 				viewedHunks={viewedHunks}
 				collapsedHunks={collapsedHunks}
