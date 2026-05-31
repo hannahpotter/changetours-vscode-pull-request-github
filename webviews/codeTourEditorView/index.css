@@ -1131,7 +1131,9 @@ h2 {
 }
 
 .viewer-text {
-	padding: 4px 6px 4px 8px;
+	/* Right padding reserves space for the absolute-positioned "+" trigger so it
+	 * never overlaps short paragraph text. */
+	padding: 4px 28px 4px 8px;
 	border-left: 2px solid transparent;
 	border-radius: 2px;
 	cursor: pointer;
@@ -1145,6 +1147,66 @@ h2 {
 .viewer-text-associated {
 	border-left-color: var(--vscode-textLink-foreground);
 	background: var(--vscode-list-inactiveSelectionBackground, transparent);
+}
+
+/* - Paragraph-level commenting on the change tour file ------------ */
+
+.viewer-text-wrapper {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+/* Matches the per-line "+" button in the diff (`.diff-add-comment-btn`):
+ * small blue square that fades in only on paragraph hover/focus. */
+.viewer-text-comment-trigger {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	width: 16px;
+	height: 16px;
+	min-width: 16px;
+	padding: 0;
+	border: none;
+	border-radius: 3px;
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	font-size: 14px;
+	line-height: 1;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 80ms ease;
+	z-index: 1;
+}
+
+.viewer-text-wrapper:hover .viewer-text-comment-trigger,
+.viewer-text-comment-trigger:focus-visible {
+	opacity: 1;
+}
+
+.viewer-text-comment-trigger:hover:not(.disabled) {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.viewer-text-comment-trigger.disabled {
+	cursor: not-allowed;
+	background: var(--vscode-button-background);
+	opacity: 0;
+}
+
+.viewer-text-wrapper:hover .viewer-text-comment-trigger.disabled {
+	opacity: 0.4;
+}
+
+.viewer-text-threads {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-left: 12px;
 }
 
 .viewer-text p { margin: 0.3em 0; }
@@ -1410,16 +1472,40 @@ h2 {
 .vc-thread-header {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 4px 10px;
+	gap: 6px;
+	padding: 4px 8px;
 	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 	border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, transparent));
 	font-size: 12px;
 	color: var(--vscode-descriptionForeground);
 }
 
+.vc-thread.vc-thread-collapsed > .vc-thread-header {
+	border-bottom: none;
+}
+
+.vc-thread-toggle {
+	cursor: pointer;
+}
+
+.vc-thread-toggle:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
 .vc-thread-target {
 	font-family: var(--vscode-editor-font-family, monospace);
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.vc-thread-summary {
+	margin-left: auto;
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
 }
 
 .vc-thread-badge {
@@ -1510,8 +1596,9 @@ h2 {
 .vc-reply-trigger {
 	display: block;
 	width: 100%;
+	box-sizing: border-box;
 	text-align: left;
-	padding: 6px 8px;
+	padding: 5px 8px;
 	background: var(--vscode-input-background);
 	color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
 	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, transparent));
@@ -1519,15 +1606,25 @@ h2 {
 	cursor: pointer;
 	font-family: inherit;
 	font-size: 13px;
+	user-select: none;
 }
 
-.vc-reply-trigger:hover:not(:disabled) {
+.vc-reply-trigger:hover,
+.vc-reply-trigger:focus-visible {
 	border-color: var(--vscode-focusBorder);
+	color: var(--vscode-input-foreground);
+	outline: none;
 }
 
-.vc-reply-trigger:disabled {
+.vc-reply-trigger.is-disabled {
 	cursor: not-allowed;
 	opacity: 0.6;
+}
+
+.vc-reply-trigger.is-disabled:hover,
+.vc-reply-trigger.is-disabled:focus-visible {
+	border-color: var(--vscode-input-border, var(--vscode-panel-border, transparent));
+	color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
 }
 
 .vc-reply-textarea {

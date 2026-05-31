@@ -16,7 +16,7 @@ import {
 } from './viewerModel';
 import { type CommentTarget, ViewerRightPane } from './viewerRightPane';
 import { DiffSide, type IComment, type IReviewThread } from '../../src/common/comment';
-import type { CodeTourDocument, HunkReference, TourGroupNode, TourHunkNode } from '../../src/github/codeTourMarkdown';
+import type { CodeTourDocument, HunkReference, TourGroupNode, TourHunkNode, TourNode, TourTextNode } from '../../src/github/codeTourMarkdown';
 
 interface ViewerLoadThreadsMessage {
 	command: 'codeTourViewer.threadsLoaded';
@@ -51,17 +51,26 @@ export interface ViewerInboxMessage {
 
 type ViewerOutboundMessage =
 	| { command: 'codeTourViewer.loadThreads'; args: { prNumber: number | undefined; prOwner: string | undefined; prRepo: string | undefined } }
-	| { command: 'codeTourViewer.addComment'; args: { requestId: string; prNumber: number | undefined; prOwner: string | undefined; prRepo: string | undefined; file: string; endLine: number; side: CommentTarget['side']; body: string } }
+	| { command: 'codeTourViewer.addComment'; args: { requestId: string; prNumber: number | undefined; prOwner: string | undefined; prRepo: string | undefined; file: string; startLine?: number; endLine: number; side: CommentTarget['side']; body: string } }
 	| { command: 'codeTourViewer.replyToThread'; args: { requestId: string; prNumber: number | undefined; prOwner: string | undefined; prRepo: string | undefined; threadId: string; inReplyToCommentNodeId: string; body: string } };
 
 interface CodeTourViewerProps {
 	doc: CodeTourDocument;
-	activePR?: { number: number; owner: string; repo: string };
+	activePR?: {
+		number: number;
+		owner: string;
+		repo: string;
+		baseOwner?: string;
+		baseRepo?: string;
+		headOwner?: string;
+		headRepo?: string;
+	};
 	postMessage: (msg: ViewerOutboundMessage) => Promise<unknown>;
 	inbox: ViewerInboxMessage | undefined;
 	onOpenDiff: (hunk: HunkReference) => void;
 	initialViewedKeys: string[];
 	persistViewed: (keys: string[]) => void;
+	tourFilePath: string | undefined;
 }
 
 interface PendingComment {
@@ -87,7 +96,22 @@ function threadOverlapsHunk(thread: IReviewThread, hunk: HunkReference): boolean
 	return rangesOverlap(thread.startLine, thread.endLine, hunk.startLine, hunk.endLine);
 }
 
-export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, initialViewedKeys, persistViewed }: CodeTourViewerProps) {
+function collectTextNodes(doc: CodeTourDocument): TourTextNode[] {
+	const out: TourTextNode[] = [];
+	const walk = (nodes: TourNode[]) => {
+		for (const n of nodes) {
+			if (n.type === 'text') {
+				out.push(n);
+			} else if (n.type === 'group') {
+				walk(n.children);
+			}
+		}
+	};
+	walk(doc.children);
+	return out;
+}
+
+export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, initialViewedKeys, persistViewed, tourFilePath }: CodeTourViewerProps) {
 	const [selectedSectionId, setSelectedSectionId] = useState<string | undefined>(undefined);
 	const [selectedTextNodeId, setSelectedTextNodeId] = useState<string | undefined>(undefined);
 	const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
@@ -115,10 +139,25 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 	}, [viewedHunks]);
 
 	const prBound = !!doc.isPR && !!doc.prNumber && !!doc.prOwner && !!doc.prRepo;
-	const prMatchesActive = prBound && !!activePR
-		&& activePR.number === doc.prNumber
-		&& activePR.owner?.toLowerCase() === doc.prOwner?.toLowerCase()
-		&& activePR.repo?.toLowerCase() === doc.prRepo?.toLowerCase();
+	// A tour matches the active PR if the numbers agree and ANY of the active
+	// PR's known identifiers (its tracking remote, base, or head) matches the
+	// frontmatter. This handles forks where the tour was authored against the
+	// upstream while the local repo tracks the fork (or vice versa).
+	const prMatchesActive = (() => {
+		if (!prBound || !activePR || activePR.number !== doc.prNumber) {
+			return false;
+		}
+		const tourOwner = doc.prOwner?.toLowerCase();
+		const tourRepo = doc.prRepo?.toLowerCase();
+		const candidates: Array<{ owner?: string; repo?: string }> = [
+			{ owner: activePR.owner, repo: activePR.repo },
+			{ owner: activePR.baseOwner, repo: activePR.baseRepo },
+			{ owner: activePR.headOwner, repo: activePR.headRepo },
+		];
+		return candidates.some(c =>
+			c.owner?.toLowerCase() === tourOwner && c.repo?.toLowerCase() === tourRepo,
+		);
+	})();
 	const commentsEnabled = prBound && prMatchesActive;
 	const commentsDisabledReason = !prBound
 		? 'Comments require a Change Tour bound to a pull request.'
@@ -344,6 +383,61 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		return map;
 	}, [fileGroups, threads]);
 
+	// Threads attached to the .changetour.md file itself (paragraph-level comments).
+	// Key = text-node id; value = threads whose RIGHT-side range overlaps the paragraph.
+	const threadsByTextNodeId = useMemo(() => {
+		const map = new Map<string, IReviewThread[]>();
+		if (!tourFilePath) {
+			return map;
+		}
+		const textNodes = collectTextNodes(doc);
+		const tourThreads = threads.filter(t => t.diffSide === DiffSide.RIGHT && t.path === tourFilePath);
+		for (const node of textNodes) {
+			if (node.sourceStartLine === undefined || node.sourceEndLine === undefined) {
+				continue;
+			}
+			const matched = tourThreads.filter(t => rangesOverlap(t.startLine, t.endLine, node.sourceStartLine!, node.sourceEndLine!));
+			if (matched.length > 0) {
+				map.set(node.id, matched);
+			}
+		}
+		return map;
+	}, [doc, threads, tourFilePath]);
+
+	const tourCommentsEnabled = commentsEnabled && !!tourFilePath;
+	const tourCommentsDisabledReason = !tourFilePath
+		? 'This tour file is not inside the active repository, so paragraph comments cannot be posted to GitHub.'
+		: commentsDisabledReason;
+
+	const handlePostTourFileComment = useCallback((node: TourTextNode, body: string) => {
+		if (!tourCommentsEnabled || !tourFilePath) {
+			return Promise.reject(new Error(tourCommentsDisabledReason ?? 'Comments unavailable.'));
+		}
+		if (node.sourceStartLine === undefined || node.sourceEndLine === undefined) {
+			return Promise.reject(new Error('This paragraph has no known source line range; cannot post a comment.'));
+		}
+		const requestId = `viewer-tourcomment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		const startLine = node.sourceStartLine;
+		const endLine = node.sourceEndLine;
+		return new Promise<void>((resolve, reject) => {
+			pendingCommentsRef.current.set(requestId, { resolve, reject });
+			postMessage({
+				command: 'codeTourViewer.addComment',
+				args: {
+					requestId,
+					prNumber: doc.prNumber,
+					prOwner: doc.prOwner,
+					prRepo: doc.prRepo,
+					file: tourFilePath,
+					startLine: startLine === endLine ? undefined : startLine,
+					endLine,
+					side: 'RIGHT',
+					body,
+				},
+			});
+		});
+	}, [tourCommentsEnabled, tourCommentsDisabledReason, tourFilePath, doc.prNumber, doc.prOwner, doc.prRepo, postMessage]);
+
 	const handlePostLineComment = useCallback((hunk: HunkReference, target: CommentTarget, body: string) => {
 		if (!commentsEnabled) {
 			return Promise.reject(new Error(commentsDisabledReason ?? 'Comments unavailable.'));
@@ -406,6 +500,11 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				onToggleCollapse={handleToggleCollapse}
 				viewedHunks={viewedHunks}
 				onToggleSectionViewed={handleToggleSectionViewed}
+				threadsByTextNodeId={threadsByTextNodeId}
+				onPostTextNodeComment={handlePostTourFileComment}
+				onReplyToThread={handleReplyToThread}
+				tourCommentsEnabled={tourCommentsEnabled}
+				tourCommentsDisabledReason={tourCommentsDisabledReason}
 			/>
 			<ViewerRightPane
 				fileGroups={fileGroups}

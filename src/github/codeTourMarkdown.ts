@@ -92,12 +92,20 @@ export interface TourGroupNode {
 	title: string;
 	level: number;
 	children: TourNode[];
+	/** 1-indexed line in the source markdown where the heading sits. */
+	sourceStartLine?: number;
+	/** 1-indexed line in the source markdown - same as start for groups (header line only). */
+	sourceEndLine?: number;
 }
 
 export interface TourTextNode {
 	type: 'text';
 	id: string;
 	content: string;
+	/** 1-indexed first line of the paragraph's content in the source markdown. */
+	sourceStartLine?: number;
+	/** 1-indexed last line of the paragraph's content in the source markdown. */
+	sourceEndLine?: number;
 }
 
 export interface TourHunkNode {
@@ -200,6 +208,8 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 	// Stack tracks the current nesting of groups - element 0 is shallowest.
 	const groupStack: TourGroupNode[] = [];
 	let pendingTextLines: string[] = [];
+	let pendingTextStartLine: number | undefined;
+	let pendingTextEndLine: number | undefined;
 
 	// State for multi-line hunk parsing
 	let inHunk = false;
@@ -219,9 +229,17 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		const content = pendingTextLines.join('\n');
 		// Only add if there is actual non-whitespace content
 		if (content.trim().length > 0) {
-			currentContainer().push({ type: 'text', id: genId(), content: content.trim() });
+			currentContainer().push({
+				type: 'text',
+				id: genId(),
+				content: content.trim(),
+				sourceStartLine: pendingTextStartLine,
+				sourceEndLine: pendingTextEndLine,
+			});
 		}
 		pendingTextLines = [];
+		pendingTextStartLine = undefined;
+		pendingTextEndLine = undefined;
 	}
 
 	function flushHunk(): void {
@@ -252,7 +270,9 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		inHunk = false;
 	}
 
+	let lineNo = 0;
 	for (const line of lines) {
+		lineNo++; // 1-indexed
 		if (parseState === 'frontmatter-start') {
 			if (line.trim() === '---') {
 				parseState = 'frontmatter-body';
@@ -315,6 +335,8 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 				title: headingText,
 				level,
 				children: [],
+				sourceStartLine: lineNo,
+				sourceEndLine: lineNo,
 			};
 			currentContainer().push(group);
 			groupStack.push(group);
@@ -361,7 +383,16 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 			}
 		}
 
-		// Everything else is text
+		// Everything else is text. Track source lines only against non-blank lines,
+		// so leading/trailing blank lines in `pendingTextLines` don't shift the
+		// reported range (and the very first non-blank line still wins even when
+		// blank lines have already been pushed).
+		if (line.trim().length > 0) {
+			if (pendingTextStartLine === undefined) {
+				pendingTextStartLine = lineNo;
+			}
+			pendingTextEndLine = lineNo;
+		}
 		pendingTextLines.push(line);
 	}
 

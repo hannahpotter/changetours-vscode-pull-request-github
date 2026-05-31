@@ -4,8 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { createHunkDirective, HunkReference, parseCodeTourMarkdown } from './codeTourMarkdown';
+import { PullRequestModel } from './pullRequestModel';
 import { RepositoriesManager } from './repositoriesManager';
 import { DiffSide } from '../common/comment';
 import Logger from '../common/logger';
@@ -45,6 +47,27 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 
 	private static _viewedStateKey(uri: vscode.Uri): string {
 		return `changetour.viewed:${uri.toString()}`;
+	}
+
+	/**
+	 * Snapshot every owner/repo identifier the active PR might be known by so
+	 * the webview can match the tour's frontmatter regardless of whether the
+	 * tour was authored against the upstream while the local repo tracks a fork
+	 * (or vice versa).
+	 */
+	private static _activePrInfo(activePR: PullRequestModel | undefined) {
+		if (!activePR) {
+			return undefined;
+		}
+		return {
+			number: activePR.number,
+			owner: activePR.remote.owner,
+			repo: activePR.remote.repositoryName,
+			baseOwner: activePR.base?.owner,
+			baseRepo: activePR.base?.name,
+			headOwner: activePR.head?.owner,
+			headRepo: activePR.head?.name,
+		};
 	}
 
 	public static toggleEditMode(uri?: vscode.Uri) {
@@ -202,15 +225,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		const bindActivePRListener = (manager: typeof folderManager) => {
 			if (!manager) return;
 			disposables.push(manager.onDidChangeActivePullRequest(e => {
-				const activePR = e.new;
-				const prInfo = activePR ? {
-					number: activePR.number,
-					owner: activePR.remote.owner,
-					repo: activePR.remote.repositoryName
-				} : undefined;
-
-				console.log('Sending codeTourEditor.updateActivePR with:', prInfo);
-
+				const prInfo = CodeTourEditorProvider._activePrInfo(e.new);
 				webviewPanel.webview.postMessage({
 					res: {
 						command: 'codeTourEditor.updateActivePR',
@@ -227,17 +242,11 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			disposables.push(this._reposManager.onDidChangeFolderRepositories(e => {
 				if (e.added) {
 					bindActivePRListener(e.added);
-					// Check if there's already an active PR upon adding
 					if (e.added.activePullRequest) {
-						const activePR = e.added.activePullRequest;
 						webviewPanel.webview.postMessage({
 							res: {
 								command: 'codeTourEditor.updateActivePR',
-								activePR: {
-									number: activePR.number,
-									owner: activePR.remote.owner,
-									repo: activePR.remote.repositoryName
-								}
+								activePR: CodeTourEditorProvider._activePrInfo(e.added.activePullRequest)
 							}
 						});
 					}
@@ -388,12 +397,13 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			}
 
 			case 'codeTourViewer.addComment': {
-				const { requestId, prNumber, prOwner, prRepo, file, endLine, side, body } = message.args as {
+				const { requestId, prNumber, prOwner, prRepo, file, startLine, endLine, side, body } = message.args as {
 					requestId: string;
 					prNumber: number;
 					prOwner: string;
 					prRepo: string;
 					file: string;
+					startLine?: number;
 					endLine: number;
 					side: 'LEFT' | 'RIGHT';
 					body: string;
@@ -408,7 +418,8 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 						throw new Error('Pull request not found.');
 					}
 					const diffSide = side === 'LEFT' ? DiffSide.LEFT : DiffSide.RIGHT;
-					const thread = await pr.createReviewThread(body, file, endLine, endLine, diffSide, false);
+					const effectiveStart = startLine ?? endLine;
+					const thread = await pr.createReviewThread(body, file, effectiveStart, endLine, diffSide, false);
 					if (!thread) {
 						throw new Error('Comment creation returned no thread.');
 					}
@@ -508,12 +519,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		try {
 			const parsed = parseCodeTourMarkdown(document.getText());
 			const folderManager = this._reposManager.getManagerForFile(document.uri) ?? this._reposManager.folderManagers[0];
-			const activePR = folderManager?.activePullRequest;
-			const prInfo = activePR ? {
-				number: activePR.number,
-				owner: activePR.remote.owner,
-				repo: activePR.remote.repositoryName
-			} : undefined;
+			const prInfo = CodeTourEditorProvider._activePrInfo(folderManager?.activePullRequest);
 
 			// One-shot initial-mode hint from a command (e.g. "Edit Change Tour" → edit).
 			const key = document.uri.toString();
@@ -529,6 +535,43 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				[],
 			);
 
+			// Tour file path relative to its repo root, used by the viewer to
+			// pair GitHub review threads with paragraphs in the left pane.
+			// Try several roots in order: the folder manager for this file, then
+			// every other registered folder manager (handles multi-root workspaces
+			// where getManagerForFile heuristics fail), then the workspace folder.
+			const candidateRoots: vscode.Uri[] = [];
+			const seenRoots = new Set<string>();
+			const pushRoot = (uri: vscode.Uri | undefined) => {
+				if (!uri) return;
+				const key = uri.toString();
+				if (seenRoots.has(key)) return;
+				seenRoots.add(key);
+				candidateRoots.push(uri);
+			};
+			pushRoot(folderManager?.repository.rootUri);
+			for (const fm of this._reposManager.folderManagers) {
+				pushRoot(fm.repository.rootUri);
+			}
+			pushRoot(vscode.workspace.getWorkspaceFolder(document.uri)?.uri);
+
+			let tourFilePath: string | undefined;
+			for (const root of candidateRoots) {
+				if (root.scheme !== document.uri.scheme) {
+					continue;
+				}
+				const rel = path.relative(root.fsPath, document.uri.fsPath);
+				if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+					continue;
+				}
+				tourFilePath = rel.split(path.sep).join('/');
+				break;
+			}
+			Logger.debug(
+				`tourFilePath=${tourFilePath ?? '<none>'} docUri=${document.uri.fsPath} tried=${candidateRoots.map(r => r.fsPath).join('|')}`,
+				CodeTourEditorProvider.name,
+			);
+
 			webview.postMessage({
 				res: {
 					command: 'codeTourEditor.initialize',
@@ -540,6 +583,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 							? false
 							: undefined,
 					viewedKeys,
+					tourFilePath,
 				},
 			});
 		} catch (e) {

@@ -43,6 +43,7 @@ function Root() {
 	const [assistantStatus, setAssistantStatus] = useState<{ running: boolean; requestId?: string; label?: string; error?: string }>({ running: false });
 	const [viewerInbox, setViewerInbox] = useState<ViewerInboxMessage | undefined>(undefined);
 	const [initialViewedKeys, setInitialViewedKeys] = useState<string[]>([]);
+	const [tourFilePath, setTourFilePath] = useState<string | undefined>(undefined);
 
 	useEffect(() => {
 		const h = getMessageHandler((message: any) => {
@@ -55,6 +56,11 @@ function Root() {
 					}
 					if (Array.isArray(message.viewedKeys)) {
 						setInitialViewedKeys(message.viewedKeys);
+					}
+					if (typeof message.tourFilePath === 'string') {
+						setTourFilePath(message.tourFilePath);
+					} else if (message.tourFilePath === undefined) {
+						setTourFilePath(undefined);
 					}
 					return;
 				case 'codeTourEditor.updateActivePR':
@@ -271,6 +277,7 @@ function Root() {
 					onOpenDiff={onOpenDiff}
 					initialViewedKeys={initialViewedKeys}
 					persistViewed={keys => { handler?.postMessage({ command: 'codeTourViewer.persistViewed', args: { keys } }); }}
+					tourFilePath={tourFilePath}
 				/>
 			</div>
 		);

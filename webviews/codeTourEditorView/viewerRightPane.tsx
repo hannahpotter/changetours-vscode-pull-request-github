@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InlineCommentComposer } from './inlineCommentComposer';
 import { InlineCommentThread } from './inlineCommentThread';
-import { hunkKeyFor, type FileHunkGroup } from './viewerModel';
+import { type FileHunkGroup, hunkKeyFor } from './viewerModel';
 import { DiffSide, type IReviewThread } from '../../src/common/comment';
 import type { HunkReference, TourHunkNode } from '../../src/github/codeTourMarkdown';
 import { indicesFromHighlights } from '../common/diffHighlights';

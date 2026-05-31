@@ -4,8 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as marked from 'marked';
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { InlineCommentComposer } from './inlineCommentComposer';
+import { InlineCommentThread } from './inlineCommentThread';
 import { descendantHunkKeys, isSectionFullyViewed, isSectionPartiallyViewed } from './viewerModel';
+import type { IReviewThread } from '../../src/common/comment';
 import type {
 	CodeTourDocument,
 	TourGroupNode,
@@ -26,6 +29,11 @@ interface ViewerLeftPaneProps {
 	onToggleCollapse: (id: string) => void;
 	viewedHunks: Set<string>;
 	onToggleSectionViewed: (group: TourGroupNode) => void;
+	threadsByTextNodeId: Map<string, IReviewThread[]>;
+	onPostTextNodeComment: (node: TourTextNode, body: string) => Promise<void>;
+	onReplyToThread: (thread: IReviewThread, body: string) => Promise<void>;
+	tourCommentsEnabled: boolean;
+	tourCommentsDisabledReason?: string;
 }
 
 export function ViewerLeftPane(props: ViewerLeftPaneProps) {
@@ -69,6 +77,11 @@ function GroupBlock({
 	doc,
 	viewedHunks,
 	onToggleSectionViewed,
+	threadsByTextNodeId,
+	onPostTextNodeComment,
+	onReplyToThread,
+	tourCommentsEnabled,
+	tourCommentsDisabledReason,
 }: ViewerLeftPaneProps & { node: TourGroupNode }) {
 	const collapsed = collapsedSections.has(node.id);
 	const selected = selectedSectionId === node.id;
@@ -150,6 +163,11 @@ function GroupBlock({
 							onToggleCollapse={onToggleCollapse}
 							viewedHunks={viewedHunks}
 							onToggleSectionViewed={onToggleSectionViewed}
+							threadsByTextNodeId={threadsByTextNodeId}
+							onPostTextNodeComment={onPostTextNodeComment}
+							onReplyToThread={onReplyToThread}
+							tourCommentsEnabled={tourCommentsEnabled}
+							tourCommentsDisabledReason={tourCommentsDisabledReason}
 						/>
 					))}
 				</div>
@@ -163,16 +181,74 @@ function TextBlock({
 	parentGroupId,
 	selectedTextNodeId,
 	onSelectTextNode,
+	threadsByTextNodeId,
+	onPostTextNodeComment,
+	onReplyToThread,
+	tourCommentsEnabled,
+	tourCommentsDisabledReason,
 }: ViewerLeftPaneProps & { node: TourTextNode; parentGroupId: string | undefined }) {
 	const isAssociated = selectedTextNodeId === node.id;
 	const rendered = useMemo(() => marked.parse(node.content) as string, [node.content]);
+	const threads = threadsByTextNodeId.get(node.id) ?? [];
+	const [composerOpen, setComposerOpen] = useState(false);
+
+	const handleSubmit = async (body: string) => {
+		await onPostTextNodeComment(node, body);
+		setComposerOpen(false);
+	};
+
+	const hasSourceLines = node.sourceStartLine !== undefined && node.sourceEndLine !== undefined;
+	const canStartComment = tourCommentsEnabled && hasSourceLines;
+	const triggerTitle = !tourCommentsEnabled
+		? tourCommentsDisabledReason ?? 'Comments unavailable'
+		: !hasSourceLines
+			? 'This paragraph has no known source line range'
+			: 'Comment on this paragraph (posts to GitHub)';
+
 	return (
-		<div
-			id={`viewer-text-${node.id}`}
-			className={`viewer-text${isAssociated ? ' viewer-text-associated' : ''}`}
-			onClick={() => onSelectTextNode(node.id, parentGroupId)}
-			title="Click to highlight associated diffs"
-			dangerouslySetInnerHTML={{ __html: rendered }}
-		/>
+		<div className="viewer-text-wrapper">
+			<div
+				id={`viewer-text-${node.id}`}
+				className={`viewer-text${isAssociated ? ' viewer-text-associated' : ''}`}
+				onClick={() => onSelectTextNode(node.id, parentGroupId)}
+				title="Click to highlight associated diffs"
+				dangerouslySetInnerHTML={{ __html: rendered }}
+			/>
+			<button
+				type="button"
+				className={`viewer-text-comment-trigger${canStartComment ? '' : ' disabled'}`}
+				title={triggerTitle}
+				disabled={!canStartComment}
+				onClick={e => { e.stopPropagation(); if (canStartComment) setComposerOpen(true); }}
+			>
+				+
+			</button>
+			{(threads.length > 0 || composerOpen) && (
+				<div className="viewer-text-threads" onClick={e => e.stopPropagation()}>
+					{threads.map(t => (
+						<InlineCommentThread
+							key={t.id}
+							thread={t}
+							onReply={onReplyToThread}
+							replyDisabled={!tourCommentsEnabled}
+							replyDisabledReason={tourCommentsDisabledReason}
+						/>
+					))}
+					{composerOpen && (
+						<InlineCommentComposer
+							targetLabel={
+								node.sourceStartLine !== undefined && node.sourceEndLine !== undefined
+									? node.sourceStartLine === node.sourceEndLine
+										? `New thread on this paragraph (line ${node.sourceEndLine})`
+										: `New thread on this paragraph (lines ${node.sourceStartLine}-${node.sourceEndLine})`
+									: 'New thread on this paragraph'
+							}
+							onSubmit={handleSubmit}
+							onCancel={() => setComposerOpen(false)}
+						/>
+					)}
+				</div>
+			)}
+		</div>
 	);
 }
