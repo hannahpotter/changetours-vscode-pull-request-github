@@ -44,8 +44,10 @@ interface ViewerRightPaneProps {
 	emptyMessage?: string;
 	viewedHunks: Set<string>;
 	collapsedHunks: Set<string>;
+	collapsedFiles: Set<string>;
 	onToggleHunkViewed: (key: string) => void;
 	onToggleHunkCollapsed: (key: string) => void;
+	onToggleFileCollapsed: (file: string) => void;
 }
 
 export function ViewerRightPane({
@@ -73,8 +75,10 @@ export function ViewerRightPane({
 	emptyMessage,
 	viewedHunks,
 	collapsedHunks,
+	collapsedFiles,
 	onToggleHunkViewed,
 	onToggleHunkCollapsed,
+	onToggleFileCollapsed,
 }: ViewerRightPaneProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 
@@ -138,8 +142,10 @@ export function ViewerRightPane({
 						openDiffDisabledReason={openDiffDisabledReason}
 						viewedHunks={viewedHunks}
 						collapsedHunks={collapsedHunks}
+						isFileCollapsed={collapsedFiles.has(group.file)}
 						onToggleHunkViewed={onToggleHunkViewed}
 						onToggleHunkCollapsed={onToggleHunkCollapsed}
+						onToggleFileCollapsed={onToggleFileCollapsed}
 					/>
 				))
 			)}
@@ -205,8 +211,10 @@ interface FileGroupBlockProps {
 	openDiffDisabledReason?: string;
 	viewedHunks: Set<string>;
 	collapsedHunks: Set<string>;
+	isFileCollapsed: boolean;
 	onToggleHunkViewed: (key: string) => void;
 	onToggleHunkCollapsed: (key: string) => void;
+	onToggleFileCollapsed: (file: string) => void;
 }
 
 function FileGroupBlock({
@@ -225,21 +233,52 @@ function FileGroupBlock({
 	openDiffDisabledReason,
 	viewedHunks,
 	collapsedHunks,
+	isFileCollapsed,
 	onToggleHunkViewed,
 	onToggleHunkCollapsed,
+	onToggleFileCollapsed,
 }: FileGroupBlockProps) {
 	const shown = hunks.length;
 	const total = totalHunksForFile;
 	const countText = total > shown
 		? `${shown} of ${total} ${pluralHunks(total)}`
 		: `${shown} ${pluralHunks(shown)}`;
+	const handleHeaderClick = isFileCollapsed
+		? (e: React.MouseEvent<HTMLDivElement>) => {
+			const target = e.target as HTMLElement;
+			if (target.closest('button, label, input, a')) {
+				return;
+			}
+			onToggleFileCollapsed(file);
+		}
+		: undefined;
 	return (
-		<div className="viewer-file-group">
-			<div className="viewer-file-group-header" title={file}>
+		<div className={`viewer-file-group${isFileCollapsed ? ' viewer-file-group-collapsed' : ''}`}>
+			<div
+				className="viewer-file-group-header"
+				title={isFileCollapsed ? `Click to expand ${file}` : file}
+				onClick={handleHeaderClick}
+			>
+				<span
+					role="button"
+					tabIndex={0}
+					className={`expand-icon icon-button viewer-file-collapse-toggle${isFileCollapsed ? ' closed' : ''}`}
+					title={isFileCollapsed ? 'Expand file' : 'Collapse file'}
+					onClick={e => { e.stopPropagation(); onToggleFileCollapsed(file); }}
+					onKeyDown={e => {
+						if (e.key === 'Enter' || e.key === ' ') {
+							e.preventDefault();
+							e.stopPropagation();
+							onToggleFileCollapsed(file);
+						}
+					}}
+				>
+					{chevronDownIcon}
+				</span>
 				<span className="viewer-file-group-name">{file}</span>
 				<span className="viewer-file-group-count">{countText}</span>
 			</div>
-			{hunks.map(node => {
+			{!isFileCollapsed && hunks.map(node => {
 				const key = hunkKeyFor(node.hunk);
 				return (
 					<HunkCard

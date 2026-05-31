@@ -12,6 +12,7 @@ import {
 	findNode,
 	findParentGroup,
 	flattenHunks,
+	hunkKeyFor,
 	hunksForSection,
 } from './viewerModel';
 import { type CommentTarget, ViewerRightPane } from './viewerRightPane';
@@ -124,7 +125,26 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 	// Session-only manual collapse for hunks. Auto-set when viewed flips on, but the
 	// reviewer can independently toggle via the hunk header chevron to re-look.
 	const [collapsedHunks, setCollapsedHunks] = useState<Set<string>>(() => new Set(initialViewedKeys));
+	// Session-only manual collapse for entire file groups (keyed by file path).
+	// Same shape as collapsedHunks: auto-flipped when all of a file's currently-shown
+	// hunks become viewed (and back when one un-views), but independently togglable.
+	const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => {
+		const seeded = new Set(initialViewedKeys);
+		const out = new Set<string>();
+		for (const fg of dedupAndGroupByFile(flattenHunks(doc))) {
+			if (fg.hunks.length > 0 && fg.hunks.every(h => seeded.has(hunkKeyFor(h.hunk)))) {
+				out.add(fg.file);
+			}
+		}
+		return out;
+	});
 	const viewedHunksRef = useRef<Set<string>>(viewedHunks);
+	const docRef = useRef(doc);
+	useEffect(() => { docRef.current = doc; }, [doc]);
+	// Ref to the currently-rendered file groups. Read inside hunk/section toggle
+	// callbacks so we can auto-collapse a file whose visible hunks all become
+	// viewed without re-binding the callbacks on every filter change.
+	const fileGroupsRef = useRef<Array<{ file: string; keys: string[] }>>([]);
 
 	// Re-seed when the host re-sends initial state (e.g. document reopen).
 	useEffect(() => {
@@ -132,6 +152,13 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		viewedHunksRef.current = seeded;
 		setViewedHunks(seeded);
 		setCollapsedHunks(new Set(initialViewedKeys));
+		const seededFiles = new Set<string>();
+		for (const fg of dedupAndGroupByFile(flattenHunks(docRef.current))) {
+			if (fg.hunks.length > 0 && fg.hunks.every(h => seeded.has(hunkKeyFor(h.hunk)))) {
+				seededFiles.add(fg.file);
+			}
+		}
+		setCollapsedFiles(seededFiles);
 	}, [initialViewedKeys]);
 
 	useEffect(() => {
@@ -261,6 +288,26 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		setShowHighlights(v => !v);
 	}, []);
 
+	const reconcileFileCollapse = useCallback((nextViewed: Set<string>, touchedFiles: Set<string>) => {
+		if (touchedFiles.size === 0) {
+			return;
+		}
+		setCollapsedFiles(prev => {
+			const nextF = new Set(prev);
+			for (const fg of fileGroupsRef.current) {
+				if (!touchedFiles.has(fg.file)) {
+					continue;
+				}
+				if (fg.keys.length > 0 && fg.keys.every(k => nextViewed.has(k))) {
+					nextF.add(fg.file);
+				} else {
+					nextF.delete(fg.file);
+				}
+			}
+			return nextF;
+		});
+	}, []);
+
 	const handleToggleHunkViewed = useCallback((key: string) => {
 		const willBeViewed = !viewedHunksRef.current.has(key);
 		const next = new Set(viewedHunksRef.current);
@@ -280,8 +327,15 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 			}
 			return nextC;
 		});
+		const touched = new Set<string>();
+		for (const fg of fileGroupsRef.current) {
+			if (fg.keys.includes(key)) {
+				touched.add(fg.file);
+			}
+		}
+		reconcileFileCollapse(next, touched);
 		persistViewed([...next]);
-	}, [persistViewed]);
+	}, [persistViewed, reconcileFileCollapse]);
 
 	const handleToggleHunkCollapsed = useCallback((key: string) => {
 		setCollapsedHunks(prev => {
@@ -290,6 +344,18 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				next.delete(key);
 			} else {
 				next.add(key);
+			}
+			return next;
+		});
+	}, []);
+
+	const handleToggleFileCollapsed = useCallback((file: string) => {
+		setCollapsedFiles(prev => {
+			const next = new Set(prev);
+			if (next.has(file)) {
+				next.delete(file);
+			} else {
+				next.add(file);
 			}
 			return next;
 		});
@@ -336,8 +402,16 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 			}
 			return nextS;
 		});
+		const touched = new Set<string>();
+		const affectedKeys = new Set(keys);
+		for (const fg of fileGroupsRef.current) {
+			if (fg.keys.some(k => affectedKeys.has(k))) {
+				touched.add(fg.file);
+			}
+		}
+		reconcileFileCollapse(next, touched);
 		persistViewed([...next]);
-	}, [persistViewed]);
+	}, [persistViewed, reconcileFileCollapse]);
 
 
 	const allFileGroups = useMemo(() => dedupAndGroupByFile(flattenHunks(doc)), [doc]);
@@ -356,6 +430,13 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		}
 		return allFileGroups;
 	}, [allFileGroups, selectedSection, selectedSectionId]);
+
+	useEffect(() => {
+		fileGroupsRef.current = fileGroups.map(fg => ({
+			file: fg.file,
+			keys: fg.hunks.map(h => hunkKeyFor(h.hunk)),
+		}));
+	}, [fileGroups]);
 
 	const totalsByFile = useMemo(() => {
 		const m = new Map<string, number>();
@@ -559,8 +640,10 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				emptyMessage={selectedSectionId ? 'This section has no hunks.' : 'No hunks in this tour yet.'}
 				viewedHunks={viewedHunks}
 				collapsedHunks={collapsedHunks}
+				collapsedFiles={collapsedFiles}
 				onToggleHunkViewed={handleToggleHunkViewed}
 				onToggleHunkCollapsed={handleToggleHunkCollapsed}
+				onToggleFileCollapsed={handleToggleFileCollapsed}
 			/>
 		</div>
 	);

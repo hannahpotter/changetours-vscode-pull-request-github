@@ -1264,14 +1264,30 @@ h2 {
 
 .viewer-file-group-header {
 	display: flex;
-	align-items: baseline;
-	gap: 12px;
+	align-items: center;
+	gap: 8px;
 	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 	padding: 6px 10px;
 	font-family: var(--vscode-editor-font-family, monospace);
 	font-size: 0.9em;
 	font-weight: 600;
 	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+}
+
+.viewer-file-group-collapsed .viewer-file-group-header {
+	border-bottom: none;
+	cursor: pointer;
+}
+
+.viewer-file-group-collapsed .viewer-file-group-header:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+/* Chevron reuses the canonical .expand-icon rules (16x16, rotates -90deg when
+ * .closed). The .viewer-file-collapse-toggle class only adds focus styling. */
+.viewer-file-collapse-toggle:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
 }
 
 .viewer-file-group-name {
