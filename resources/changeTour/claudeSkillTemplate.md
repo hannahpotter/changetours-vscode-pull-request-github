@@ -15,29 +15,47 @@ Every valid `.changetour.md` file has three parts.
 
 ```
 ---
+schemaVersion: 1
 isPR: true
 prNumber: <integer>
 prOwner: <github owner>
 prRepo: <github repo>
-baseRef: <base branch>
+baseRef: <base branch name>
+baseSha: <PR base commit SHA at tour-author time>
+headSha: <PR head commit SHA at tour-author time>
 ---
 ```
+
+`baseSha` and `headSha` are the anchors used by the future outdated-detection flow - resolve them with `gh pr view <num> --json baseRefOid,headRefOid` and copy verbatim. `schemaVersion` must be `1`.
 
 **Part 2: A single H1 title** (`# ...`).
 
 **Part 3: An ordered tree of three node kinds.**
 
-- **group**: a markdown heading `##` through `######` that groups related nodes.
+- **group**: a markdown heading `##` through `######` that groups related nodes. To mark a section as collapsed-by-default in the viewer, append an HTML comment: `## My Section <!-- collapsed -->`.
 - **text**: a paragraph of narration (focus on WHY of a change or group of changes, not WHAT).
-- **hunk**: a fenced block referencing one diff hunk from the bound pull request:
+- **hunk**: a `<details>` block referencing one diff hunk from the bound pull request. The on-disk shape is GitHub-friendly so the file renders as a collapsible syntax-highlighted diff in standard markdown viewers:
 
-```
-:::hunk file=<repo/relative/path> [previousFile=<old/path>] [highlights=new:14-18,old:22-25]
-<full raw patch starting with the @@ -A,B +C,D @@ header>
-:::
+````
+<details open>
+<summary><code>repo/relative/path</code> · One-line summary</summary>
+
+<!-- changetour:hunk file="repo/relative/path" [previousFile="old/path"] [highlights="new:14-18,old:22-25"] [baseBlob="<git blob SHA>"] -->
+
+```diff
+@@ -A,B +C,D @@
+<full raw patch body>
 ```
 
-The directive itself only carries `file=` (and optionally `previousFile=` for renames and `highlights=` for sub-range emphasis). The line range is read from the patch body's `@@` header - do not duplicate it in the directive. `ref` defaults to `HEAD`.
+</details>
+````
+
+Notes on the format:
+- `<details open>` defaults to expanded; `<details>` (no `open` attribute) defaults to collapsed.
+- The `<summary>` is human-visible. Use `<code>previousFile</code> → <code>file</code> · summary` for renames.
+- The `<!-- changetour:hunk … -->` comment is the canonical machine-readable metadata; it's invisible in every renderer. Only `file=` is required.
+- The new-side line range is derived from the patch body's `@@` header - do not duplicate it in the comment.
+- Blank lines between `<details>` / `<summary>` / metadata comment / ```diff fence are required so GitHub renders the markdown body inside the HTML correctly.
 
 ## Preflight: check dependencies before doing anything else
 
@@ -69,10 +87,10 @@ When the user asks you to start a tour for a PR (or hands you a PR number but no
 **Step 1: Resolve PR metadata via `gh`.**
 
 ```
-gh pr view <num> --json number,title,baseRefName,headRefOid,body,headRepository
+gh pr view <num> --json number,title,baseRefName,baseRefOid,headRefOid,body,headRepository
 ```
 
-The fields you need are: `number` (`prNumber`), `title` (used for the file name and the H1), `baseRefName` (`baseRef`), and `headRepository.owner.login`/`headRepository.name` for `prOwner`/`prRepo`. If the user is working on the PR branch locally, `gh pr view` with no arg auto-detects it.
+The fields you need are: `number` (`prNumber`), `title` (used for the file name and the H1), `baseRefName` (`baseRef`), `baseRefOid` (`baseSha`), `headRefOid` (`headSha`), and `headRepository.owner.login`/`headRepository.name` for `prOwner`/`prRepo`. If the user is working on the PR branch locally, `gh pr view` with no arg auto-detects it.
 
 **Step 2: Compute the filename.** Sanitize the PR title: lowercase, replace whitespace and path-illegal chars (` / \ : * ? " < > |`) with `-`, strip anything outside `[a-z0-9._-]`, collapse runs of `-`, trim leading/trailing punctuation, clip to 80 chars. The final path is:
 
@@ -86,11 +104,14 @@ If sanitization yields an empty string, fall back to `<num>.changetour.md`.
 
 ```
 ---
+schemaVersion: 1
 isPR: true
 prNumber: <num>
 prOwner: <owner>
 prRepo: <repo>
 baseRef: <baseRefName>
+baseSha: <baseRefOid>
+headSha: <headRefOid>
 ---
 
 # <PR title>
@@ -109,9 +130,11 @@ Whether you bootstrapped the tour or are editing an existing one, **run the pref
 
 3. **Group narration.** A short text node + multiple hunks underneath it is the typical shape. Avoid writing a separate text node for every hunk in a tight group - long stretches of narration-hunk-narration-hunk are bad UX. Prefer one short text node per logical change, even if that change spans multiple hunks.
 
-4. **Hunk body must include the full patch.** The body between `:::hunk file=...` and the closing `:::` is the raw patch text. It MUST begin with an `@@ -A,B +C,D @@` header. The validator (next section) cross-checks this against the live PR diff.
+4. **Hunk body must include the full patch.** The body inside the ```diff fence is the raw patch text. It MUST begin with an `@@ -A,B +C,D @@` header. The validator (next section) cross-checks this against the live PR diff.
 
-5. **Highlights are optional.** Use `highlights=new:14-18,old:22-25` only when the hunk is >20 lines AND a specific sub-range carries the point.
+5. **Highlights are optional.** Use `highlights="new:14-18,old:22-25"` (inside the metadata comment) only when the hunk is >20 lines AND a specific sub-range carries the point.
+
+6. **`baseBlob` is optional but recommended.** Stamp it from the PR file API's `sha` field for the file at PR head (`gh api repos/<owner>/<repo>/pulls/<num>/files | jq '.[].sha'`). The future outdated-detection feature uses it as the per-hunk anchor for drift checks.
 
 ## Validate after every significant edit
 

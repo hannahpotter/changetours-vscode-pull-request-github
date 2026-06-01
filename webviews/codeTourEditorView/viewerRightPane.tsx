@@ -21,6 +21,7 @@ export interface CommentTarget {
 
 interface ViewerRightPaneProps {
 	diffLayout: 'inline' | 'sideBySide';
+	headSha?: string;
 	fileGroups: FileHunkGroup[];
 	totalsByFile: Map<string, number>;
 	threadsByHunkId: Map<string, IReviewThread[]>;
@@ -53,6 +54,7 @@ interface ViewerRightPaneProps {
 
 export function ViewerRightPane({
 	diffLayout,
+	headSha,
 	fileGroups,
 	totalsByFile,
 	threadsByHunkId,
@@ -130,6 +132,7 @@ export function ViewerRightPane({
 					<FileGroupBlock
 						key={group.file}
 						diffLayout={diffLayout}
+						headSha={headSha}
 						file={group.file}
 						hunks={group.hunks}
 						totalHunksForFile={totalsByFile.get(group.file) ?? group.hunks.length}
@@ -200,6 +203,7 @@ function FilterStatusBar({ label, shownHunkCount, totalHunkCount, shownFileCount
 
 interface FileGroupBlockProps {
 	diffLayout: 'inline' | 'sideBySide';
+	headSha?: string;
 	file: string;
 	hunks: TourHunkNode[];
 	totalHunksForFile: number;
@@ -223,6 +227,7 @@ interface FileGroupBlockProps {
 
 function FileGroupBlock({
 	diffLayout,
+	headSha,
 	file,
 	hunks,
 	totalHunksForFile,
@@ -289,6 +294,7 @@ function FileGroupBlock({
 					<HunkCard
 						key={node.id}
 						diffLayout={diffLayout}
+						headSha={headSha}
 						node={node}
 						threads={threadsByHunkId.get(node.id) ?? []}
 						associated={associatedHunkIds.has(node.id)}
@@ -314,6 +320,7 @@ function FileGroupBlock({
 
 interface HunkCardProps {
 	diffLayout: 'inline' | 'sideBySide';
+	headSha?: string;
 	node: TourHunkNode;
 	threads: IReviewThread[];
 	associated: boolean;
@@ -352,8 +359,9 @@ function threadAttachesToLine(thread: IReviewThread, line: ParsedDiffLine): bool
 	return line.newLine !== undefined && line.newLine === thread.endLine;
 }
 
-function HunkCard({ diffLayout, node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, openDiffDisabled, openDiffDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
-	const { file, startLine, endLine, ref, patch } = node.hunk;
+function HunkCard({ diffLayout, headSha, node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, openDiffDisabled, openDiffDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
+	const { file, startLine, endLine, patch } = node.hunk;
+	const headShaShort = headSha ? headSha.substring(0, 7) : '';
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 	const summaryInfo = useMemo(() => getHunkSummary(node.hunk), [node.hunk]);
 	const diffHunkHeaderText = useMemo(() => {
@@ -450,7 +458,7 @@ function HunkCard({ diffLayout, node, threads, associated, showHighlights, onOpe
 			<div
 				className="viewer-hunk-header"
 				onClick={handleHeaderClick}
-				title={bodyCollapsed ? `Click to expand (L${startLine}-${endLine} @ ${ref.substring(0, 7)})` : undefined}
+				title={bodyCollapsed ? `Click to expand (L${startLine}-${endLine}${headShaShort ? ` @ ${headShaShort}` : ''})` : undefined}
 			>
 				{/* Row 1: chevron, L#-# + ref (no file - the file is already in the
 					file group header in the left pane), actions. */}
@@ -473,7 +481,9 @@ function HunkCard({ diffLayout, node, threads, associated, showHighlights, onOpe
 					</span>
 					<div className="viewer-hunk-info">
 						<span className="viewer-hunk-lines">L{startLine}&ndash;{endLine}</span>
-						<span className="viewer-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
+						{headShaShort && (
+						<span className="viewer-hunk-ref" title={headSha}>{headShaShort}</span>
+					)}
 					</div>
 					<button
 						type="button"

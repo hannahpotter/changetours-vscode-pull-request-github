@@ -6,14 +6,27 @@
 
 /**
  * Represents a diff hunk reference embedded in a Change Tour document.
- * Stored in the markdown as a fenced block:
- *   :::hunk file=<path> [previousFile=<old path>] [highlights=…]
- *   <patch content starting with the @@ -A,B +C,D @@ header>
- *   :::
  *
- * The new-side line range is derived from the patch body's @@ header at load
- * time; older files with explicit `lines=<start>-<end>` and `ref=<commitish>`
- * attributes are still accepted for backward compatibility.
+ * On disk a hunk is a `<details>` block that GitHub (and other standard
+ * markdown viewers) renders as a collapsible syntax-highlighted diff:
+ *
+ *   <details open>
+ *   <summary><code>src/api.ts</code> · Refactor handler</summary>
+ *
+ *   <!-- changetour:hunk file="src/api.ts" highlights="new:14-18" baseBlob="89ab…" -->
+ *
+ *   ```diff
+ *   @@ -A,B +C,D @@
+ *   …patch body…
+ *   ```
+ *
+ *   </details>
+ *
+ * The visible `<summary>` is computed from (file, previousFile, summary) at
+ * serialize time; the canonical machine-readable metadata lives in the
+ * `<!-- changetour:hunk … -->` comment. The `<details>` `open` attribute
+ * controls default-collapse. The new-side line range is derived from the
+ * patch body's first `@@ -A,B +C,D @@` header at load time.
  */
 export interface HighlightRange {
 	side: 'old' | 'new';
@@ -25,7 +38,6 @@ export interface HunkReference {
 	file: string;
 	startLine: number;
 	endLine: number;
-	ref: string;
 	patch?: string;
 	previousFile?: string;
 	highlights?: HighlightRange[];
@@ -38,6 +50,13 @@ export interface HunkReference {
 	 * pre-filled with that auto-default so authors can directly edit it.
 	 */
 	summary?: string;
+	/**
+	 * Git blob SHA of the new-side file at the tour-author `headSha`. Together
+	 * with the tour-level `headSha` this lets a future update flow detect
+	 * outdated hunks: re-fetch the current blob SHA for `file`; mismatch =>
+	 * the underlying code has drifted from what this hunk shows.
+	 */
+	baseBlob?: string;
 }
 
 const SUMMARY_PREVIEW_MAX_LEN = 60;
@@ -169,34 +188,44 @@ export type TourNode = TourGroupNode | TourTextNode | TourHunkNode;
 
 export interface CodeTourDocument {
 	title: string;
+	/** Format version. Currently always 1; bumps trigger an explicit migration. */
+	schemaVersion?: number;
 	prNumber?: number;
 	prOwner?: string;
 	prRepo?: string;
 	isPR?: boolean;
 	baseRef?: string;
+	/** PR base commit SHA at tour-author time. Anchors the future update flow. */
+	baseSha?: string;
+	/** PR head commit SHA at tour-author time. Used together with per-hunk `baseBlob` to detect drift. */
+	headSha?: string;
 	children: TourNode[];
 }
 
-const HUNK_OPEN_PATTERN = /^:::hunk\s+(.+?)\s*$/;
-const HUNK_END_PATTERN = /^:::$/;
+const DETAILS_OPEN_PATTERN = /^\s*<details(\s+open)?\s*>\s*$/;
+const DETAILS_CLOSE_PATTERN = /^\s*<\/details>\s*$/;
+const SUMMARY_LINE_PATTERN = /^\s*<summary>.*<\/summary>\s*$/;
+const HUNK_METADATA_PATTERN = /^\s*<!--\s*changetour:hunk\s+(.*?)\s*-->\s*$/;
+const DIFF_FENCE_OPEN_PATTERN = /^\s*```diff\s*$/;
+const DIFF_FENCE_CLOSE_PATTERN = /^\s*```\s*$/;
 const HUNK_BODY_RANGE_PATTERN = /^@@\s+-\d+(?:,\d+)?\s+\+(?<start>\d+)(?:,(?<count>\d+))?\s+@@/;
+/** Legacy `:::hunk …` opener. Triggers a migration error on read. */
+const LEGACY_HUNK_OPEN_PATTERN = /^:::hunk(\s|$)/;
 
 interface HunkAttributes {
 	file?: string;
-	lines?: string;
-	ref?: string;
 	previousFile?: string;
 	level?: string;
 	highlights?: string;
-	defaultCollapsed?: string;
 	summary?: string;
+	baseBlob?: string;
 }
 
 /**
- * Tokenize the attribute list of a `:::hunk` directive. Each attribute is
- * `key=value`, separated by whitespace, in any order. All attributes are
- * optional except `file`; missing line range and ref are derived later from
- * the patch body's `@@` header and frontmatter respectively.
+ * Tokenize the attribute list inside a `<!-- changetour:hunk … -->` comment.
+ * Each attribute is `key=value`, separated by whitespace, in any order. All
+ * attributes are optional except `file`; the new-side line range is always
+ * derived from the patch body's `@@` header.
  *
  * Values can be either bare tokens (`file=path/to/x.ts`) or double-quoted
  * strings (`summary="My description with spaces"`). Inside a quoted value,
@@ -215,7 +244,7 @@ function parseHunkAttributes(attributeList: string): HunkAttributes {
 }
 
 /**
- * Serialize a value for use in the `:::hunk` directive attribute list. Bare
+ * Serialize a value for use in the metadata comment attribute list. Bare
  * tokens (no whitespace, no quote) are emitted as-is; anything else is wrapped
  * in double quotes with `\` and `"` escaped.
  */
@@ -227,21 +256,61 @@ function serializeHunkAttributeValue(value: string): string {
 }
 
 /**
- * Build the `:::hunk …` directive header line. Shared between
- * `serializeCodeTourMarkdown`, `createHunkDirective`, and the webview's
- * local serializer in `codeTourEditor.tsx` (which mirrors this one).
+ * HTML-escape a string for embedding inside a `<summary>` element. The
+ * `<summary>` is purely for human display; the canonical machine-readable
+ * metadata lives in the adjacent `<!-- changetour:hunk … -->` comment.
  */
-export function buildHunkDirectiveHeader(hunk: HunkReference, level?: number): string {
-	let header = `:::hunk file=${serializeHunkAttributeValue(hunk.file)}`;
-	if (hunk.previousFile) header += ` previousFile=${serializeHunkAttributeValue(hunk.previousFile)}`;
-	if (level !== undefined) header += ` level=${level}`;
+function escapeHtml(s: string): string {
+	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Build the full `<details>` block for a hunk, including the visible
+ * `<summary>`, the metadata comment, and the fenced ```diff body. Shared
+ * between `serializeCodeTourMarkdown`, `createHunkBlock`, and the webview's
+ * local serializer in `codeTourEditor.tsx` (which mirrors this one).
+ *
+ * `level` is stamped into the metadata comment as an opaque round-trip aid
+ * so the parser can pop the group stack correctly when a hunk sits at a
+ * shallower nesting than its predecessor.
+ */
+export function buildHunkBlock(hunk: HunkReference, level?: number): string {
+	const lines: string[] = [];
+
+	lines.push(hunk.defaultCollapsed ? '<details>' : '<details open>');
+
+	// `<summary>` is the human-visible header: `<code>file</code> · summary`
+	// (or `<code>previousFile</code> → <code>file</code> · summary` for renames).
+	const summaryText = getHunkSummary(hunk).text;
+	const pathHtml = hunk.previousFile && hunk.previousFile !== hunk.file
+		? `<code>${escapeHtml(hunk.previousFile)}</code> → <code>${escapeHtml(hunk.file)}</code>`
+		: `<code>${escapeHtml(hunk.file)}</code>`;
+	lines.push(`<summary>${pathHtml} · ${escapeHtml(summaryText)}</summary>`);
+	lines.push('');
+
+	// Metadata comment - the canonical attribute store. Order is stable for
+	// round-trip diffability.
+	const attrs: string[] = [`file=${serializeHunkAttributeValue(hunk.file)}`];
+	if (hunk.previousFile) attrs.push(`previousFile=${serializeHunkAttributeValue(hunk.previousFile)}`);
+	if (level !== undefined) attrs.push(`level=${level}`);
 	const highlightAttr = serializeHighlightAttribute(hunk.highlights);
-	if (highlightAttr) header += ` highlights=${highlightAttr}`;
-	if (hunk.defaultCollapsed) header += ` defaultCollapsed=true`;
+	if (highlightAttr) attrs.push(`highlights=${highlightAttr}`);
 	if (hunk.summary && hunk.summary.trim().length > 0) {
-		header += ` summary=${serializeHunkAttributeValue(hunk.summary)}`;
+		attrs.push(`summary=${serializeHunkAttributeValue(hunk.summary)}`);
 	}
-	return header;
+	if (hunk.baseBlob) attrs.push(`baseBlob=${serializeHunkAttributeValue(hunk.baseBlob)}`);
+	lines.push(`<!-- changetour:hunk ${attrs.join(' ')} -->`);
+	lines.push('');
+
+	lines.push('```diff');
+	if (hunk.patch) {
+		lines.push(hunk.patch);
+	}
+	lines.push('```');
+	lines.push('');
+	lines.push('</details>');
+
+	return lines.join('\n');
 }
 
 /**
@@ -273,12 +342,106 @@ export function resetIdCounter(): void {
 }
 
 /**
+ * Try to consume a `<details>`-wrapped hunk block starting at `lines[startIdx]`.
+ * Returns null if the lines don't match the canonical shape, in which case
+ * the caller should fall back to treating `lines[startIdx]` as text (the
+ * `<details>` tag might be authored prose, not a hunk).
+ *
+ * The canonical shape (with optional blank lines between each element):
+ *
+ *   <details> | <details open>
+ *   <summary>…</summary>
+ *
+ *   <!-- changetour:hunk file="…" … -->
+ *
+ *   ```diff
+ *   …patch…
+ *   ```
+ *
+ *   </details>
+ */
+function tryParseHunkBlock(
+	lines: string[],
+	startIdx: number,
+): { hunk: HunkReference; level?: number; nextIdx: number } | null {
+	const openMatch = DETAILS_OPEN_PATTERN.exec(lines[startIdx]);
+	if (!openMatch) {
+		return null;
+	}
+	const isOpen = !!openMatch[1]; // matched `<details open>`
+	let i = startIdx + 1;
+	const skipBlanks = () => {
+		while (i < lines.length && lines[i].trim() === '') i++;
+	};
+
+	skipBlanks();
+	if (i >= lines.length || !SUMMARY_LINE_PATTERN.test(lines[i])) {
+		return null;
+	}
+	i++;
+
+	skipBlanks();
+	if (i >= lines.length) {
+		return null;
+	}
+	const metaMatch = HUNK_METADATA_PATTERN.exec(lines[i]);
+	if (!metaMatch) {
+		return null;
+	}
+	const attrs = parseHunkAttributes(metaMatch[1]);
+	if (!attrs.file) {
+		return null;
+	}
+	i++;
+
+	skipBlanks();
+	if (i >= lines.length || !DIFF_FENCE_OPEN_PATTERN.test(lines[i])) {
+		return null;
+	}
+	i++;
+
+	const patchLines: string[] = [];
+	while (i < lines.length && !DIFF_FENCE_CLOSE_PATTERN.test(lines[i])) {
+		patchLines.push(lines[i]);
+		i++;
+	}
+	if (i >= lines.length) {
+		return null; // unclosed ```diff fence
+	}
+	i++; // consume closing ```
+
+	skipBlanks();
+	if (i >= lines.length || !DETAILS_CLOSE_PATTERN.test(lines[i])) {
+		return null;
+	}
+	i++; // consume </details>
+
+	const patch = patchLines.join('\n').trim();
+	const range = extractLineRangeFromPatch(patch || undefined);
+	const hunk: HunkReference = {
+		file: attrs.file,
+		startLine: range?.startLine ?? 0,
+		endLine: range?.endLine ?? 0,
+		patch: patch || undefined,
+		previousFile: attrs.previousFile,
+		highlights: parseHighlightAttribute(attrs.highlights),
+		defaultCollapsed: isOpen ? undefined : true,
+		summary: attrs.summary && attrs.summary.trim().length > 0 ? attrs.summary : undefined,
+		baseBlob: attrs.baseBlob,
+	};
+	const level = attrs.level ? parseInt(attrs.level, 10) : undefined;
+	return { hunk, level: Number.isFinite(level) ? level : undefined, nextIdx: i };
+}
+
+/**
  * Parse a `.changetour.md` file into a structured document tree.
  *
  * Rules:
  * - `# Title` (h1) becomes the document title
  * - `## …` / `### …` etc. become group nodes
- * - `:::hunk file=…` … `:::` blocks become hunk references
+ * - `<details>`-wrapped diff blocks (see `tryParseHunkBlock` and `buildHunkBlock`)
+ *   become hunk references
+ * - Legacy `:::hunk …` directives throw a migration error
  * - Everything else is aggregated into text nodes
  */
 export function parseCodeTourMarkdown(text: string): CodeTourDocument {
@@ -286,11 +449,14 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 	const lines = text.split('\n');
 
 	let title = '';
+	let schemaVersion: number | undefined;
 	let prNumber: number | undefined;
 	let prOwner: string | undefined;
 	let prRepo: string | undefined;
 	let isPR: boolean | undefined;
 	let baseRef: string | undefined;
+	let baseSha: string | undefined;
+	let headSha: string | undefined;
 
 	const rootChildren: TourNode[] = [];
 	// Stack tracks the current nesting of groups - element 0 is shallowest.
@@ -298,11 +464,6 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 	let pendingTextLines: string[] = [];
 	let pendingTextStartLine: number | undefined;
 	let pendingTextEndLine: number | undefined;
-
-	// State for multi-line hunk parsing
-	let inHunk = false;
-	let pendingHunk: HunkReference | null = null;
-	let pendingPatchLines: string[] = [];
 
 	let parseState: 'frontmatter-start' | 'frontmatter-body' | 'body' = 'frontmatter-start';
 
@@ -330,70 +491,48 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		pendingTextEndLine = undefined;
 	}
 
-	function flushHunk(): void {
-		if (!pendingHunk) {
-			return;
-		}
-		const patch = pendingPatchLines.join('\n').trim();
-		// If the directive omitted `lines=` (the new format), derive the range
-		// from the patch body's `@@ -A,B +C,D @@` header.
-		if (!pendingHunk.startLine || !pendingHunk.endLine) {
-			const range = extractLineRangeFromPatch(patch || undefined);
-			if (range) {
-				pendingHunk.startLine = range.startLine;
-				pendingHunk.endLine = range.endLine;
-			}
-		}
-		const hunkNode: TourHunkNode = {
-			type: 'hunk',
-			id: genId(),
-			hunk: {
-				...pendingHunk,
-				patch: patch || undefined,
-			},
-		};
-		currentContainer().push(hunkNode);
-		pendingHunk = null;
-		pendingPatchLines = [];
-		inHunk = false;
-	}
+	let i = 0;
+	while (i < lines.length) {
+		const line = lines[i];
+		const lineNo = i + 1; // 1-indexed
 
-	let lineNo = 0;
-	for (const line of lines) {
-		lineNo++; // 1-indexed
 		if (parseState === 'frontmatter-start') {
 			if (line.trim() === '---') {
 				parseState = 'frontmatter-body';
+				i++;
 				continue;
-			} else {
-				parseState = 'body';
 			}
+			parseState = 'body';
 		} else if (parseState === 'frontmatter-body') {
 			if (line.trim() === '---') {
 				parseState = 'body';
-			} else {
-				const match = /^([a-zA-Z0-9_]+)\s*:\s*(.+)$/.exec(line);
-				if (match) {
-					const key = match[1];
-					const value = match[2].trim();
-					if (key === 'prNumber') prNumber = parseInt(value, 10);
-					else if (key === 'prOwner') prOwner = value;
-					else if (key === 'prRepo') prRepo = value;
-					else if (key === 'isPR') isPR = value === 'true';
-					else if (key === 'baseRef') baseRef = value;
-				}
+				i++;
+				continue;
 			}
+			const match = /^([a-zA-Z0-9_]+)\s*:\s*(.+)$/.exec(line);
+			if (match) {
+				const key = match[1];
+				const value = match[2].trim();
+				if (key === 'schemaVersion') schemaVersion = parseInt(value, 10);
+				else if (key === 'prNumber') prNumber = parseInt(value, 10);
+				else if (key === 'prOwner') prOwner = value;
+				else if (key === 'prRepo') prRepo = value;
+				else if (key === 'isPR') isPR = value === 'true';
+				else if (key === 'baseRef') baseRef = value;
+				else if (key === 'baseSha') baseSha = value;
+				else if (key === 'headSha') headSha = value;
+			}
+			i++;
 			continue;
 		}
 
-		// If we're inside a multi-line hunk, look for the closing :::
-		if (inHunk) {
-			if (HUNK_END_PATTERN.test(line)) {
-				flushHunk();
-			} else {
-				pendingPatchLines.push(line);
-			}
-			continue;
+		// Reject legacy `:::hunk …` directives explicitly. Hard cutover: we
+		// don't try to parse them - point the author at the migration script.
+		if (LEGACY_HUNK_OPEN_PATTERN.test(line)) {
+			throw new Error(
+				`Line ${lineNo}: legacy ':::hunk' directive is no longer supported. ` +
+				`Run \`node scripts/migrate-change-tour.js <path>\` to upgrade this tour to the new <details>-based format.`,
+			);
 		}
 
 		// Detect headings
@@ -403,16 +542,14 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 			const headingText = headingMatch.groups!.text.trim();
 
 			if (level === 1 && !title) {
-				// Document title
 				flushText();
 				title = headingText;
+				i++;
 				continue;
 			}
 
-			// Heading of level 2+ defines a group
 			flushText();
 
-			// Pop groups that are at the same level or deeper
 			while (groupStack.length > 0 && groupStack[groupStack.length - 1].level >= level) {
 				groupStack.pop();
 			}
@@ -441,47 +578,33 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 			}
 			currentContainer().push(group);
 			groupStack.push(group);
+			i++;
 			continue;
 		}
 
-		// Detect hunk references
-		const hunkOpenMatch = HUNK_OPEN_PATTERN.exec(line);
-		if (hunkOpenMatch) {
-			const attrs = parseHunkAttributes(hunkOpenMatch[1]);
-			if (attrs.file) {
+		// Detect <details>-wrapped hunk blocks. Peek-ahead: if the structure
+		// doesn't match, fall through and treat the `<details>` line as text
+		// (authors might use `<details>` in their narration for other purposes).
+		if (DETAILS_OPEN_PATTERN.test(line)) {
+			const result = tryParseHunkBlock(lines, i);
+			if (result) {
 				flushText();
 
-				if (attrs.level) {
-					const parsedLevel = parseInt(attrs.level, 10);
-					while (groupStack.length > 0 && groupStack[groupStack.length - 1].level > parsedLevel) {
+				// The level attribute (round-trip aid) tells us if this hunk
+				// belongs at a shallower nesting than the deepest open group.
+				if (result.level !== undefined) {
+					while (groupStack.length > 0 && groupStack[groupStack.length - 1].level > result.level) {
 						groupStack.pop();
 					}
 				}
 
-				let startLine = 0;
-				let endLine = 0;
-				if (attrs.lines) {
-					const m = /^(\d+)-(\d+)$/.exec(attrs.lines);
-					if (m) {
-						startLine = parseInt(m[1], 10);
-						endLine = parseInt(m[2], 10);
-					}
-				}
-
-				// Multi-line hunk, start accumulating patch content. Line range
-				// is derived from the patch body at flushHunk() if not present here.
-				inHunk = true;
-				pendingHunk = {
-					file: attrs.file,
-					startLine,
-					endLine,
-					ref: attrs.ref ?? 'HEAD',
-					previousFile: attrs.previousFile,
-					highlights: parseHighlightAttribute(attrs.highlights),
-					defaultCollapsed: attrs.defaultCollapsed === 'true' ? true : undefined,
-					summary: attrs.summary && attrs.summary.trim().length > 0 ? attrs.summary : undefined,
+				const hunkNode: TourHunkNode = {
+					type: 'hunk',
+					id: genId(),
+					hunk: result.hunk,
 				};
-				pendingPatchLines = [];
+				currentContainer().push(hunkNode);
+				i = result.nextIdx;
 				continue;
 			}
 		}
@@ -497,15 +620,23 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 			pendingTextEndLine = lineNo;
 		}
 		pendingTextLines.push(line);
+		i++;
 	}
 
 	flushText();
-	// Handle unclosed hunk at end of file
-	if (inHunk) {
-		flushHunk();
-	}
 
-	return { title: title || 'Untitled Change Tour', prNumber, prOwner, prRepo, isPR, baseRef, children: rootChildren };
+	return {
+		title: title || 'Untitled Change Tour',
+		schemaVersion,
+		prNumber,
+		prOwner,
+		prRepo,
+		isPR,
+		baseRef,
+		baseSha,
+		headSha,
+		children: rootChildren,
+	};
 }
 
 /**
@@ -514,13 +645,24 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 	const lines: string[] = [];
 
-	if (doc.isPR !== undefined || doc.prNumber !== undefined || doc.prOwner || doc.prRepo || doc.baseRef) {
+	const hasFrontmatter = doc.schemaVersion !== undefined
+		|| doc.isPR !== undefined
+		|| doc.prNumber !== undefined
+		|| doc.prOwner
+		|| doc.prRepo
+		|| doc.baseRef
+		|| doc.baseSha
+		|| doc.headSha;
+	if (hasFrontmatter) {
 		lines.push('---');
+		if (doc.schemaVersion !== undefined) lines.push(`schemaVersion: ${doc.schemaVersion}`);
 		if (doc.isPR !== undefined) lines.push(`isPR: ${doc.isPR}`);
 		if (doc.prNumber !== undefined) lines.push(`prNumber: ${doc.prNumber}`);
 		if (doc.prOwner) lines.push(`prOwner: ${doc.prOwner}`);
 		if (doc.prRepo) lines.push(`prRepo: ${doc.prRepo}`);
 		if (doc.baseRef) lines.push(`baseRef: ${doc.baseRef}`);
+		if (doc.baseSha) lines.push(`baseSha: ${doc.baseSha}`);
+		if (doc.headSha) lines.push(`headSha: ${doc.headSha}`);
 		lines.push('---');
 	}
 
@@ -543,11 +685,7 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 					lines.push('');
 					break;
 				case 'hunk': {
-					lines.push(buildHunkDirectiveHeader(node.hunk, currentLevel));
-					if (node.hunk.patch) {
-						lines.push(node.hunk.patch);
-					}
-					lines.push(':::');
+					lines.push(buildHunkBlock(node.hunk, currentLevel));
 					lines.push('');
 					break;
 				}
@@ -562,12 +700,8 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 }
 
 /**
- * Create a hunk directive string suitable for inserting into a document.
+ * Create a hunk block suitable for inserting into a document.
  */
-export function createHunkDirective(hunk: HunkReference): string {
-	const header = buildHunkDirectiveHeader(hunk);
-	if (hunk.patch) {
-		return `${header}\n${hunk.patch}\n:::`;
-	}
-	return `${header}\n:::`;
+export function createHunkBlock(hunk: HunkReference): string {
+	return buildHunkBlock(hunk);
 }

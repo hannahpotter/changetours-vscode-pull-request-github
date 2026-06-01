@@ -864,7 +864,25 @@ export function registerCommands(
 			if (!uri) {
 				uri = getChangeTourUri(repoRoot, resolved.pr.number, resolved.pr.title);
 				await ensureChangeTourDir(repoRoot);
-				const content = `---\nisPR: true\nprNumber: ${resolved.pr.number}\nprOwner: ${resolved.pr.remote.owner}\nprRepo: ${resolved.pr.remote.repositoryName}\nbaseRef: ${resolved.pr.base.ref}\n---\n\n# ${resolved.pr.title}\n\n`;
+				// Stamp the PR's current base/head SHAs so the future
+				// outdated-detection feature can diff `headSha..currentHead`
+				// without having to recover them from elsewhere. baseRef is
+				// still useful as a human-readable label for the base branch.
+				const baseSha = resolved.pr.base?.sha;
+				const headSha = resolved.pr.head?.sha;
+				const frontmatterLines = [
+					'---',
+					'schemaVersion: 1',
+					'isPR: true',
+					`prNumber: ${resolved.pr.number}`,
+					`prOwner: ${resolved.pr.remote.owner}`,
+					`prRepo: ${resolved.pr.remote.repositoryName}`,
+					`baseRef: ${resolved.pr.base.ref}`,
+				];
+				if (baseSha) frontmatterLines.push(`baseSha: ${baseSha}`);
+				if (headSha) frontmatterLines.push(`headSha: ${headSha}`);
+				frontmatterLines.push('---');
+				const content = `${frontmatterLines.join('\n')}\n\n# ${resolved.pr.title}\n\n`;
 				await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
 			}
 

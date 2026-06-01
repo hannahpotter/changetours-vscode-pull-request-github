@@ -124,6 +124,8 @@ export interface ChangedFileInfo {
 	deletions?: number;
 	previousFileName?: string;
 	patch?: string;
+	/** Git blob SHA of the file at the PR head. Used to stamp `baseBlob` on hunks. */
+	blobSha?: string;
 }
 
 export interface ProjectItemsReply {

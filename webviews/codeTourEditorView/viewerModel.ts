@@ -49,11 +49,11 @@ export function hunksForSection(group: TourGroupNode): TourHunkNode[] {
 /**
  * Stable key for a hunk reference. Used as both the dedup key for the right pane
  * and the persistence key for mark-as-viewed state. Stable across edits to the
- * tour markdown because it only depends on the underlying file/line/ref triple,
+ * tour markdown because it only depends on the underlying file/line triple,
  * not on node ids (which `parseCodeTourMarkdown` regenerates on each parse).
  */
 export function hunkKeyFor(hunk: HunkReference): string {
-	return `${hunk.file}|${hunk.startLine}|${hunk.endLine}|${hunk.ref}`;
+	return `${hunk.file}|${hunk.startLine}|${hunk.endLine}`;
 }
 
 function hunkKey(n: TourHunkNode): string {

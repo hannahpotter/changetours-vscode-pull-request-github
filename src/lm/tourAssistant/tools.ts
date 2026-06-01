@@ -108,9 +108,9 @@ async function resolveHunkInActivePR(
 		file,
 		startLine,
 		endLine,
-		ref: 'HEAD', // Matches the convention used by the drag-from-changes-view path in changesOverview.tsx.
 		patch,
 		previousFile: fileChange.previousFileName,
+		baseBlob: fileChange.blobSha,
 	};
 }
 
@@ -233,7 +233,6 @@ function slimNodes(nodes: TourNode[]): unknown[] {
 			type: 'hunk',
 			file: n.hunk.file,
 			lines: `${n.hunk.startLine}-${n.hunk.endLine}`,
-			ref: n.hunk.ref,
 			highlights: n.hunk.highlights,
 		};
 	});

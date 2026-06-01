@@ -663,6 +663,7 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 			/>
 			<ViewerRightPane
 				diffLayout={diffLayout}
+				headSha={doc.headSha}
 				fileGroups={fileGroups}
 				totalsByFile={totalsByFile}
 				threadsByHunkId={threadsByHunkId}

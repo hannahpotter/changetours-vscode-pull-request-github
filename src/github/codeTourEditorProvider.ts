@@ -6,7 +6,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { createHunkDirective, HunkReference, parseCodeTourMarkdown } from './codeTourMarkdown';
+import { createHunkBlock, HunkReference, parseCodeTourMarkdown } from './codeTourMarkdown';
 import { PullRequestModel } from './pullRequestModel';
 import { RepositoriesManager } from './repositoriesManager';
 import { DiffSide } from '../common/comment';
@@ -340,9 +340,9 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				if (hunk.length === 0) {
 					return;
 				}
-				const directive = hunk.map(createHunkDirective).join('\n\n');
+				const block = hunk.map(createHunkBlock).join('\n\n');
 				const text = document.getText();
-				const newText = text.trimEnd() + '\n\n' + directive + '\n';
+				const newText = text.trimEnd() + '\n\n' + block + '\n';
 				await this._applyEdit(document, newText);
 				return;
 			}
@@ -548,6 +548,10 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 									deletions: change.deletions,
 									previousFileName: change.previous_filename,
 									patch: change.patch,
+									// Per-file blob SHA at PR head. Drag/drop carries this into the hunk's
+									// `baseBlob` so the future outdated-detection flow can compare against
+									// the file's current blob.
+									blobSha: change.sha,
 								}));
 								panel.webview.postMessage({
 									res: {
@@ -557,7 +561,9 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 											number: prModel.number,
 											owner: prOwner,
 											repo: prRepo,
-											baseRef: prModel.base.sha,
+											baseRef: prModel.base.ref,
+											baseSha: prModel.base.sha,
+											headSha: prModel.head?.sha,
 											files
 										}
 									}

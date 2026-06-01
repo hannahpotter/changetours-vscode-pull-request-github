@@ -37,27 +37,35 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const REQUIRED_FRONTMATTER_KEYS = ['isPR', 'prNumber', 'prOwner', 'prRepo'];
+const REQUIRED_FRONTMATTER_KEYS = ['schemaVersion', 'isPR', 'prNumber', 'prOwner', 'prRepo', 'baseSha', 'headSha'];
 const RECOMMENDED_FRONTMATTER_KEYS = ['baseRef'];
 
-const HUNK_OPEN_RE = /^:::hunk\s+(.*)$/;
-const HUNK_CLOSE_RE = /^:::$/;
+const DETAILS_OPEN_RE = /^\s*<details(\s+open)?\s*>\s*$/;
+const DETAILS_CLOSE_RE = /^\s*<\/details>\s*$/;
+const SUMMARY_LINE_RE = /^\s*<summary>.*<\/summary>\s*$/;
+const HUNK_METADATA_RE = /^\s*<!--\s*changetour:hunk\s+(.*?)\s*-->\s*$/;
+const DIFF_FENCE_OPEN_RE = /^\s*```diff\s*$/;
+const DIFF_FENCE_CLOSE_RE = /^\s*```\s*$/;
 const HUNK_HEADER_LINE_RE = /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/;
 const HUNK_BODY_RANGE_RE = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/;
+const LEGACY_HUNK_OPEN_RE = /^:::hunk(\s|$)/;
 
 /* ----- Structural validation ----------------------------------------- */
 
 /**
- * Parse the `key=value` portion of a `:::hunk` directive. Returns a
- * { key: value } object. Unknown keys are kept verbatim so consumers
- * can warn about them.
+ * Tokenize the attribute list inside a `<!-- changetour:hunk … -->` comment.
+ * Values can be bare tokens (`file=path/to/x.ts`) or double-quoted strings
+ * (`summary="…"`). Inside a quoted value `\"` and `\\` are recognized as
+ * escapes for `"` and `\`. Mirrors `parseHunkAttributes` in
+ * src/github/codeTourMarkdown.ts.
  */
 function parseHunkAttributes(rest) {
 	const attrs = {};
-	const re = /(\w+)=([^\s]+)/g;
+	const re = /(\w+)=(?:"((?:\\.|[^"\\])*)"|([^\s]+))/g;
 	let m;
 	while ((m = re.exec(rest)) !== null) {
-		attrs[m[1]] = m[2];
+		const key = m[1];
+		attrs[key] = m[2] !== undefined ? m[2].replace(/\\(["\\])/g, '$1') : m[3];
 	}
 	return attrs;
 }
@@ -102,7 +110,7 @@ function validateStructure(text) {
 	} else {
 		errors.push({
 			line: 1,
-			message: 'Missing frontmatter. The first line must be `---` followed by `isPR`, `prNumber`, `prOwner`, `prRepo` (and ideally `baseRef`), closed by another `---`.',
+			message: 'Missing frontmatter. The first line must be `---` followed by `schemaVersion`, `isPR`, `prNumber`, `prOwner`, `prRepo`, `baseSha`, `headSha` (and ideally `baseRef`), closed by another `---`.',
 		});
 	}
 
@@ -123,6 +131,12 @@ function validateStructure(text) {
 		}
 	}
 
+	if ('schemaVersion' in frontmatter && frontmatter.schemaVersion !== '1') {
+		errors.push({
+			line: frontmatterEndLine,
+			message: `Frontmatter \`schemaVersion\` must be \`1\` (got \`${frontmatter.schemaVersion}\`). Newer values require an explicit migration.`,
+		});
+	}
 	if ('isPR' in frontmatter && frontmatter.isPR !== 'true') {
 		errors.push({
 			line: frontmatterEndLine,
@@ -134,6 +148,14 @@ function validateStructure(text) {
 			line: frontmatterEndLine,
 			message: `Frontmatter \`prNumber\` must be a positive integer (got \`${frontmatter.prNumber}\`).`,
 		});
+	}
+	for (const shaKey of ['baseSha', 'headSha']) {
+		if (shaKey in frontmatter && !/^[0-9a-f]{7,64}$/i.test(frontmatter[shaKey])) {
+			errors.push({
+				line: frontmatterEndLine,
+				message: `Frontmatter \`${shaKey}\` must be a hex git SHA (got \`${frontmatter[shaKey]}\`).`,
+			});
+		}
 	}
 
 	// ----- 2. Title -------------------------------------------------------
@@ -157,95 +179,128 @@ function validateStructure(text) {
 	}
 
 	// ----- 3. Hunks -------------------------------------------------------
+	// New format: each hunk is a `<details>` block containing a `<summary>`,
+	// a `<!-- changetour:hunk … -->` metadata comment, and a fenced ```diff
+	// body. See `tryParseHunkBlock` / `buildHunkBlock` in
+	// src/github/codeTourMarkdown.ts for the canonical shape.
 	let i = 0;
 	while (i < lines.length) {
-		const open = HUNK_OPEN_RE.exec(lines[i]);
-		if (!open) {
-			// Stray closing `:::` line outside a hunk?
-			if (HUNK_CLOSE_RE.test(lines[i])) {
-				errors.push({
-					line: i + 1,
-					message: 'Unexpected `:::` - there is no open `:::hunk` block to close.',
-				});
-			}
+		// Hard-cutover: explicitly flag any leftover legacy `:::hunk` directives.
+		if (LEGACY_HUNK_OPEN_RE.test(lines[i])) {
+			errors.push({
+				line: i + 1,
+				message: 'Legacy `:::hunk` directive found. The on-disk format moved to `<details>`-wrapped hunks; run `node scripts/migrate-change-tour.js <path>` to upgrade.',
+			});
+			i++;
+			continue;
+		}
+
+		const openMatch = DETAILS_OPEN_RE.exec(lines[i]);
+		if (!openMatch) {
 			i++;
 			continue;
 		}
 
 		const openLine = i + 1;
-		const attrs = parseHunkAttributes(open[1]);
+		let j = i + 1;
+		const skipBlanks = () => { while (j < lines.length && lines[j].trim() === '') j++; };
 
-		// Required attributes. `lines=` and `ref=` were required in older
-		// versions but the line range now comes from the patch body's `@@`
-		// header and ref defaults to HEAD - we only error if `lines=` is
-		// present and malformed.
-		let startLine, endLine;
+		// Peek-ahead: not every <details> block is a hunk - authors might use
+		// <details> for narration too. If the shape doesn't match, fall back to
+		// treating this line as plain content (no error).
+		skipBlanks();
+		const summaryLine = j;
+		if (j >= lines.length || !SUMMARY_LINE_RE.test(lines[j])) {
+			i++;
+			continue;
+		}
+		j++;
+
+		skipBlanks();
+		if (j >= lines.length) {
+			i++;
+			continue;
+		}
+		const metaMatch = HUNK_METADATA_RE.exec(lines[j]);
+		if (!metaMatch) {
+			// <details>+<summary> with no metadata comment - probably narration.
+			i++;
+			continue;
+		}
+		const metaLine = j + 1;
+		const attrs = parseHunkAttributes(metaMatch[1]);
+		j++;
+
+		// From this point on we're committed to treating this as a hunk
+		// block - structural issues below are real errors, not "this isn't
+		// a hunk" fallthroughs.
+
 		if (!attrs.file) {
-			errors.push({ line: openLine, message: 'Hunk directive missing required `file=<path>` attribute.' });
+			errors.push({ line: metaLine, message: 'Hunk metadata comment missing required `file=<path>` attribute.' });
 		}
-		if (attrs.lines) {
-			if (!/^\d+-\d+$/.test(attrs.lines)) {
-				errors.push({ line: openLine, message: `Hunk \`lines\` attribute must be \`<start>-<end>\` (got \`${attrs.lines}\`).` });
-			} else {
-				[startLine, endLine] = attrs.lines.split('-').map(Number);
-				if (startLine > endLine) {
-					errors.push({ line: openLine, message: `Hunk \`lines=${attrs.lines}\` has start > end.` });
-				}
-				if (startLine < 1) {
-					errors.push({ line: openLine, message: `Hunk \`lines=${attrs.lines}\` has start < 1 (lines are 1-indexed).` });
-				}
-			}
-		}
-
-		// Optional but checked-if-present attributes
 		if ('highlights' in attrs) {
 			const segments = attrs.highlights.split(',');
 			for (const seg of segments) {
 				if (!/^(old|new):\d+(?:-\d+)?$/.test(seg.trim())) {
 					errors.push({
-						line: openLine,
+						line: metaLine,
 						message: `Hunk \`highlights\` segment \`${seg}\` is malformed. Expected \`new:14-18\` or \`old:22\`.`,
 					});
 				}
 			}
 		}
 
-		// Body: must be present, must start with @@ header, must close with :::
-		let j = i + 1;
-		let bodyStarted = false;
-		let firstBodyLine = -1;
-		let closed = false;
-		while (j < lines.length) {
-			if (HUNK_CLOSE_RE.test(lines[j])) {
-				closed = true;
-				break;
-			}
-			if (!bodyStarted && lines[j].trim().length > 0) {
-				bodyStarted = true;
-				firstBodyLine = j + 1;
-			}
-			j++;
-		}
-		if (!closed) {
-			errors.push({ line: openLine, message: 'Hunk block is not closed - missing `:::` on its own line after the patch body.' });
-		}
-		if (!bodyStarted) {
+		skipBlanks();
+		if (j >= lines.length || !DIFF_FENCE_OPEN_RE.test(lines[j])) {
 			errors.push({
 				line: openLine,
-				message: 'Hunk has no patch body. The diff content (starting with the `@@` line) must appear between the opening `:::hunk …` directive and the closing `:::`.',
+				message: 'Hunk block is missing the ```diff fence after the metadata comment. The patch body must be wrapped in ```diff … ```.',
 			});
-		} else if (firstBodyLine > 0 && !HUNK_HEADER_LINE_RE.test(lines[firstBodyLine - 1])) {
+			i = j;
+			continue;
+		}
+		j++;
+
+		const firstBodyLine = j + 1;
+		const patchBodyLines = [];
+		while (j < lines.length && !DIFF_FENCE_CLOSE_RE.test(lines[j])) {
+			patchBodyLines.push(lines[j]);
+			j++;
+		}
+		if (j >= lines.length) {
+			errors.push({ line: openLine, message: 'Hunk ```diff fence is not closed.' });
+			i = j;
+			continue;
+		}
+		j++; // consume closing ```
+
+		if (patchBodyLines.length === 0) {
+			errors.push({
+				line: openLine,
+				message: 'Hunk has no patch body inside the ```diff fence. The diff content (starting with the `@@` line) must appear between the opening and closing fence.',
+			});
+		} else if (!HUNK_HEADER_LINE_RE.test(patchBodyLines[0])) {
 			warnings.push({
 				line: firstBodyLine,
 				message: 'Hunk body does not start with an `@@ -…,… +…,… @@` header. The editor expects the full raw patch including the hunk header.',
 			});
 		}
 
-		// Derive line range from the @@ +C,D @@ header when not given in the
-		// directive (the new default format). Stays consistent with the editor
-		// and the in-extension `parseCodeTourMarkdown`.
-		if ((startLine === undefined || endLine === undefined) && firstBodyLine > 0) {
-			const rangeMatch = HUNK_BODY_RANGE_RE.exec(lines[firstBodyLine - 1]);
+		skipBlanks();
+		if (j >= lines.length || !DETAILS_CLOSE_RE.test(lines[j])) {
+			errors.push({
+				line: openLine,
+				message: 'Hunk `<details>` block is not closed. Expected `</details>` after the ```diff fence.',
+			});
+			i = j;
+			continue;
+		}
+		j++; // consume </details>
+
+		// Derive line range from the @@ +C,D @@ header.
+		let startLine, endLine;
+		if (patchBodyLines.length > 0) {
+			const rangeMatch = HUNK_BODY_RANGE_RE.exec(patchBodyLines[0]);
 			if (rangeMatch) {
 				const newStart = parseInt(rangeMatch[1], 10);
 				const newCount = rangeMatch[2] !== undefined ? parseInt(rangeMatch[2], 10) : 1;
@@ -254,7 +309,6 @@ function validateStructure(text) {
 			}
 		}
 
-		// Record this hunk for the PR cross-check phase.
 		if (attrs.file && startLine !== undefined && endLine !== undefined) {
 			hunks.push({
 				file: attrs.file,
@@ -265,7 +319,12 @@ function validateStructure(text) {
 			});
 		}
 
-		i = closed ? j + 1 : j;
+		// `summaryLine` is referenced only to keep its purpose obvious in the
+		// state machine; the structural validator doesn't require us to assert
+		// anything about its contents.
+		void summaryLine;
+
+		i = j;
 	}
 
 	if (hunks.length === 0) {

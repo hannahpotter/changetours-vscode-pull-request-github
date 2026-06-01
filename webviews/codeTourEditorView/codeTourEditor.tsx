@@ -5,7 +5,7 @@
 
 import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { buildHunkDirectiveHeader, type CodeTourDocument, type HighlightRange, type HunkReference, type TourTextNode } from '../../src/github/codeTourMarkdown';
+import { type CodeTourDocument, type HighlightRange, type HunkReference, serializeCodeTourMarkdown, type TourNode, type TourTextNode } from '../../src/github/codeTourMarkdown';
 import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
@@ -48,11 +48,14 @@ marked.setOptions({ breaks: true });
 // Editor-local document mirrors CodeTourDocument but allows EditorNode children.
 interface EditorDocument {
 	title: string;
+	schemaVersion?: number;
 	prNumber?: number;
 	prOwner?: string;
 	prRepo?: string;
 	isPR?: boolean;
 	baseRef?: string;
+	baseSha?: string;
+	headSha?: string;
 	children: EditorNode[];
 }
 
@@ -163,57 +166,53 @@ function appendToGroup(nodes: EditorNode[], groupId: string, node: EditorNode): 
 	});
 }
 
-/* - Serializer (local, mirrors codeTourMarkdown.ts) -------- */
+/* - Serializer -------------------------------------------- */
 
-function serializeDoc(doc: EditorDocument): string {
-	const lines: string[] = [];
-
-	if (doc.isPR !== undefined || doc.prNumber !== undefined || doc.prOwner || doc.prRepo || doc.baseRef) {
-		lines.push('---');
-		if (doc.isPR !== undefined) lines.push(`isPR: ${doc.isPR}`);
-		if (doc.prNumber !== undefined) lines.push(`prNumber: ${doc.prNumber}`);
-		if (doc.prOwner) lines.push(`prOwner: ${doc.prOwner}`);
-		if (doc.prRepo) lines.push(`prRepo: ${doc.prRepo}`);
-		if (doc.baseRef) lines.push(`baseRef: ${doc.baseRef}`);
-		lines.push('---');
-	}
-
-	lines.push(`# ${doc.title}`);
-	lines.push('');
-
-	function walk(nodes: EditorNode[], currentLevel: number): void {
-		for (const node of nodes) {
-			switch (node.type) {
-				case 'group': {
-					const prefix = '#'.repeat(node.level);
-					const suffix = node.defaultCollapsed ? ' <!-- collapsed -->' : '';
-					lines.push(`${prefix} ${node.title}${suffix}`);
-					lines.push('');
-					walk(node.children, node.level);
-					break;
-				}
-				case 'text':
-					lines.push(node.content);
-					lines.push('');
-					break;
-				case 'hunk': {
-					lines.push(buildHunkDirectiveHeader(node.hunk, currentLevel));
-					if (node.hunk.patch) {
-						lines.push(node.hunk.patch);
-					}
-					lines.push(':::');
-					lines.push('');
-					break;
-				}
-				case 'dropzone':
-					// Ephemeral UI-only node, not serialized
-					break;
+/**
+ * Convert the editor's local tree (which permits dropzone placeholders) into
+ * the canonical CodeTourDocument tree, then delegate to the shared serializer.
+ * Dropzones are ephemeral UI state and are filtered out. Keeping the editor
+ * walker thin means there's exactly one on-disk format definition.
+ */
+function editorNodesToTourNodes(nodes: EditorNode[]): TourNode[] {
+	const out: TourNode[] = [];
+	for (const node of nodes) {
+		if (node.type === 'dropzone') {
+			continue;
+		}
+		if (node.type === 'group') {
+			const group: TourNode = {
+				type: 'group',
+				id: node.id,
+				title: node.title,
+				level: node.level,
+				children: editorNodesToTourNodes(node.children),
+			};
+			if (node.defaultCollapsed) {
+				(group as { defaultCollapsed?: boolean }).defaultCollapsed = true;
 			}
+			out.push(group);
+		} else {
+			out.push(node);
 		}
 	}
+	return out;
+}
 
-	walk(doc.children, 1);
-	return lines.join('\n').replace(/\n+$/, '\n');
+function serializeDoc(doc: EditorDocument): string {
+	const tourDoc: CodeTourDocument = {
+		title: doc.title,
+		schemaVersion: doc.schemaVersion,
+		prNumber: doc.prNumber,
+		prOwner: doc.prOwner,
+		prRepo: doc.prRepo,
+		isPR: doc.isPR,
+		baseRef: doc.baseRef,
+		baseSha: doc.baseSha,
+		headSha: doc.headSha,
+		children: editorNodesToTourNodes(doc.children),
+	};
+	return serializeCodeTourMarkdown(tourDoc);
 }
 
 /* - Drop zone block (pending hunk placeholder) ----------- */
@@ -222,6 +221,8 @@ function serializeDoc(doc: EditorDocument): string {
 interface HunkPayload extends HunkReference {
 	isPR?: boolean;
 	baseRef?: string;
+	baseSha?: string;
+	headSha?: string;
 	prNumber?: number;
 	prOwner?: string;
 	prRepo?: string;
@@ -514,7 +515,8 @@ function HunkBlock({
 	assistantRunning?: boolean;
 	isDragging?: boolean;
 }) {
-	const { file, startLine, endLine, ref, patch } = node.hunk;
+	const { file, startLine, endLine, patch } = node.hunk;
+	const headShaShort = doc.headSha ? doc.headSha.substring(0, 7) : '';
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 	const summaryInfo = useMemo(() => getHunkSummary(node.hunk), [node.hunk]);
 
@@ -697,7 +699,9 @@ function HunkBlock({
 					<div className="tour-hunk-info">
 						<span className="tour-hunk-file" title={file}>{file}</span>
 						<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
-						<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
+						{headShaShort && (
+							<span className="tour-hunk-ref" title={doc.headSha}>{headShaShort}</span>
+						)}
 					</div>
 					<div className="tour-hunk-actions">
 						{isEditMode && onRunAssistant && (
@@ -1612,9 +1616,9 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							file: payload.file,
 							startLine: payload.startLine,
 							endLine: payload.endLine,
-							ref: payload.ref,
 							patch: payload.patch,
-							previousFile: payload.previousFile
+							previousFile: payload.previousFile,
+							baseBlob: payload.baseBlob,
 						},
 					};
 
@@ -1653,9 +1657,9 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 								file: payload.file,
 								startLine: payload.startLine,
 								endLine: payload.endLine,
-								ref: payload.ref,
 								patch: payload.patch,
-								previousFile: payload.previousFile
+								previousFile: payload.previousFile,
+								baseBlob: payload.baseBlob,
 							},
 						};
 
@@ -1708,9 +1712,9 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 						file: payload.file,
 						startLine: payload.startLine,
 						endLine: payload.endLine,
-						ref: payload.ref,
 						patch: payload.patch,
-						previousFile: payload.previousFile
+						previousFile: payload.previousFile,
+						baseBlob: payload.baseBlob,
 					}
 				}))
 			};
@@ -2095,20 +2099,27 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 						file: payload.file,
 						startLine: payload.startLine,
 						endLine: payload.endLine,
-						ref: payload.ref,
 						patch: payload.patch,
-						previousFile: payload.previousFile
+						previousFile: payload.previousFile,
+						baseBlob: payload.baseBlob,
 					},
 				})),
 			};
 
-			// Bring over PR properties if the document doesn't have them yet
+			// Bring over PR properties if the document doesn't have them yet.
+			// `baseSha` / `headSha` come along too so the future
+			// outdated-detection feature has the anchors it needs.
 			if (updated.isPR === undefined && payload.isPR !== undefined) {
 				updated.isPR = payload.isPR;
 				updated.prNumber = payload.prNumber;
 				updated.prOwner = payload.prOwner;
 				updated.prRepo = payload.prRepo;
 				updated.baseRef = payload.baseRef;
+				updated.baseSha = payload.baseSha;
+				updated.headSha = payload.headSha;
+				if (updated.schemaVersion === undefined) {
+					updated.schemaVersion = 1;
+				}
 			}
 
 			return updated;
@@ -2153,9 +2164,9 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					file: payload.file,
 					startLine: payload.startLine,
 					endLine: payload.endLine,
-					ref: payload.ref,
 					patch: payload.patch,
 					previousFile: payload.previousFile,
+					baseBlob: payload.baseBlob,
 				},
 			};
 			const result = insertNodeRelative(prev.children, targetId, hunkNode, position);
@@ -2169,6 +2180,11 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				updated.prOwner = payload.prOwner;
 				updated.prRepo = payload.prRepo;
 				updated.baseRef = payload.baseRef;
+				updated.baseSha = payload.baseSha;
+				updated.headSha = payload.headSha;
+				if (updated.schemaVersion === undefined) {
+					updated.schemaVersion = 1;
+				}
 			}
 			setJustInsertedId(newId);
 			return updated;
@@ -2188,9 +2204,9 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					file: payload.file,
 					startLine: payload.startLine,
 					endLine: payload.endLine,
-					ref: payload.ref,
 					patch: payload.patch,
 					previousFile: payload.previousFile,
+					baseBlob: payload.baseBlob,
 				},
 			};
 			const updated: EditorDocument = {
@@ -2203,6 +2219,11 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				updated.prOwner = payload.prOwner;
 				updated.prRepo = payload.prRepo;
 				updated.baseRef = payload.baseRef;
+				updated.baseSha = payload.baseSha;
+				updated.headSha = payload.headSha;
+				if (updated.schemaVersion === undefined) {
+					updated.schemaVersion = 1;
+				}
 			}
 			setJustInsertedId(newId);
 			return updated;
