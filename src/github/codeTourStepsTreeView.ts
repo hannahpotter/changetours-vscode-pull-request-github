@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 import { CodeTourEditorProvider } from './codeTourEditorProvider';
-import { CodeTourDocument, parseCodeTourMarkdown, serializeCodeTourMarkdown, TourGroupNode, TourHunkNode, TourNode } from './codeTourMarkdown';
+import { CodeTourDocument, getHunkSummary, parseCodeTourMarkdown, serializeCodeTourMarkdown, TourGroupNode, TourHunkNode, TourNode } from './codeTourMarkdown';
 import { extractNodeById, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from './codeTourTreeHelpers';
 import { RepositoriesManager } from './repositoriesManager';
 
@@ -130,9 +130,15 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 
 		if ((element as TourNode).type === 'hunk') {
 			const hunkElement = element as TourHunkNode;
-			// e.g. src/myFile.ts L10-20
-			const label = `${hunkElement.hunk.file} L${hunkElement.hunk.startLine}-${hunkElement.hunk.endLine}`;
-			const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+			// Show the resolved summary (authored or auto-default = first
+			// changed line) as the primary label. The file + line range moves
+			// to `description` (the dim trailing text) so users can still
+			// identify location at a glance. Full info lives in the tooltip.
+			const summary = getHunkSummary(hunkElement.hunk);
+			const location = `${hunkElement.hunk.file} L${hunkElement.hunk.startLine}-${hunkElement.hunk.endLine}`;
+			const item = new vscode.TreeItem(summary.text, vscode.TreeItemCollapsibleState.None);
+			item.description = location;
+			item.tooltip = `${summary.text}\n${location}`;
 			item.iconPath = new vscode.ThemeIcon('diff');
 			item.contextValue = this.isPRCheckedOut ? 'codetourHunkCheckedOut' : 'codetourHunkNotCheckedOut';
 

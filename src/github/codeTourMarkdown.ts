@@ -31,6 +31,53 @@ export interface HunkReference {
 	highlights?: HighlightRange[];
 	/** When true, viewers open the tour with this hunk pre-collapsed (override-able). */
 	defaultCollapsed?: boolean;
+	/**
+	 * One-line natural-language description shown inline in the hunk header
+	 * (both edit and viewer modes). When empty, the displayed text falls back
+	 * to the first changed line of the patch; in edit mode the editor is
+	 * pre-filled with that auto-default so authors can directly edit it.
+	 */
+	summary?: string;
+}
+
+const SUMMARY_PREVIEW_MAX_LEN = 60;
+
+/**
+ * Resolve the summary text shown alongside a hunk's diff header.
+ *
+ * If the hunk has an authored `summary`, return it with `isAuto: false`.
+ * Otherwise default to the first changed line of the patch (truncated).
+ * For patches with no add/delete lines, fall back to the thin `L{start}-{end}`
+ * label. The auto-default is what populates the editor when the author
+ * hasn't yet written their own one-line description - they can edit it
+ * directly to author their summary.
+ */
+export function getHunkSummary(hunk: HunkReference): { text: string; isAuto: boolean } {
+	const authored = hunk.summary?.trim();
+	if (authored) {
+		return { text: authored, isAuto: false };
+	}
+	if (hunk.patch) {
+		// Scan the patch directly for the first add/delete line rather than
+		// pulling in the full ParsedDiffLine pipeline - this helper runs from
+		// both webview and extension code, so the dependency surface needs to
+		// stay tiny.
+		for (const line of hunk.patch.split('\n')) {
+			if (line.startsWith('@@') || line.length === 0) {
+				continue;
+			}
+			if (line.startsWith('+') || line.startsWith('-')) {
+				const content = line.substring(1).trim();
+				if (content.length > 0) {
+					const text = content.length <= SUMMARY_PREVIEW_MAX_LEN
+						? content
+						: content.substring(0, SUMMARY_PREVIEW_MAX_LEN - 1).trimEnd() + '…';
+					return { text, isAuto: true };
+				}
+			}
+		}
+	}
+	return { text: `L${hunk.startLine}-${hunk.endLine}`, isAuto: true };
 }
 
 /**
@@ -142,6 +189,7 @@ interface HunkAttributes {
 	level?: string;
 	highlights?: string;
 	defaultCollapsed?: string;
+	summary?: string;
 }
 
 /**
@@ -149,16 +197,51 @@ interface HunkAttributes {
  * `key=value`, separated by whitespace, in any order. All attributes are
  * optional except `file`; missing line range and ref are derived later from
  * the patch body's `@@` header and frontmatter respectively.
+ *
+ * Values can be either bare tokens (`file=path/to/x.ts`) or double-quoted
+ * strings (`summary="My description with spaces"`). Inside a quoted value,
+ * `\"` and `\\` are recognized as escapes for `"` and `\`.
  */
 function parseHunkAttributes(attributeList: string): HunkAttributes {
 	const out: HunkAttributes = {};
-	const re = /(\w+)=([^\s]+)/g;
+	const re = /(\w+)=(?:"((?:\\.|[^"\\])*)"|([^\s]+))/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(attributeList)) !== null) {
 		const key = m[1] as keyof HunkAttributes;
-		out[key] = m[2];
+		const value = m[2] !== undefined ? m[2].replace(/\\(["\\])/g, '$1') : m[3];
+		out[key] = value;
 	}
 	return out;
+}
+
+/**
+ * Serialize a value for use in the `:::hunk` directive attribute list. Bare
+ * tokens (no whitespace, no quote) are emitted as-is; anything else is wrapped
+ * in double quotes with `\` and `"` escaped.
+ */
+function serializeHunkAttributeValue(value: string): string {
+	if (value.length > 0 && !/[\s"\\]/.test(value)) {
+		return value;
+	}
+	return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Build the `:::hunk …` directive header line. Shared between
+ * `serializeCodeTourMarkdown`, `createHunkDirective`, and the webview's
+ * local serializer in `codeTourEditor.tsx` (which mirrors this one).
+ */
+export function buildHunkDirectiveHeader(hunk: HunkReference, level?: number): string {
+	let header = `:::hunk file=${serializeHunkAttributeValue(hunk.file)}`;
+	if (hunk.previousFile) header += ` previousFile=${serializeHunkAttributeValue(hunk.previousFile)}`;
+	if (level !== undefined) header += ` level=${level}`;
+	const highlightAttr = serializeHighlightAttribute(hunk.highlights);
+	if (highlightAttr) header += ` highlights=${highlightAttr}`;
+	if (hunk.defaultCollapsed) header += ` defaultCollapsed=true`;
+	if (hunk.summary && hunk.summary.trim().length > 0) {
+		header += ` summary=${serializeHunkAttributeValue(hunk.summary)}`;
+	}
+	return header;
 }
 
 /**
@@ -396,6 +479,7 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 					previousFile: attrs.previousFile,
 					highlights: parseHighlightAttribute(attrs.highlights),
 					defaultCollapsed: attrs.defaultCollapsed === 'true' ? true : undefined,
+					summary: attrs.summary && attrs.summary.trim().length > 0 ? attrs.summary : undefined,
 				};
 				pendingPatchLines = [];
 				continue;
@@ -459,13 +543,7 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 					lines.push('');
 					break;
 				case 'hunk': {
-					let hunkHeader = `:::hunk file=${node.hunk.file}`;
-					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
-					hunkHeader += ` level=${currentLevel}`;
-					const highlightAttr = serializeHighlightAttribute(node.hunk.highlights);
-					if (highlightAttr) hunkHeader += ` highlights=${highlightAttr}`;
-					if (node.hunk.defaultCollapsed) hunkHeader += ` defaultCollapsed=true`;
-					lines.push(hunkHeader);
+					lines.push(buildHunkDirectiveHeader(node.hunk, currentLevel));
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
 					}
@@ -487,12 +565,7 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
  * Create a hunk directive string suitable for inserting into a document.
  */
 export function createHunkDirective(hunk: HunkReference): string {
-	let header = `:::hunk file=${hunk.file}`;
-	if (hunk.previousFile) header += ` previousFile=${hunk.previousFile}`;
-	const highlightAttr = serializeHighlightAttribute(hunk.highlights);
-	if (highlightAttr) header += ` highlights=${highlightAttr}`;
-	if (hunk.defaultCollapsed) header += ` defaultCollapsed=true`;
-
+	const header = buildHunkDirectiveHeader(hunk);
 	if (hunk.patch) {
 		return `${header}\n${hunk.patch}\n:::`;
 	}

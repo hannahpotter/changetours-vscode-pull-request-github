@@ -11,6 +11,7 @@ import { PullRequestModel } from './pullRequestModel';
 import { RepositoriesManager } from './repositoriesManager';
 import { DiffSide } from '../common/comment';
 import Logger from '../common/logger';
+import { Schemes } from '../common/uri';
 import { formatError } from '../common/utils';
 import { generateUuid } from '../common/uuid';
 import { IRequestMessage, WebviewBase } from '../common/webview';
@@ -205,6 +206,17 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		webviewPanel: vscode.WebviewPanel,
 		_token: vscode.CancellationToken,
 	): Promise<void> {
+		// For non-file URIs (VS Code's diff editor, PR review, git history,
+		// etc.) the rendered Change Tour view doesn't compose with the diff
+		// layout and the user just wants to see the raw markdown change.
+		// Dispose this webview and reopen the resource in the default text
+		// editor - the diff editor will then show plain text on each side.
+		if (document.uri.scheme !== Schemes.File) {
+			webviewPanel.dispose();
+			await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+			return;
+		}
+
 		const key = document.uri.toString();
 		CodeTourEditorProvider._webviewPanels.set(key, webviewPanel);
 
@@ -384,7 +396,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 
 			case 'codeTourEditor.runAssistant': {
 				const { mode, hunkId, groupId, requestId } = message.args as {
-					mode: 'autoGenerate' | 'narrateHunk' | 'improveSection';
+					mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk';
 					hunkId?: string;
 					groupId?: string;
 					requestId: string;
@@ -650,7 +662,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	private async _runAssistantForWebview(
 		panel: vscode.WebviewPanel,
 		document: vscode.TextDocument,
-		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection',
+		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk',
 		requestId: string,
 		ctx: { hunkId?: string; groupId?: string },
 	): Promise<void> {
@@ -663,7 +675,13 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			});
 		};
 
-		const assistantMode: AssistantMode = mode === 'narrateHunk' ? 'narrate' : mode === 'improveSection' ? 'improve' : 'generate';
+		const assistantMode: AssistantMode = mode === 'narrateHunk'
+			? 'narrate'
+			: mode === 'improveSection'
+				? 'improve'
+				: mode === 'summarizeHunk'
+					? 'summarizeHunk'
+					: 'generate';
 		const userPrompt = this._buildAssistantPromptForButton(mode, ctx);
 		const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri;
 
@@ -687,7 +705,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	}
 
 	private _buildAssistantPromptForButton(
-		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection',
+		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk',
 		ctx: { hunkId?: string; groupId?: string },
 	): string {
 		switch (mode) {
@@ -697,6 +715,8 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				return `Draft narration for the hunk with id "${ctx.hunkId}" and insert it immediately after that hunk.`;
 			case 'improveSection':
 				return `Improve the section with id "${ctx.groupId}" - tighten the narration of its children, add highlights to large hunks where useful, and surface obvious gaps. Do not modify nodes outside this section.`;
+			case 'summarizeHunk':
+				return `Write a one-line natural-language summary for the hunk with id "${ctx.hunkId}" and save it on that hunk via the summary attribute. Do not insert or modify any other nodes.`;
 		}
 	}
 

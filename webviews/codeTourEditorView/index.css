@@ -320,11 +320,13 @@
 	background: var(--vscode-editor-background);
 }
 
+/* The hunk header stacks three rows: (1) chevron + file/lines/ref + actions,
+ * (2) the summary editor or read-only summary text, (3) git's native
+ * `@@ -A,B +C,D @@ <scope>` line from the patch. Always-visible context. */
 .tour-hunk-header {
 	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
+	flex-direction: column;
+	gap: 4px;
 	padding: 6px 10px;
 	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 	font-size: 12px;
@@ -332,9 +334,49 @@
 	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
 }
 
+.tour-hunk-header-row {
+	display: flex;
+	/* Anchor to the first line so when content wraps to multiple lines,
+	 * the chevron and action buttons stay aligned with the first line
+	 * rather than drifting to the vertical middle. */
+	align-items: flex-start;
+	gap: 8px;
+}
+
+.tour-hunk-header-row-meta {
+	justify-content: space-between;
+}
+
+/* Indent the summary and diff-header rows to align under the file path,
+ * past the chevron column. Width of the chevron icon-button (~22px) plus
+ * the row's gap (8px). */
+.tour-hunk-header-row-summary,
+.tour-hunk-header-row-diff {
+	padding-left: 30px;
+}
+
+/* The literal `@@ -A,B +C,D @@ <scope>` line from the patch. Monospaced and
+ * dim so it reads as code metadata rather than narration. */
+.tour-hunk-header-row-diff {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	opacity: 0.85;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* DiffTable would otherwise render the same `@@` row at the top of the
+ * diff body; suppress it so the line isn't shown twice. (Viewer mode has
+ * an analogous rule lower down for `.viewer-hunk-card`.) */
+.tour-hunk .diff-table .diff-hunk-header {
+	display: none;
+}
+
+
 .tour-hunk-info {
 	display: flex;
-	align-items: center;
+	align-items: baseline;
 	gap: 8px;
 	flex: 1 1 auto;
 	/* Allow the file path to shrink below its intrinsic width in a narrow
@@ -394,6 +436,91 @@
 	font-size: 13px;
 	font-style: italic;
 	text-align: center;
+}
+
+/* Read-only summary span shown in view mode (or wherever the editor isn't
+ * available). Sits inline with the file/lines/ref triplet in the same header
+ * row, taking the remaining horizontal space and wrapping cleanly when the
+ * text exceeds one line. */
+.tour-hunk-summary-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	color: var(--vscode-editor-foreground);
+}
+
+.tour-hunk-summary-text.tour-hunk-summary-auto {
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
+}
+
+/* Wrapper that visually groups the summary textarea with its inline
+ * "summarize with AI" sparkle, sitting between the file/lines/ref triplet
+ * and the rest of the action buttons. Takes the remaining horizontal space
+ * in the header row. */
+.tour-hunk-summary-field {
+	display: flex;
+	align-items: flex-start;
+	gap: 4px;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.tour-hunk-summary-sparkle {
+	flex: 0 0 auto;
+}
+
+/* Inline summary editor that lives inside the hunk header. The textarea
+ * auto-grows to fit its content (see resizeSummaryTextarea in HunkBlock) so
+ * a long summary wraps to multiple lines instead of getting clipped. */
+.tour-hunk-summary-input {
+	flex: 1 1 auto;
+	min-width: 0;
+	/* Auto-resize JS sets explicit height; this stops the browser from also
+	 * showing a manual resize handle in the corner. */
+	resize: none;
+	/* Hide the scrollbar that the auto-resize would otherwise momentarily
+	 * surface while it recomputes scrollHeight. */
+	overflow: hidden;
+	background: transparent;
+	color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+	border: 1px solid transparent;
+	border-radius: 2px;
+	padding: 2px 6px;
+	font-size: 12px;
+	line-height: 1.4;
+	font-family: inherit;
+}
+
+.tour-hunk-summary-input:hover {
+	border-color: var(--vscode-input-border, var(--vscode-widget-border, transparent));
+}
+
+.tour-hunk-summary-input:focus {
+	outline: none;
+	border-color: var(--vscode-focusBorder);
+	background: var(--vscode-input-background, var(--vscode-editor-background));
+}
+
+.tour-hunk-summary-input::placeholder {
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
+	opacity: 0.85;
+}
+
+/* When the textarea is pre-filled with the auto-default (= first changed
+ * line of the patch) rather than an authored summary, dim+italicize it so
+ * authors can tell at a glance which hunks they haven't yet customized. The
+ * style clears as soon as they start typing - then it's their summary. */
+.tour-hunk-summary-input.tour-hunk-summary-auto-draft {
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
+}
+
+.tour-hunk-summary-input.tour-hunk-summary-auto-draft:focus {
+	color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+	font-style: normal;
 }
 
 /* - Hunk highlight mode -------------------- */
@@ -1415,25 +1542,87 @@ button.viewer-filter-status-clear {
 	box-shadow: inset 3px 0 0 var(--vscode-textLink-foreground);
 }
 
+/* The viewer hunk header stacks three rows: (1) chevron + L#-# + ref +
+ * actions, (2) read-only summary text, (3) git's native `@@` line from the
+ * patch. The file path is NOT shown here because it's already in the file
+ * group header in the left pane. */
 .viewer-hunk-header {
 	display: flex;
-	align-items: center;
-	gap: 8px;
-	padding: 3px 8px;
+	flex-direction: column;
+	gap: 3px;
+	padding: 4px 8px;
 	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(90, 130, 180, 0.1));
 	color: var(--vscode-descriptionForeground);
-	font-family: var(--vscode-editor-font-family, monospace);
 	font-size: 12px;
-	font-style: italic;
 	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+}
+
+.viewer-hunk-header-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+}
+
+.viewer-hunk-header-row-meta {
+	justify-content: space-between;
+}
+
+.viewer-hunk-header-row-summary,
+.viewer-hunk-header-row-diff {
+	padding-left: 26px;
+}
+
+.viewer-hunk-header-row-diff {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 11px;
+	font-style: normal;
+	color: var(--vscode-descriptionForeground);
+	opacity: 0.85;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* Left group on row 1: line range + commit ref. The file path is not shown
+ * here in viewer mode - it's already in the left-pane file group header. */
+.viewer-hunk-info {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.viewer-hunk-lines,
+.viewer-hunk-ref {
+	flex: 0 0 auto;
+	font-family: var(--vscode-font-family);
+	font-style: normal;
+	color: var(--vscode-descriptionForeground);
+}
+
+.viewer-hunk-ref {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 11px;
+	opacity: 0.7;
 }
 
 .viewer-hunk-summary {
 	flex: 1;
 	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	/* Authored summaries read as natural language; override the parent
+	 * header's monospace+italic (which suited the old raw @@ header text). */
+	font-family: var(--vscode-font-family);
+	font-style: normal;
+	color: var(--vscode-editor-foreground);
+}
+
+/* Auto-fallback summary (no authored value) stays italic + muted so authors
+ * can tell at a glance which hunks they haven't yet written a summary for. */
+.viewer-hunk-summary.viewer-hunk-summary-auto {
+	font-style: italic;
+	color: var(--vscode-descriptionForeground);
 }
 
 /* DiffTable renders its own @@ row by default; suppress it inside the viewer

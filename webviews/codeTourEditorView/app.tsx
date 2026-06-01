@@ -281,7 +281,7 @@ function Root() {
 		setInsertMultipleHunksCommand({ ts: Date.now(), payloads: hunks });
 	}, []);
 
-	const onRunAssistant = useCallback((mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => {
+	const onRunAssistant = useCallback((mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => {
 		if (!handler || assistantStatus.running) {
 			return;
 		}

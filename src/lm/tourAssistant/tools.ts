@@ -464,6 +464,40 @@ class SetHunkHighlightsTool implements vscode.LanguageModelTool<SetHunkHighlight
 	}
 }
 
+interface SetHunkSummaryParams {
+	hunkId: string;
+	summary: string;
+}
+
+class SetHunkSummaryTool implements vscode.LanguageModelTool<SetHunkSummaryParams> {
+	static readonly toolId = 'changeTour_setHunkSummary';
+
+	async prepareInvocation(): Promise<vscode.PreparedToolInvocation> {
+		return {
+			invocationMessage: vscode.l10n.t('Updating hunk summary'),
+			pastTenseMessage: vscode.l10n.t('Updated hunk summary'),
+		};
+	}
+
+	async invoke(options: vscode.LanguageModelToolInvocationOptions<SetHunkSummaryParams>): Promise<vscode.LanguageModelToolResult> {
+		const { hunkId, summary } = options.input;
+		const trimmed = typeof summary === 'string' ? summary.trim() : '';
+		let found = false;
+		await applyMutation(({ doc }) => {
+			updateHunk(doc.children, hunkId, h => {
+				h.summary = trimmed.length > 0 ? trimmed : undefined;
+				found = true;
+			});
+		});
+		if (!found) {
+			throw new Error(`Hunk with id "${hunkId}" was not found in the tour.`);
+		}
+		return new vscode.LanguageModelToolResult([
+			new vscode.LanguageModelTextPart(trimmed.length > 0 ? 'Summary updated.' : 'Summary cleared.'),
+		]);
+	}
+}
+
 function updateHunk(nodes: TourNode[], hunkId: string, mutator: (h: HunkReference) => void): void {
 	for (const node of nodes) {
 		if (node.type === 'hunk' && node.id === hunkId) {
@@ -523,6 +557,7 @@ export function registerTourAssistantTools(context: vscode.ExtensionContext, rep
 	context.subscriptions.push(vscode.lm.registerTool(AddTextNodeTool.toolId, new AddTextNodeTool()));
 	context.subscriptions.push(vscode.lm.registerTool(AddHunkTool.toolId, new AddHunkTool(reposManager)));
 	context.subscriptions.push(vscode.lm.registerTool(SetHunkHighlightsTool.toolId, new SetHunkHighlightsTool()));
+	context.subscriptions.push(vscode.lm.registerTool(SetHunkSummaryTool.toolId, new SetHunkSummaryTool()));
 	context.subscriptions.push(vscode.lm.registerTool(RemoveNodeTool.toolId, new RemoveNodeTool()));
 }
 
@@ -615,6 +650,18 @@ export function getTourAssistantToolSpecs(): { name: string; description: string
 					},
 				},
 				required: ['hunkId', 'highlights'],
+			},
+		},
+		{
+			name: SetHunkSummaryTool.toolId,
+			description: 'Set or clear the one-line natural-language summary on an existing hunk. The summary is shown inline in the hunk header in both edit and viewer modes; without one, readers see a generic auto-fallback (the first changed line of the patch). Use this to give long or non-obvious hunks an informative header label. Pass an empty string to clear and fall back to the auto default.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					hunkId: { type: 'string', description: 'ID of the hunk node (from getCurrentTour).' },
+					summary: { type: 'string', description: 'One-sentence description (120 chars or less). Empty string clears the summary.' },
+				},
+				required: ['hunkId', 'summary'],
 			},
 		},
 		{

@@ -5,11 +5,11 @@
 
 import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type CodeTourDocument, type HighlightRange, type HunkReference, serializeHighlightAttribute, type TourTextNode } from '../../src/github/codeTourMarkdown';
+import { buildHunkDirectiveHeader, type CodeTourDocument, type HighlightRange, type HunkReference, type TourTextNode } from '../../src/github/codeTourMarkdown';
 import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
-import  { type ParsedDiffLine, parsePatch } from '../common/diffUtils';
+import  { getHunkSummary, type ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { addIcon, chevronDownIcon, codeIcon, diffSingleIcon, editIcon, eyeClosedIcon, eyeIcon, gripperIcon, newCollectionIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, trashIcon } from '../components/icon';
 
 type InsertKind = 'text' | 'code' | 'group';
@@ -81,12 +81,33 @@ interface CodeTourEditorProps {
 	onRequestChangesOpen?: () => void;
 	onError?: (message: string) => void;
 	assistantStatus?: AssistantStatus;
-	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => void;
 	onCancelAssistant?: () => void;
 	onDismissAssistantError?: () => void;
 }
 
 const HUNK_MIME_TYPE = 'application/vnd.codetour.hunk+json';
+
+// Suppress the browser's default drag image (a snapshot of the source element
+// captured at dragstart time, BEFORE React commits any setState scheduled in
+// the same event handler). Without this, the floating ghost shows the OLD
+// expanded hunk and obscures the page underneath - so even though we re-render
+// every hunk into a compact row during the drag, the user only sees the big
+// floating ghost and thinks nothing collapsed. A 1x1 transparent image makes
+// the ghost effectively invisible; the actual page changes become the
+// drag-time feedback. Lazy-init guarded for SSR / non-DOM contexts.
+let _transparentDragImage: HTMLImageElement | undefined;
+function getTransparentDragImage(): HTMLImageElement | undefined {
+	if (typeof window === 'undefined' || typeof Image === 'undefined') {
+		return undefined;
+	}
+	if (!_transparentDragImage) {
+		const img = new Image();
+		img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+		_transparentDragImage = img;
+	}
+	return _transparentDragImage;
+}
 
 /* - Helpers: deep-clone & mutate the node tree ------------ */
 
@@ -176,17 +197,7 @@ function serializeDoc(doc: EditorDocument): string {
 					lines.push('');
 					break;
 				case 'hunk': {
-					// Keep this in lock-step with the extension-side serializer in
-					// src/github/codeTourMarkdown.ts. The line range comes from the
-					// patch body's `@@` header at parse time and ref defaults to
-					// HEAD, so neither needs to be emitted in the directive.
-					let hunkHeader = `:::hunk file=${node.hunk.file}`;
-					if (node.hunk.previousFile) hunkHeader += ` previousFile=${node.hunk.previousFile}`;
-					hunkHeader += ` level=${currentLevel}`;
-					const highlightAttr = serializeHighlightAttribute(node.hunk.highlights);
-					if (highlightAttr) hunkHeader += ` highlights=${highlightAttr}`;
-					if (node.hunk.defaultCollapsed) hunkHeader += ` defaultCollapsed=true`;
-					lines.push(hunkHeader);
+					lines.push(buildHunkDirectiveHeader(node.hunk, currentLevel));
 					if (node.hunk.patch) {
 						lines.push(node.hunk.patch);
 					}
@@ -256,6 +267,10 @@ function NodeShell({
 
 	const handleDragStart = useCallback((event: React.DragEvent<HTMLButtonElement>) => {
 		event.stopPropagation();
+		const ghost = getTransparentDragImage();
+		if (ghost) {
+			event.dataTransfer.setDragImage(ghost, 0, 0);
+		}
 		onDragStart(node.id);
 		event.dataTransfer.effectAllowed = 'move';
 	}, [node.id, onDragStart]);
@@ -476,27 +491,32 @@ function HunkBlock({
 	onRemove,
 	onOpenDiff,
 	onHighlightsChange,
+	onSummaryChange,
 	onToggleHunkDefaultCollapsed,
 	activePR,
 	isEditMode,
 	diffLayout,
 	onRunAssistant,
 	assistantRunning,
+	isDragging,
 }: {
 	node: EditorHunkNode;
 	doc: EditorDocument;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	onHighlightsChange?: (hunkId: string, highlights: HighlightRange[]) => void;
+	onSummaryChange?: (hunkId: string, summary: string) => void;
 	onToggleHunkDefaultCollapsed: (id: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
 	isEditMode: boolean;
 	diffLayout: 'inline' | 'sideBySide';
-	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => void;
 	assistantRunning?: boolean;
+	isDragging?: boolean;
 }) {
 	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
+	const summaryInfo = useMemo(() => getHunkSummary(node.hunk), [node.hunk]);
 
 	const isMismatch = !!doc.isPR && (
 		!activePR ||
@@ -590,74 +610,191 @@ function HunkBlock({
 
 	const highlightEditingEnabled = isEditMode && !!onHighlightsChange;
 
+	// Auto-grow the summary textarea so long summaries wrap to multiple lines
+	// instead of getting clipped or hidden behind a scrollbar. Resetting to
+	// `auto` before reading scrollHeight ensures the textarea also shrinks when
+	// the user deletes content.
+	const summaryTextareaRef = useRef<HTMLTextAreaElement>(null);
+	const resizeSummaryTextarea = useCallback(() => {
+		const el = summaryTextareaRef.current;
+		if (!el) {
+			return;
+		}
+		el.style.height = 'auto';
+		el.style.height = `${el.scrollHeight}px`;
+	}, []);
+	useEffect(() => {
+		resizeSummaryTextarea();
+	}, [node.hunk.summary, summaryInfo.text, isDragging, resizeSummaryTextarea]);
+
+	// The summary editor pre-fills with the resolved auto-default (= first
+	// changed line) when there's no authored summary. To let the user delete
+	// every character while editing (and not snap back to the auto-default
+	// the moment the textarea is empty), we hold the in-progress value in a
+	// local draft state while the textarea is focused. `null` means "not
+	// editing - show the resolved value"; a string (possibly empty) means
+	// "editing this exact value". On blur, the draft clears and the textarea
+	// re-displays whatever resolved value the parent state holds (authored
+	// summary if non-empty, otherwise the auto-default).
+	const [summaryDraft, setSummaryDraft] = useState<string | null>(null);
+	const fallbackSummary = summaryInfo.isAuto ? summaryInfo.text : '';
+	const summaryEditorValue = summaryDraft !== null
+		? summaryDraft
+		: (node.hunk.summary ?? fallbackSummary);
+	const summaryIsAutoDraft = summaryDraft === null && !node.hunk.summary && summaryInfo.isAuto;
+
+	const handleSummaryFocus = useCallback(() => {
+		// Seed the draft with the currently displayed text so the user can
+		// edit the auto-default in place, including deleting it entirely.
+		setSummaryDraft(node.hunk.summary ?? fallbackSummary);
+	}, [node.hunk.summary, fallbackSummary]);
+
+	const handleSummaryInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+		const value = e.target.value;
+		setSummaryDraft(value);
+		// Persist each keystroke so a quick close doesn't drop the work.
+		// An empty string clears the authored summary on the parent state;
+		// the local draft stays empty here so the field doesn't snap back.
+		if (onSummaryChange) {
+			onSummaryChange(node.id, value);
+		}
+	}, [node.id, onSummaryChange]);
+
+	const handleSummaryBlur = useCallback(() => {
+		// Exit edit mode. The textarea will re-render to show the resolved
+		// value (authored summary, or auto-default if the user left it empty).
+		setSummaryDraft(null);
+	}, []);
+
+	// The `@@ -A,B +C,D @@ <scope>` line from the patch. Lives on its own row
+	// inside the header so users always see git's native location/scope
+	// context (regardless of whether the diff body is currently expanded).
+	// DiffTable would render the same row inside the body; we suppress that
+	// via CSS so the line isn't shown twice.
+	const diffHunkHeaderText = useMemo(() => {
+		const h = lines.find(l => l.type === 'hunk-header');
+		return h?.content ?? `@@ L${startLine}-${endLine} @@`;
+	}, [lines, startLine, endLine]);
+
+	// While any drag (in-tour reorder or external hunk drop) is active, we
+	// hide the diff body but keep the full 3-row header visible. That way the
+	// tour reads as a stack of summary-only cards and the drop target is easy
+	// to find regardless of how long each hunk's diff is. The body restores
+	// automatically when the drag ends and `isDragging` flips back to false.
+	const bodyHidden = collapsed || !!isDragging;
+
 	return (
 		<div className={`tour-hunk${highlightEditingEnabled && highlightMode ? ' tour-hunk-highlight-mode' : ''}`}>
 			<div className="tour-hunk-header">
-				<div className="tour-hunk-info">
+				{/* Row 1: chevron, file/lines/ref, actions. */}
+				<div className="tour-hunk-header-row tour-hunk-header-row-meta">
 					<span
-						className={`expand-icon icon-button ${collapsed ? 'closed' : ''}`}
+						className={`expand-icon icon-button ${bodyHidden ? 'closed' : ''}`}
 						onClick={() => setCollapsed(c => !c)}
 					>
 						{chevronDownIcon}
 					</span>
-					<span className="tour-hunk-file" title={file}>{file}</span>
-					<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
-					<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
+					<div className="tour-hunk-info">
+						<span className="tour-hunk-file" title={file}>{file}</span>
+						<span className="tour-hunk-lines">L{startLine}&ndash;{endLine}</span>
+						<span className="tour-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
+					</div>
+					<div className="tour-hunk-actions">
+						{isEditMode && onRunAssistant && (
+							<button
+								type="button"
+								className="tour-action-btn icon-button tour-assistant-button"
+								title="Draft narration for this hunk with AI"
+								disabled={!!assistantRunning}
+								onClick={() => onRunAssistant('narrateHunk', { hunkId: node.id })}
+							>
+								{sparkleIcon}
+							</button>
+						)}
+						{highlightEditingEnabled && (
+							<button
+								type="button"
+								className={`tour-action-btn icon-button tour-hunk-highlight-toggle${highlightMode ? ' active' : ''}`}
+								title={highlightMode ? 'Exit highlight mode' : 'Highlight lines (drag in the diff)'}
+								aria-pressed={highlightMode}
+								onClick={() => setHighlightMode(m => !m)}
+							>
+								{editIcon}
+							</button>
+						)}
+						{isEditMode && (
+							<button
+								type="button"
+								className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.hunk.defaultCollapsed ? ' active' : ''}`}
+								title={node.hunk.defaultCollapsed
+									? "Viewer won't see this hunk by default - click to make viewer see it by default"
+									: 'Viewer sees this hunk by default - click to make viewer not see it by default'}
+								aria-pressed={!!node.hunk.defaultCollapsed}
+								onClick={() => onToggleHunkDefaultCollapsed(node.id)}
+							>
+								{node.hunk.defaultCollapsed ? eyeClosedIcon : eyeIcon}
+							</button>
+						)}
+						{onOpenDiff && (
+							<button
+								className="tour-action-btn icon-button"
+								disabled={isMismatch}
+								title={isMismatch ? 'Checkout the associated PR to open in file context' : 'Open in file context'}
+								onClick={() => onOpenDiff(node.hunk)}
+							>
+								{diffSingleIcon}
+							</button>
+						)}
+						{isEditMode && (
+							<button className="tour-remove-btn tour-action-btn icon-button" title="Remove hunk" onClick={() => onRemove(node.id)}>
+								{trashIcon}
+							</button>
+						)}
+					</div>
 				</div>
-				<div className="tour-hunk-actions">
-					{isEditMode && onRunAssistant && (
-						<button
-							type="button"
-							className="tour-action-btn icon-button tour-assistant-button"
-							title="Draft narration for this hunk with AI"
-							disabled={!!assistantRunning}
-							onClick={() => onRunAssistant('narrateHunk', { hunkId: node.id })}
+				{/* Row 2: summary editor (edit mode) or read-only summary span (view mode). */}
+				<div className="tour-hunk-header-row tour-hunk-header-row-summary">
+					{isEditMode && onSummaryChange ? (
+						<div className="tour-hunk-summary-field">
+							<textarea
+								ref={summaryTextareaRef}
+								className={`tour-hunk-summary-input${summaryIsAutoDraft ? ' tour-hunk-summary-auto-draft' : ''}`}
+								rows={1}
+								value={summaryEditorValue}
+								placeholder="Describe this hunk in one sentence"
+								onFocus={handleSummaryFocus}
+								onChange={handleSummaryInputChange}
+								onBlur={handleSummaryBlur}
+								onInput={resizeSummaryTextarea}
+								title="One-line description of this hunk. Pre-filled with the first changed line by default - edit to customize. Leave empty on blur to fall back to the default."
+							/>
+							{onRunAssistant && (
+								<button
+									type="button"
+									className="tour-action-btn icon-button tour-assistant-button tour-hunk-summary-sparkle"
+									title="Draft a one-line summary for this hunk with AI"
+									disabled={!!assistantRunning}
+									onClick={() => onRunAssistant('summarizeHunk', { hunkId: node.id })}
+								>
+									{sparkleIcon}
+								</button>
+							)}
+						</div>
+					) : (
+						<span
+							className={`tour-hunk-summary-text${summaryInfo.isAuto ? ' tour-hunk-summary-auto' : ''}`}
+							title={summaryInfo.text}
 						>
-							{sparkleIcon}
-						</button>
+							{summaryInfo.text}
+						</span>
 					)}
-					{highlightEditingEnabled && (
-						<button
-							type="button"
-							className={`tour-action-btn icon-button tour-hunk-highlight-toggle${highlightMode ? ' active' : ''}`}
-							title={highlightMode ? 'Exit highlight mode' : 'Highlight lines (drag in the diff)'}
-							aria-pressed={highlightMode}
-							onClick={() => setHighlightMode(m => !m)}
-						>
-							{editIcon}
-						</button>
-					)}
-					{isEditMode && (
-						<button
-							type="button"
-							className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.hunk.defaultCollapsed ? ' active' : ''}`}
-							title={node.hunk.defaultCollapsed
-								? "Viewer won't see this hunk by default - click to make viewer see it by default"
-								: 'Viewer sees this hunk by default - click to make viewer not see it by default'}
-							aria-pressed={!!node.hunk.defaultCollapsed}
-							onClick={() => onToggleHunkDefaultCollapsed(node.id)}
-						>
-							{node.hunk.defaultCollapsed ? eyeClosedIcon : eyeIcon}
-						</button>
-					)}
-					{onOpenDiff && (
-						<button
-							className="tour-action-btn icon-button"
-							disabled={isMismatch}
-							title={isMismatch ? 'Checkout the associated PR to open in file context' : 'Open in file context'}
-							onClick={() => onOpenDiff(node.hunk)}
-						>
-							{diffSingleIcon}
-						</button>
-					)}
-					{isEditMode && (
-						<button className="tour-remove-btn tour-action-btn icon-button" title="Remove hunk" onClick={() => onRemove(node.id)}>
-							{trashIcon}
-						</button>
-					)}
+				</div>
+				{/* Row 3: native `@@` patch header line (always visible). */}
+				<div className="tour-hunk-header-row tour-hunk-header-row-diff" title={diffHunkHeaderText}>
+					{diffHunkHeaderText}
 				</div>
 			</div>
-			{!collapsed && (
+			{!bodyHidden && (
 				lines.length > 0 ? (
 					<DiffTable
 						layout={diffLayout}
@@ -782,6 +919,7 @@ function GroupBlock({
 	node,
 	doc,
 	dragState,
+	isExternalHunkDragActive,
 	activeNodeId,
 	onActiveNodeChanged,
 	onNodeDragStart,
@@ -799,6 +937,7 @@ function GroupBlock({
 	onAddGroup,
 	onInsertRelative,
 	onHighlightsChange,
+	onSummaryChange,
 	onRemove,
 	onOpenDiff,
 	activePR,
@@ -811,6 +950,7 @@ function GroupBlock({
 	node: EditorGroupNode;
 	doc: EditorDocument;
 	dragState: ReorderDragState | null;
+	isExternalHunkDragActive?: boolean;
 	activeNodeId: string | undefined;
 	onActiveNodeChanged: (id: string) => void;
 	onNodeDragStart: (nodeId: string) => void;
@@ -828,13 +968,14 @@ function GroupBlock({
 	onAddGroup: (parentGroupId?: string) => void;
 	onInsertRelative: (kind: InsertKind, targetId: string, position: DropPosition) => void;
 	onHighlightsChange: (hunkId: string, highlights: HighlightRange[]) => void;
+	onSummaryChange: (hunkId: string, summary: string) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	isEditMode: boolean;
 	diffLayout: 'inline' | 'sideBySide';
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
-	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => void;
 	assistantRunning?: boolean;
 }) {
 	// Seed and re-sync the editor's local collapse state to the section's
@@ -984,7 +1125,7 @@ function GroupBlock({
 							<NodeRenderer
 								node={child}
 								doc={doc}
-								dragState={dragState}
+								dragState={dragState} isExternalHunkDragActive={isExternalHunkDragActive}
 								activeNodeId={activeNodeId}
 								onActiveNodeChanged={onActiveNodeChanged}
 								onNodeDragStart={onNodeDragStart}
@@ -1002,6 +1143,7 @@ function GroupBlock({
 								onAddGroup={onAddGroup}
 								onInsertRelative={onInsertRelative}
 								onHighlightsChange={onHighlightsChange}
+								onSummaryChange={onSummaryChange}
 								onRemove={onRemove}
 								onOpenDiff={onOpenDiff}
 								activePR={activePR}
@@ -1034,6 +1176,7 @@ function NodeRenderer({
 	node,
 	doc,
 	dragState,
+	isExternalHunkDragActive,
 	activeNodeId,
 	onActiveNodeChanged,
 	onNodeDragStart,
@@ -1051,6 +1194,7 @@ function NodeRenderer({
 	onAddGroup,
 	onInsertRelative,
 	onHighlightsChange,
+	onSummaryChange,
 	onRemove,
 	onOpenDiff,
 	activePR,
@@ -1063,6 +1207,7 @@ function NodeRenderer({
 	node: EditorNode;
 	doc: EditorDocument;
 	dragState: ReorderDragState | null;
+	isExternalHunkDragActive?: boolean;
 	activeNodeId: string | undefined;
 	onActiveNodeChanged: (id: string) => void;
 	onNodeDragStart: (nodeId: string) => void;
@@ -1080,13 +1225,14 @@ function NodeRenderer({
 	onAddGroup: (parentGroupId?: string) => void;
 	onInsertRelative: (kind: InsertKind, targetId: string, position: DropPosition) => void;
 	onHighlightsChange: (hunkId: string, highlights: HighlightRange[]) => void;
+	onSummaryChange: (hunkId: string, summary: string) => void;
 	onRemove: (id: string) => void;
 	onOpenDiff?: (hunk: HunkReference) => void;
 	isEditMode: boolean;
 	diffLayout: 'inline' | 'sideBySide';
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
-	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection', ctx?: { hunkId?: string; groupId?: string }) => void;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => void;
 	assistantRunning?: boolean;
 }) {
 	switch (node.type) {
@@ -1106,7 +1252,7 @@ function NodeRenderer({
 					<GroupBlock
 						node={node}
 						doc={doc}
-						dragState={dragState}
+						dragState={dragState} isExternalHunkDragActive={isExternalHunkDragActive}
 						activeNodeId={activeNodeId}
 						onActiveNodeChanged={onActiveNodeChanged}
 						onNodeDragStart={onNodeDragStart}
@@ -1124,6 +1270,7 @@ function NodeRenderer({
 						onAddGroup={onAddGroup}
 						onInsertRelative={onInsertRelative}
 						onHighlightsChange={onHighlightsChange}
+						onSummaryChange={onSummaryChange}
 						onRemove={onRemove}
 						onOpenDiff={onOpenDiff}
 						activePR={activePR}
@@ -1164,7 +1311,7 @@ function NodeRenderer({
 					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
 				>
-					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} onToggleHunkDefaultCollapsed={onToggleHunkDefaultCollapsed} activePR={activePR} isEditMode={isEditMode} diffLayout={diffLayout} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} />
+					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} onSummaryChange={onSummaryChange} onToggleHunkDefaultCollapsed={onToggleHunkDefaultCollapsed} activePR={activePR} isEditMode={isEditMode} diffLayout={diffLayout} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} isDragging={!!dragState || !!isExternalHunkDragActive} />
 				</NodeShell>
 			);
 		case 'dropzone':
@@ -1288,6 +1435,35 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [titleDraft, setTitleDraft] = useState(initialDoc.title);
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
+	// External hunk drags (originating from the Changes pane, carrying
+	// HUNK_MIME_TYPE) don't go through setDragState because they aren't
+	// in-tour reorders. We still want every hunk in the editor to render
+	// summary-only while one is in progress so the drop target is easy to
+	// find, so we track them separately via document-level listeners below.
+	const [externalHunkDragActive, setExternalHunkDragActive] = useState(false);
+	useEffect(() => {
+		// dragstart bubble-phase: the element's own React onDragStart handler
+		// runs first (changesOverview calls setData with HUNK_MIME_TYPE there),
+		// so by the time this listener fires the MIME types are populated and
+		// we can correctly identify it as an external hunk drag. A capture-
+		// phase listener would fire BEFORE setData and see empty types.
+		const onDocDragStart = (e: DragEvent) => {
+			if (e.dataTransfer && Array.from(e.dataTransfer.types).includes(HUNK_MIME_TYPE)) {
+				setExternalHunkDragActive(true);
+			}
+		};
+		// dragend / drop in capture phase so we always clear even if a child
+		// handler stops propagation (e.g. NodeShell's drop handler does).
+		const onDocDragEnd = () => setExternalHunkDragActive(false);
+		document.addEventListener('dragstart', onDocDragStart, false);
+		document.addEventListener('dragend', onDocDragEnd, true);
+		document.addEventListener('drop', onDocDragEnd, true);
+		return () => {
+			document.removeEventListener('dragstart', onDocDragStart, false);
+			document.removeEventListener('dragend', onDocDragEnd, true);
+			document.removeEventListener('drop', onDocDragEnd, true);
+		};
+	}, []);
 	const editorRootRef = useRef<HTMLDivElement>(null);
 	const [activeNodeId, setActiveNodeId] = useState<string | undefined>(undefined);
 	const [justInsertedId, setJustInsertedId] = useState<string | undefined>(undefined);
@@ -1843,6 +2019,22 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		[applyLocal],
 	);
 
+	/* - Hunk summary ------------------------- */
+
+	const handleSummaryChange = useCallback(
+		(hunkId: string, summary: string) => {
+			applyLocal(prev => ({
+				...prev,
+				children: updateNodeInList(prev.children, hunkId, n =>
+					n.type === 'hunk'
+						? { ...n, hunk: { ...n.hunk, summary: summary.trim().length > 0 ? summary : undefined } }
+						: n,
+				),
+			}), { defer: true });
+		},
+		[applyLocal],
+	);
+
 	/* - Remove node ------------------------- */
 
 	const handleRemove = useCallback((id: string) => {
@@ -2161,7 +2353,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 						<NodeRenderer
 							node={node}
 							doc={doc}
-							dragState={dragState}
+							dragState={dragState} isExternalHunkDragActive={externalHunkDragActive}
 							activeNodeId={activeNodeId}
 							onActiveNodeChanged={setActiveNodeId}
 							onNodeDragStart={handleNodeDragStart}
@@ -2179,6 +2371,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							onAddGroup={handleAddGroup}
 							onInsertRelative={handleInsertRelative}
 							onHighlightsChange={handleHighlightsChange}
+							onSummaryChange={handleSummaryChange}
 							onRemove={handleRemove}
 							onOpenDiff={onOpenDiff}
 							activePR={activePR}

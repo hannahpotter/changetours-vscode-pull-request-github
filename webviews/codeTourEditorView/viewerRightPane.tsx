@@ -11,7 +11,7 @@ import { DiffSide, type IReviewThread } from '../../src/common/comment';
 import type { HunkReference, TourHunkNode } from '../../src/github/codeTourMarkdown';
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
-import { ParsedDiffLine, parsePatch } from '../common/diffUtils';
+import { getHunkSummary, ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { chevronDownIcon, diffSingleIcon } from '../components/icon';
 
 export interface CommentTarget {
@@ -355,7 +355,8 @@ function threadAttachesToLine(thread: IReviewThread, line: ParsedDiffLine): bool
 function HunkCard({ diffLayout, node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, openDiffDisabled, openDiffDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
 	const { file, startLine, endLine, ref, patch } = node.hunk;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
-	const hunkHeaderText = useMemo(() => {
+	const summaryInfo = useMemo(() => getHunkSummary(node.hunk), [node.hunk]);
+	const diffHunkHeaderText = useMemo(() => {
 		const h = lines.find(l => l.type === 'hunk-header');
 		return h?.content ?? `@@ L${startLine}-${endLine} @@`;
 	}, [lines, startLine, endLine]);
@@ -451,47 +452,67 @@ function HunkCard({ diffLayout, node, threads, associated, showHighlights, onOpe
 				onClick={handleHeaderClick}
 				title={bodyCollapsed ? `Click to expand (L${startLine}-${endLine} @ ${ref.substring(0, 7)})` : undefined}
 			>
-				<span
-					role="button"
-					tabIndex={0}
-					className={`expand-icon icon-button viewer-hunk-collapse-toggle${bodyCollapsed ? ' closed' : ''}`}
-					title={bodyCollapsed ? 'Expand hunk' : 'Collapse hunk'}
-					onClick={e => { e.stopPropagation(); onToggleCollapsed(hunkKey); }}
-					onKeyDown={e => {
-						if (e.key === 'Enter' || e.key === ' ') {
-							e.preventDefault();
-							e.stopPropagation();
-							onToggleCollapsed(hunkKey);
-						}
-					}}
-				>
-					{chevronDownIcon}
-				</span>
-				<span className="viewer-hunk-summary" title={`${file} (${ref.substring(0, 7)})`}>{hunkHeaderText}</span>
-				<button
-					type="button"
-					className="viewer-hunk-action icon-button"
-					title={openDiffDisabled ? openDiffDisabledReason ?? 'Open in file context' : 'Open in file context'}
-					aria-label="Open in file context"
-					disabled={openDiffDisabled}
-					onClick={e => { e.stopPropagation(); onOpenDiff(node.hunk); }}
-				>
-					{diffSingleIcon}
-				</button>
-				<label
-					className={`viewer-viewed-checkbox${isViewed ? ' is-viewed' : ''}`}
-					title={isViewed ? 'Mark hunk as unviewed' : 'Mark hunk as viewed'}
-					onClick={e => e.stopPropagation()}
-				>
-					<span className="checkbox-wrapper">
-						<input
-							type="checkbox"
-							checked={isViewed}
-							onChange={() => onToggleViewed(hunkKey)}
-						/>
+				{/* Row 1: chevron, L#-# + ref (no file - the file is already in the
+					file group header in the left pane), actions. */}
+				<div className="viewer-hunk-header-row viewer-hunk-header-row-meta">
+					<span
+						role="button"
+						tabIndex={0}
+						className={`expand-icon icon-button viewer-hunk-collapse-toggle${bodyCollapsed ? ' closed' : ''}`}
+						title={bodyCollapsed ? 'Expand hunk' : 'Collapse hunk'}
+						onClick={e => { e.stopPropagation(); onToggleCollapsed(hunkKey); }}
+						onKeyDown={e => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								e.stopPropagation();
+								onToggleCollapsed(hunkKey);
+							}
+						}}
+					>
+						{chevronDownIcon}
 					</span>
-					<span className="viewer-viewed-checkbox-label">Viewed</span>
-				</label>
+					<div className="viewer-hunk-info">
+						<span className="viewer-hunk-lines">L{startLine}&ndash;{endLine}</span>
+						<span className="viewer-hunk-ref" title={ref}>{ref.substring(0, 7)}</span>
+					</div>
+					<button
+						type="button"
+						className="viewer-hunk-action icon-button"
+						title={openDiffDisabled ? openDiffDisabledReason ?? 'Open in file context' : 'Open in file context'}
+						aria-label="Open in file context"
+						disabled={openDiffDisabled}
+						onClick={e => { e.stopPropagation(); onOpenDiff(node.hunk); }}
+					>
+						{diffSingleIcon}
+					</button>
+					<label
+						className={`viewer-viewed-checkbox${isViewed ? ' is-viewed' : ''}`}
+						title={isViewed ? 'Mark hunk as unviewed' : 'Mark hunk as viewed'}
+						onClick={e => e.stopPropagation()}
+					>
+						<span className="checkbox-wrapper">
+							<input
+								type="checkbox"
+								checked={isViewed}
+								onChange={() => onToggleViewed(hunkKey)}
+							/>
+						</span>
+						<span className="viewer-viewed-checkbox-label">Viewed</span>
+					</label>
+				</div>
+				{/* Row 2: read-only summary text. */}
+				<div className="viewer-hunk-header-row viewer-hunk-header-row-summary">
+					<span
+						className={`viewer-hunk-summary${summaryInfo.isAuto ? ' viewer-hunk-summary-auto' : ''}`}
+						title={summaryInfo.text}
+					>
+						{summaryInfo.text}
+					</span>
+				</div>
+				{/* Row 3: native `@@` patch header line (always visible). */}
+				<div className="viewer-hunk-header-row viewer-hunk-header-row-diff" title={diffHunkHeaderText}>
+					{diffHunkHeaderText}
+				</div>
 			</div>
 			{!bodyCollapsed && (
 				lines.length > 0 ? (

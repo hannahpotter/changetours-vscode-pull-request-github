@@ -1092,7 +1092,7 @@
 			},
 			{
 				"command": "codetour.treeItem.openDiff",
-				"title": "GoTo Diff",
+				"title": "Go to diff",
 				"icon": "$(git-compare)"
 			},
 			{
@@ -4129,6 +4129,24 @@
 						}
 					},
 					"required": ["hunkId", "highlights"]
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_setHunkSummary",
+				"tags": [
+					"change tour"
+				],
+				"displayName": "Set Hunk Summary (Change Tour)",
+				"modelDescription": "Set or clear the one-line natural-language summary on an existing hunk. Shown inline in the hunk header in both edit and viewer modes; without one, readers see a generic auto-fallback (the first changed line of the patch). Pass an empty string to clear and fall back to the auto default.",
+				"icon": "$(edit)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"hunkId": { "type": "string", "description": "ID of the hunk node (from getCurrentTour)." },
+						"summary": { "type": "string", "description": "One-sentence description (120 chars or less). Empty string clears the summary." }
+					},
+					"required": ["hunkId", "summary"]
 				},
 				"when": "config.changeTour.assistant.enabled"
 			},

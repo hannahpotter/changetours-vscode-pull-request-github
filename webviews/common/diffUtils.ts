@@ -3,6 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// `getHunkSummary` lives in the shared markdown module so both webview and
+// extension (tree view) code can call it from a single source. Re-exported
+// here for back-compat with existing webview imports.
+export { getHunkSummary } from '../../src/github/codeTourMarkdown';
+
 export interface ParsedDiffLine {
 	type: 'context' | 'add' | 'delete' | 'hunk-header';
 	content: string;
