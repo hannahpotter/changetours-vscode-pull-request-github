@@ -177,12 +177,10 @@ function Root() {
 	const onOpenDiff = useCallback((hunk: any) => {
 		// Attach document PR properties to the hunk payload so the backend command has context
 		const payload = { ...hunk };
-		if (doc && doc.isPR !== undefined) {
-			payload.isPR = doc.isPR;
+		if (doc && doc.prNumber !== undefined) {
 			payload.prNumber = doc.prNumber;
 			payload.prOwner = doc.prOwner;
 			payload.prRepo = doc.prRepo;
-			payload.baseRef = doc.baseRef;
 		}
 
 		handler?.postMessage({

@@ -172,7 +172,7 @@ async function tryGetPRDescriptionBlock(reposManager: RepositoriesManager): Prom
 	}
 	try {
 		const parsed = parseCodeTourMarkdown(document.getText());
-		if (!parsed.isPR || !parsed.prOwner || !parsed.prRepo || parsed.prNumber === undefined) {
+		if (!parsed.prOwner || !parsed.prRepo || parsed.prNumber === undefined) {
 			return undefined;
 		}
 		const folderManager = reposManager.getManagerForRepository(parsed.prOwner, parsed.prRepo);

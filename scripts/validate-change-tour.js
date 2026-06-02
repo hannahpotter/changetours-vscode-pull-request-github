@@ -37,8 +37,8 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const REQUIRED_FRONTMATTER_KEYS = ['schemaVersion', 'isPR', 'prNumber', 'prOwner', 'prRepo', 'baseSha', 'headSha'];
-const RECOMMENDED_FRONTMATTER_KEYS = ['baseRef'];
+const REQUIRED_FRONTMATTER_KEYS = ['schemaVersion', 'prNumber', 'prOwner', 'prRepo', 'baseSha', 'headSha'];
+const RECOMMENDED_FRONTMATTER_KEYS = [];
 
 // Permissive line-recognition regexes (allow leading whitespace so we can
 // reliably *find* a hunk block even when the author indented it by accident).
@@ -116,7 +116,7 @@ function validateStructure(text) {
 	} else {
 		errors.push({
 			line: 1,
-			message: 'Missing frontmatter. The first line must be `---` followed by `schemaVersion`, `isPR`, `prNumber`, `prOwner`, `prRepo`, `baseSha`, `headSha` (and ideally `baseRef`), closed by another `---`.',
+			message: 'Missing frontmatter. The first line must be `---` followed by `schemaVersion`, `prNumber`, `prOwner`, `prRepo`, `baseSha`, `headSha`, closed by another `---`.',
 		});
 	}
 
@@ -141,12 +141,6 @@ function validateStructure(text) {
 		errors.push({
 			line: frontmatterEndLine,
 			message: `Frontmatter \`schemaVersion\` must be \`1\` (got \`${frontmatter.schemaVersion}\`). Newer values require an explicit migration.`,
-		});
-	}
-	if ('isPR' in frontmatter && frontmatter.isPR !== 'true') {
-		errors.push({
-			line: frontmatterEndLine,
-			message: `Frontmatter \`isPR\` must be \`true\` (got \`${frontmatter.isPR}\`).`,
 		});
 	}
 	if ('prNumber' in frontmatter && !/^\d+$/.test(frontmatter.prNumber)) {

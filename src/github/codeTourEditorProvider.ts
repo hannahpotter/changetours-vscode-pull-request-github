@@ -576,7 +576,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	private async _sendChangesData(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
 		try {
 			const parsed = parseCodeTourMarkdown(document.getText());
-			if (!parsed.isPR || !parsed.prOwner || !parsed.prRepo || !parsed.prNumber) {
+			if (!parsed.prOwner || !parsed.prRepo || !parsed.prNumber) {
 				return;
 			}
 			const { prOwner, prRepo, prNumber } = parsed;
@@ -609,7 +609,6 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 						number: prModel.number,
 						owner: prOwner,
 						repo: prRepo,
-						baseRef: prModel.base.ref,
 						baseSha: prModel.base.sha,
 						headSha: prModel.head?.sha,
 						files

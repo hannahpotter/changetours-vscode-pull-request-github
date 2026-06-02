@@ -51,14 +51,14 @@ function newLocalId(): string {
 
 /**
  * Resolves the pull request that the active Change Tour is bound to via its
- * frontmatter (isPR/prNumber/prOwner/prRepo). The assistant tools rely on this
+ * frontmatter (prNumber/prOwner/prRepo). The assistant tools rely on this
  * to look up real hunk content rather than trusting the LLM to invent it.
  */
 async function getTourPRContext(reposManager: RepositoriesManager): Promise<{ doc: CodeTourDocument; prOwner: string; prRepo: string; prNumber: number; folderManager: NonNullable<ReturnType<RepositoriesManager['getManagerForRepository']>> }> {
 	const document = getActiveTourDocument();
 	const doc = parseCodeTourMarkdown(document.getText());
-	if (!doc.isPR || !doc.prOwner || !doc.prRepo || doc.prNumber === undefined) {
-		throw new Error('The active Change Tour is not bound to a pull request. Create the tour via the "Pull Request: New Change Tour" command so it includes the required frontmatter (isPR, prNumber, prOwner, prRepo, baseRef).');
+	if (!doc.prOwner || !doc.prRepo || doc.prNumber === undefined) {
+		throw new Error('The active Change Tour is not bound to a pull request. Create the tour via the "Pull Request: New Change Tour" command so it includes the required frontmatter (prNumber, prOwner, prRepo).');
 	}
 	const folderManager = reposManager.getManagerForRepository(doc.prOwner, doc.prRepo);
 	if (!folderManager) {
@@ -211,7 +211,6 @@ class GetCurrentTourTool implements vscode.LanguageModelTool<GetCurrentTourParam
 			prNumber: doc.prNumber,
 			prOwner: doc.prOwner,
 			prRepo: doc.prRepo,
-			isPR: doc.isPR,
 			children: slimNodes(doc.children),
 		};
 		return new vscode.LanguageModelToolResult([

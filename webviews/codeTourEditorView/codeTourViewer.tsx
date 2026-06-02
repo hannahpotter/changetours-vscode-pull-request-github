@@ -208,7 +208,7 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		viewedHunksRef.current = viewedHunks;
 	}, [viewedHunks]);
 
-	const prBound = !!doc.isPR && !!doc.prNumber && !!doc.prOwner && !!doc.prRepo;
+	const prBound = !!doc.prNumber && !!doc.prOwner && !!doc.prRepo;
 	// A tour matches the active PR if the numbers agree and ANY of the active
 	// PR's known identifiers (its tracking remote, base, or head) matches the
 	// frontmatter. This handles forks where the tour was authored against the

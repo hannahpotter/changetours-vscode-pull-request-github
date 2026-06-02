@@ -53,8 +53,6 @@ interface EditorDocument {
 	prNumber?: number;
 	prOwner?: string;
 	prRepo?: string;
-	isPR?: boolean;
-	baseRef?: string;
 	baseSha?: string;
 	headSha?: string;
 	children: EditorNode[];
@@ -256,8 +254,6 @@ function serializeDoc(doc: EditorDocument): string {
 		prNumber: doc.prNumber,
 		prOwner: doc.prOwner,
 		prRepo: doc.prRepo,
-		isPR: doc.isPR,
-		baseRef: doc.baseRef,
 		baseSha: doc.baseSha,
 		headSha: doc.headSha,
 		children: editorNodesToTourNodes(doc.children),
@@ -269,8 +265,6 @@ function serializeDoc(doc: EditorDocument): string {
 
 // Extended payload from drag that may include patch content
 interface HunkPayload extends HunkReference {
-	isPR?: boolean;
-	baseRef?: string;
 	baseSha?: string;
 	headSha?: string;
 	prNumber?: number;
@@ -467,7 +461,7 @@ function DropZoneBlock({
 			try {
 				const payload: HunkPayload = JSON.parse(raw);
 
-				if (doc.isPR) {
+				if (doc.prNumber !== undefined) {
 					const prNumberMatches = !doc.prNumber || !payload.prNumber || String(doc.prNumber) === String(payload.prNumber);
 					const prOwnerMatches = !doc.prOwner || !payload.prOwner || doc.prOwner === payload.prOwner;
 					const prRepoMatches = !doc.prRepo || !payload.prRepo || doc.prRepo === payload.prRepo;
@@ -610,7 +604,7 @@ function HunkBlock({
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 	const summaryInfo = useMemo(() => getHunkSummary(node.hunk), [node.hunk]);
 
-	const isMismatch = !!doc.isPR && (
+	const isMismatch = doc.prNumber !== undefined && (
 		!activePR ||
 		doc.prNumber !== activePR.number ||
 		doc.prOwner?.toLowerCase() !== activePR.owner?.toLowerCase() ||
@@ -2043,7 +2037,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		});
 	}, [insertMultipleHunksCommand]);
 
-	const isMismatch = !!doc.isPR && (
+	const isMismatch = doc.prNumber !== undefined && (
 		!activePR ||
 		doc.prNumber !== activePR.number ||
 		doc.prOwner?.toLowerCase() !== activePR.owner?.toLowerCase() ||
@@ -2829,12 +2823,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			// Bring over PR properties if the document doesn't have them yet.
 			// `baseSha` / `headSha` come along too so the future
 			// outdated-detection feature has the anchors it needs.
-			if (updated.isPR === undefined && payload.isPR !== undefined) {
-				updated.isPR = payload.isPR;
+			if (updated.prNumber === undefined && payload.prNumber !== undefined) {
 				updated.prNumber = payload.prNumber;
 				updated.prOwner = payload.prOwner;
 				updated.prRepo = payload.prRepo;
-				updated.baseRef = payload.baseRef;
 				updated.baseSha = payload.baseSha;
 				updated.headSha = payload.headSha;
 				if (updated.schemaVersion === undefined) {
@@ -2849,14 +2841,14 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 	// Validate that a dropped hunk payload comes from the same PR the tour is
 	// bound to. Returns true on success, surfaces an error on mismatch.
 	const validateHunkPayloadPR = useCallback((payload: HunkPayload): boolean => {
-		if (!doc.isPR) {
+		if (doc.prNumber === undefined) {
 			return true;
 		}
 		const prNumberMatches = !doc.prNumber || !payload.prNumber || String(doc.prNumber) === String(payload.prNumber);
 		const prOwnerMatches = !doc.prOwner || !payload.prOwner || doc.prOwner === payload.prOwner;
 		const prRepoMatches = !doc.prRepo || !payload.prRepo || doc.prRepo === payload.prRepo;
 		if (!prNumberMatches || !prOwnerMatches || !prRepoMatches) {
-			const msg = `Cannot drop a hunk from a different pull request. Expected PR #${doc.prNumber} (${doc.prOwner}/${doc.prRepo}), but got PR #${payload.prNumber} (${payload.prOwner}/${payload.prRepo})`;
+			const msg = `Cannot drop a hunk from a different pull request. Expected pull request #${doc.prNumber} (${doc.prOwner}/${doc.prRepo}), but got pull request #${payload.prNumber} (${payload.prOwner}/${payload.prRepo})`;
 			if (onError) {
 				onError(msg);
 			} else {
@@ -2865,7 +2857,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			return false;
 		}
 		return true;
-	}, [doc.isPR, doc.prNumber, doc.prOwner, doc.prRepo, onError]);
+	}, [doc.prNumber, doc.prOwner, doc.prRepo, onError]);
 
 	// Insert a dropped hunk payload immediately before/after a specific node,
 	// matching the fine-grained drop indicator the reorder UI already uses.
@@ -2894,12 +2886,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				return prev;
 			}
 			const updated: EditorDocument = { ...prev, children: result.nodes };
-			if (updated.isPR === undefined && payload.isPR !== undefined) {
-				updated.isPR = payload.isPR;
+			if (updated.prNumber === undefined && payload.prNumber !== undefined) {
 				updated.prNumber = payload.prNumber;
 				updated.prOwner = payload.prOwner;
 				updated.prRepo = payload.prRepo;
-				updated.baseRef = payload.baseRef;
 				updated.baseSha = payload.baseSha;
 				updated.headSha = payload.headSha;
 				if (updated.schemaVersion === undefined) {
@@ -2933,12 +2923,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				...prev,
 				children: appendToList(prev.children, hunkNode),
 			};
-			if (updated.isPR === undefined && payload.isPR !== undefined) {
-				updated.isPR = payload.isPR;
+			if (updated.prNumber === undefined && payload.prNumber !== undefined) {
 				updated.prNumber = payload.prNumber;
 				updated.prOwner = payload.prOwner;
 				updated.prRepo = payload.prRepo;
-				updated.baseRef = payload.baseRef;
 				updated.baseSha = payload.baseSha;
 				updated.headSha = payload.headSha;
 				if (updated.schemaVersion === undefined) {
@@ -3253,11 +3241,11 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							<button
 								className="tour-add-btn icon-button tour-assistant-button"
 								title={
-									!doc.isPR || !doc.prNumber
+									!doc.prNumber
 										? 'Bind the tour to a pull request (via "Pull Request: New Change Tour") to enable AI generation'
 										: 'Auto-generate the full Change Tour with AI'
 								}
-								disabled={!doc.isPR || !doc.prNumber || !!assistantStatus?.running}
+								disabled={!doc.prNumber || !!assistantStatus?.running}
 								onClick={() => onRunAssistant('autoGenerate')}
 							>
 								{sparkleIcon}

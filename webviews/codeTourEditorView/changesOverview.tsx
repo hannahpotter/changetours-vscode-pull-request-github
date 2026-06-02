@@ -16,7 +16,6 @@ interface ChangedFilesOverviewProps {
 	number: number;
 	owner: string;
 	repo: string;
-	baseRef: string;
 	/** PR base commit SHA at the moment the changes view was opened. Stamped onto hunk drag payloads so dropped hunks seed the tour document's `baseSha`. */
 	baseSha?: string;
 	/** PR head commit SHA at the moment the changes view was opened. Same propagation as `baseSha`, plus the future outdated-detection feature's primary tour-level anchor. */
@@ -109,7 +108,7 @@ function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: nu
 	return ranges;
 }
 
-function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, prRepo, baseRef, baseSha, headSha, onHunkAdd, activeNodeContext, coveredHunksSet, selectedHunksSet, onHunkSelect, onClearHunksSelection, searchQuery, searchActive, hideCovered }: { patch: string; fileName: string; previousFile?: string; blobSha?: string; prNumber: number; prOwner: string; prRepo: string; baseRef: string; baseSha?: string; headSha?: string; onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onClearHunksSelection: () => void, searchQuery: string, searchActive: boolean, hideCovered: boolean }) {
+function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, prRepo, baseSha, headSha, onHunkAdd, activeNodeContext, coveredHunksSet, selectedHunksSet, onHunkSelect, onClearHunksSelection, searchQuery, searchActive, hideCovered }: { patch: string; fileName: string; previousFile?: string; blobSha?: string; prNumber: number; prOwner: string; prRepo: string; baseSha?: string; headSha?: string; onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onClearHunksSelection: () => void, searchQuery: string, searchActive: boolean, hideCovered: boolean }) {
 	const lines = parsePatch(patch);
 	const rawLines = patch.split('\n');
 	const hunkRanges = computeHunkRanges(lines);
@@ -175,8 +174,6 @@ function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, p
 			patch: hunkPatch,
 			previousFile,
 			baseBlob: blobSha,
-			isPR: true,
-			baseRef,
 			baseSha,
 			headSha,
 			prNumber,
@@ -185,7 +182,7 @@ function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, p
 		});
 		e.dataTransfer.setData('application/vnd.codetour.hunk+json', payload);
 		e.dataTransfer.effectAllowed = 'copy';
-	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, blobSha, baseRef, baseSha, headSha, prNumber, prOwner, prRepo]);
+	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, blobSha, baseSha, headSha, prNumber, prOwner, prRepo]);
 
 	// Figure out which lines belong to covered & selected hunks so we can style/manage them
 	const coveredHeaderIndices = new Set<number>();
@@ -222,8 +219,6 @@ function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, p
 									patch: hunkPatch,
 						previousFile,
 						baseBlob: blobSha,
-						isPR: true,
-						baseRef,
 						baseSha,
 						headSha,
 						prNumber,
@@ -249,8 +244,6 @@ function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, p
 					patch: hunkPatch,
 				previousFile,
 				baseBlob: blobSha,
-				isPR: true,
-				baseRef,
 				baseSha,
 				headSha,
 				prNumber,
@@ -260,7 +253,7 @@ function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, p
 
 			onHunkAdd([payload], mode);
 		}
-	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, blobSha, baseRef, baseSha, headSha, prNumber, prOwner, prRepo, onHunkAdd, selectedHeaderIndices, onClearHunksSelection]);
+	}, [hunkRanges, fileName, lines, rawLines, hunkRawIndices, previousFile, blobSha, baseSha, headSha, prNumber, prOwner, prRepo, onHunkAdd, selectedHeaderIndices, onClearHunksSelection]);
 
 	const handleHunkSelectToggle = useCallback((headerIdx: number, selected: boolean) => {
 		const range = hunkRanges.get(headerIdx);
@@ -289,7 +282,7 @@ function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, p
 }
 
 
-function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, baseSha, headSha, onHunkAdd, activeNodeContext, coveredHunksSet, fileMissingHunks, selectedHunksSet, onHunkSelect, onFileSelect, fileAllHunks, expanded, onToggleExpanded, searchActive, searchMatched, searchQuery, hideCovered }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseRef: string, baseSha?: string, headSha?: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, fileMissingHunks: any[], selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onFileSelect: (hunks: any[], s: boolean) => void, fileAllHunks: any[], expanded: boolean, onToggleExpanded: (expanded: boolean) => void, searchActive: boolean, searchMatched: boolean, searchQuery: string, hideCovered: boolean }) {
+function FileEntry({ file, prNumber, prOwner, prRepo, baseSha, headSha, onHunkAdd, activeNodeContext, coveredHunksSet, fileMissingHunks, selectedHunksSet, onHunkSelect, onFileSelect, fileAllHunks, expanded, onToggleExpanded, searchActive, searchMatched, searchQuery, hideCovered }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseSha?: string, headSha?: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, fileMissingHunks: any[], selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onFileSelect: (hunks: any[], s: boolean) => void, fileAllHunks: any[], expanded: boolean, onToggleExpanded: (expanded: boolean) => void, searchActive: boolean, searchMatched: boolean, searchQuery: string, hideCovered: boolean }) {
 	const allCovered = fileMissingHunks.length === 0;
 
 	const { text, className } = statusLabel(file.status);
@@ -358,7 +351,6 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, baseSha, headSha,
 						prNumber={prNumber}
 						prOwner={prOwner}
 						prRepo={prRepo}
-						baseRef={baseRef}
 						baseSha={baseSha}
 						headSha={headSha}
 						onHunkAdd={onHunkAdd}
@@ -380,7 +372,7 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseRef, baseSha, headSha,
 	);
 }
 
-export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, baseSha, headSha, files, onHunkAdd, activeNodeContext, codeTourHunks = [], onAddAllMissing }: ChangedFilesOverviewProps) => {
+export const ChangedFilesOverview = ({ title, number, owner, repo, baseSha, headSha, files, onHunkAdd, activeNodeContext, codeTourHunks = [], onAddAllMissing }: ChangedFilesOverviewProps) => {
 	const totalAdditions = files.reduce((sum, f) => sum + (f.additions ?? 0), 0);
 	const totalDeletions = files.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
 	const [selectedHunksSet, setSelectedHunksSet] = useState<Set<string>>(new Set());
@@ -510,8 +502,6 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, base
 							patch: hunkPatch,
 					previousFile: file.previousFileName,
 					baseBlob: file.blobSha,
-					isPR: true,
-					baseRef,
 					baseSha,
 					headSha,
 					prNumber: number,
@@ -528,7 +518,7 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, base
 			allHunksMap.set(file.fileName, fileHunks);
 		}
 		return { totalHunks: total, missingHunks: missing, fileAllHunks: allHunksMap };
-	}, [files, coveredHunksSet, baseRef, baseSha, headSha, number, owner, repo]);
+	}, [files, coveredHunksSet, baseSha, headSha, number, owner, repo]);
 
 	const coveredHunks = totalHunks - missingHunks.length;
 	const progressPercent = totalHunks === 0 ? 0 : Math.round((coveredHunks / totalHunks) * 100);
@@ -640,7 +630,6 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, base
 							prNumber={number}
 							prOwner={owner}
 							prRepo={repo}
-							baseRef={baseRef}
 							baseSha={baseSha}
 							headSha={headSha}
 							onHunkAdd={onHunkAdd}

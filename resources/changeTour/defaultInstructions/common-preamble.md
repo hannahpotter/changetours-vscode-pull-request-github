@@ -4,11 +4,9 @@ A "Change Tour" is a guided walkthrough of a pull request, persisted as a .chang
 	• Frontmatter that binds it to a pull request:
 		---
 		schemaVersion: 1
-		isPR: true
 		prNumber: <int>
 		prOwner: <owner>
 		prRepo: <repo>
-		baseRef: <branch>
 		baseSha: <PR base commit SHA>
 		headSha: <PR head commit SHA>
 		---

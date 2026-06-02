@@ -24,7 +24,7 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 			return false;
 		}
 		const doc = this.parsedDoc;
-		if (doc.isPR && doc.prNumber && doc.prOwner && doc.prRepo) {
+		if (doc.prNumber && doc.prOwner && doc.prRepo) {
 			const folderManager = this._reposManager.getManagerForFile(this.currentDocument.uri) ?? this._reposManager.folderManagers[0];
 			if (folderManager) {
 				const activePR = folderManager.activePullRequest;
@@ -69,7 +69,7 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 		if (this._view) {
 			const doc = this.parsedDoc;
 
-			if (doc && doc.isPR && doc.prNumber) {
+			if (doc && doc.prNumber) {
 				CodeTourStepsTreeView.currentPRParams = {
 					prNumber: doc.prNumber!,
 					prOwner: doc.prOwner!,
@@ -119,7 +119,7 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 	}
 
 	getTreeItem(element: TourGroupNode | TourHunkNode | CodeTourDocument): vscode.TreeItem {
-		if ((element as CodeTourDocument).isPR !== undefined || !((element as TourNode).type)) {
+		if (!((element as TourNode).type)) {
 			// This is a Change Tour document
 			const doc = element as CodeTourDocument;
 			const item = new vscode.TreeItem(doc.title, vscode.TreeItemCollapsibleState.Expanded);
@@ -144,8 +144,7 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 
 			// Attach PR info to the hunk so `codetour.openDiff` can associate it with an active PR diff
 			if (this.parsedDoc) {
-				const hunkPayload = hunkElement.hunk as unknown as { isPR?: boolean; prNumber?: string; prOwner?: string; prRepo?: string };
-				hunkPayload.isPR = this.parsedDoc.isPR;
+				const hunkPayload = hunkElement.hunk as unknown as { prNumber?: string; prOwner?: string; prRepo?: string };
 				hunkPayload.prNumber = String(this.parsedDoc.prNumber);
 				hunkPayload.prOwner = this.parsedDoc.prOwner;
 				hunkPayload.prRepo = this.parsedDoc.prRepo;
@@ -181,7 +180,7 @@ export class CodeTourStepsTreeView implements vscode.TreeDataProvider<TourGroupN
 			return [];
 		}
 
-		if ((element as CodeTourDocument).isPR !== undefined || !((element as TourNode).type)) {
+		if (!((element as TourNode).type)) {
 			// It's the root Document node
 			return this.currentTourNodes;
 		}

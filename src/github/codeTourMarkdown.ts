@@ -201,8 +201,6 @@ export interface CodeTourDocument {
 	prNumber?: number;
 	prOwner?: string;
 	prRepo?: string;
-	isPR?: boolean;
-	baseRef?: string;
 	/** PR base commit SHA at tour-author time. Anchors the future update flow. */
 	baseSha?: string;
 	/** PR head commit SHA at tour-author time. Used together with per-hunk `baseBlob` to detect drift. */
@@ -464,8 +462,6 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 	let prNumber: number | undefined;
 	let prOwner: string | undefined;
 	let prRepo: string | undefined;
-	let isPR: boolean | undefined;
-	let baseRef: string | undefined;
 	let baseSha: string | undefined;
 	let headSha: string | undefined;
 
@@ -528,10 +524,11 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 				else if (key === 'prNumber') prNumber = parseInt(value, 10);
 				else if (key === 'prOwner') prOwner = value;
 				else if (key === 'prRepo') prRepo = value;
-				else if (key === 'isPR') isPR = value === 'true';
-				else if (key === 'baseRef') baseRef = value;
 				else if (key === 'baseSha') baseSha = value;
 				else if (key === 'headSha') headSha = value;
+				// `isPR` and `baseRef` were stored historically but were never
+				// consumed by any algorithm - dropping them on read so existing
+				// tours gracefully shed the dead keys on next save.
 			}
 			i++;
 			continue;
@@ -642,8 +639,6 @@ export function parseCodeTourMarkdown(text: string): CodeTourDocument {
 		prNumber,
 		prOwner,
 		prRepo,
-		isPR,
-		baseRef,
 		baseSha,
 		headSha,
 		children: rootChildren,
@@ -657,21 +652,17 @@ export function serializeCodeTourMarkdown(doc: CodeTourDocument): string {
 	const lines: string[] = [];
 
 	const hasFrontmatter = doc.schemaVersion !== undefined
-		|| doc.isPR !== undefined
 		|| doc.prNumber !== undefined
 		|| doc.prOwner
 		|| doc.prRepo
-		|| doc.baseRef
 		|| doc.baseSha
 		|| doc.headSha;
 	if (hasFrontmatter) {
 		lines.push('---');
 		if (doc.schemaVersion !== undefined) lines.push(`schemaVersion: ${doc.schemaVersion}`);
-		if (doc.isPR !== undefined) lines.push(`isPR: ${doc.isPR}`);
 		if (doc.prNumber !== undefined) lines.push(`prNumber: ${doc.prNumber}`);
 		if (doc.prOwner) lines.push(`prOwner: ${doc.prOwner}`);
 		if (doc.prRepo) lines.push(`prRepo: ${doc.prRepo}`);
-		if (doc.baseRef) lines.push(`baseRef: ${doc.baseRef}`);
 		if (doc.baseSha) lines.push(`baseSha: ${doc.baseSha}`);
 		if (doc.headSha) lines.push(`headSha: ${doc.headSha}`);
 		lines.push('---');

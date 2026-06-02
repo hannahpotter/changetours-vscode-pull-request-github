@@ -161,7 +161,7 @@ export function registerCommands(
 				const activePR = folderManager.activePullRequest;
 
 				// If the hunk is associated with a PR and that PR is currently active, open the diff view through the PR to ensure comments are properly loaded and linked.
-				if (activePR && hunk.isPR && hunk.prNumber === activePR.number && hunk.prOwner === activePR.remote.owner && hunk.prRepo === activePR.remote.repositoryName) {
+				if (activePR && hunk.prNumber === activePR.number && hunk.prOwner === activePR.remote.owner && hunk.prRepo === activePR.remote.repositoryName) {
 					const changes = await activePR.getFileChangesInfo();
 					const changeModel = changes.find(c => c.fileName === hunk.file);
 
@@ -866,18 +866,15 @@ export function registerCommands(
 				await ensureChangeTourDir(repoRoot);
 				// Stamp the PR's current base/head SHAs so the future
 				// outdated-detection feature can diff `headSha..currentHead`
-				// without having to recover them from elsewhere. baseRef is
-				// still useful as a human-readable label for the base branch.
+				// without having to recover them from elsewhere.
 				const baseSha = resolved.pr.base?.sha;
 				const headSha = resolved.pr.head?.sha;
 				const frontmatterLines = [
 					'---',
 					'schemaVersion: 1',
-					'isPR: true',
 					`prNumber: ${resolved.pr.number}`,
 					`prOwner: ${resolved.pr.remote.owner}`,
 					`prRepo: ${resolved.pr.remote.repositoryName}`,
-					`baseRef: ${resolved.pr.base.ref}`,
 				];
 				if (baseSha) frontmatterLines.push(`baseSha: ${baseSha}`);
 				if (headSha) frontmatterLines.push(`headSha: ${headSha}`);
@@ -959,7 +956,7 @@ export function registerCommands(
 				}
 
 				const parsed = parseCodeTourMarkdown(text);
-				if (parsed.isPR && parsed.prOwner && parsed.prRepo && parsed.prNumber) {
+				if (parsed.prOwner && parsed.prRepo && parsed.prNumber) {
 					const { prOwner, prRepo, prNumber } = parsed;
 					const folderManager = reposManager.getManagerForRepository(prOwner, prRepo);
 					if (folderManager) {
@@ -1055,7 +1052,7 @@ export function registerCommands(
 				}
 
 				const parsed = parseCodeTourMarkdown(text);
-				if (parsed.isPR && parsed.prOwner && parsed.prRepo && parsed.prNumber) {
+				if (parsed.prOwner && parsed.prRepo && parsed.prNumber) {
 					const { prOwner, prRepo, prNumber } = parsed;
 					const folderManager = reposManager.getManagerForRepository(prOwner, prRepo);
 					if (folderManager) {

@@ -16,11 +16,9 @@ Every valid `.changetour.md` file has three parts.
 ```
 ---
 schemaVersion: 1
-isPR: true
 prNumber: <integer>
 prOwner: <github owner>
 prRepo: <github repo>
-baseRef: <base branch name>
 baseSha: <PR base commit SHA at tour-author time>
 headSha: <PR head commit SHA at tour-author time>
 ---
@@ -87,10 +85,10 @@ When the user asks you to start a tour for a PR (or hands you a PR number but no
 **Step 1: Resolve PR metadata via `gh`.**
 
 ```
-gh pr view <num> --json number,title,baseRefName,baseRefOid,headRefOid,body,headRepository
+gh pr view <num> --json number,title,baseRefOid,headRefOid,body,headRepository
 ```
 
-The fields you need are: `number` (`prNumber`), `title` (used for the file name and the H1), `baseRefName` (`baseRef`), `baseRefOid` (`baseSha`), `headRefOid` (`headSha`), and `headRepository.owner.login`/`headRepository.name` for `prOwner`/`prRepo`. If the user is working on the PR branch locally, `gh pr view` with no arg auto-detects it.
+The fields you need are: `number` (`prNumber`), `title` (used for the file name and the H1), `baseRefOid` (`baseSha`), `headRefOid` (`headSha`), and `headRepository.owner.login`/`headRepository.name` for `prOwner`/`prRepo`. If the user is working on the PR branch locally, `gh pr view` with no arg auto-detects it.
 
 **Step 2: Compute the filename.** Sanitize the PR title: lowercase, replace whitespace and path-illegal chars (` / \ : * ? " < > |`) with `-`, strip anything outside `[a-z0-9._-]`, collapse runs of `-`, trim leading/trailing punctuation, clip to 80 chars. The final path is:
 
@@ -105,11 +103,9 @@ If sanitization yields an empty string, fall back to `<num>.changetour.md`.
 ```
 ---
 schemaVersion: 1
-isPR: true
 prNumber: <num>
 prOwner: <owner>
 prRepo: <repo>
-baseRef: <baseRefName>
 baseSha: <baseRefOid>
 headSha: <headRefOid>
 ---
