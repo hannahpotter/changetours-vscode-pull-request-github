@@ -3,12 +3,13 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { render } from 'react-dom';
 import { ChangedFilesOverview } from './changesOverview';
 import { CodeTourEditor } from './codeTourEditor';
 import { CodeTourViewer, type ViewerInboxMessage } from './codeTourViewer';
 
+import { type PrState } from './viewerModel';
 import { type CodeTourDocument, type HunkReference, parseCodeTourMarkdown, type TourNode } from '../../src/github/codeTourMarkdown';
 import { getMessageHandler, MessageHandler } from '../common/message';
 
@@ -281,7 +282,7 @@ function Root() {
 		setInsertMultipleHunksCommand({ ts: Date.now(), payloads: hunks });
 	}, []);
 
-	const onRunAssistant = useCallback((mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => {
+	const onRunAssistant = useCallback((mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration', ctx?: { hunkId?: string; groupId?: string }) => {
 		if (!handler || assistantStatus.running) {
 			return;
 		}
@@ -307,6 +308,63 @@ function Root() {
 		setAssistantStatus(prev => ({ ...prev, error: undefined }));
 	}, []);
 
+	// Slim, detection-oriented view of `changesData`. The outdated-hunk
+	// detector and the auto-update flow only need the current head SHA and the
+	// per-file blob + patch - not the full changes-pane payload. Passing the
+	// smaller shape keeps the viewer / editor decoupled from the changes pane.
+	const prState = useMemo<PrState | undefined>(() => {
+		if (!changesData) {
+			return undefined;
+		}
+		return {
+			currentHeadSha: changesData.headSha,
+			files: Array.isArray(changesData.files)
+				? changesData.files.map((f: any) => ({
+					fileName: f.fileName,
+					previousFileName: f.previousFileName,
+					patch: f.patch,
+					blobSha: f.blobSha,
+				}))
+				: undefined,
+		};
+	}, [changesData]);
+
+	// Manual refresh from the outdated banner: re-fetch PR data. The extension
+	// reuses `_sendChangesData`, which re-posts `codeTourEditor.changesData`
+	// and re-triggers detection downstream.
+	const onRefreshPrState = useCallback(() => {
+		handler?.postMessage({ command: 'codeTourEditor.requestChanges' });
+	}, [handler]);
+
+	// When the active PR becomes available (e.g., user checked out the branch
+	// after the tour was already open), re-request the changes data. The
+	// extension's initial fetch on `ready` returns early if the folder
+	// manager / PR isn't resolved yet, so without this trigger the drift
+	// banner only appears after closing and reopening the file. The previous
+	// fix in the extension's `onDidChangeActivePullRequest` listener regressed
+	// the `isMismatch` clearing somehow; doing the trigger here on the
+	// transition undefined → defined keeps the extension plumbing untouched.
+	const prevActivePRRef = useRef<typeof activePR>(undefined);
+	useEffect(() => {
+		const prev = prevActivePRRef.current;
+		prevActivePRRef.current = activePR;
+		if (!handler) return;
+		if (activePR && !prev) {
+			handler.postMessage({ command: 'codeTourEditor.requestChanges' });
+		}
+	}, [activePR, handler]);
+
+	// External-assistant update entry points. Both hand off to the extension,
+	// which delegates to `pr.updateTourWithClaudeCode` (terminal) and
+	// `workbench.action.chat.open` (Copilot Chat with the @change-tour
+	// participant pre-loaded).
+	const onUpdateWithClaudeCode = useCallback(() => {
+		handler?.postMessage({ command: 'codeTourEditor.openClaudeCodeUpdate' });
+	}, [handler]);
+	const onUpdateWithCopilotChat = useCallback(() => {
+		handler?.postMessage({ command: 'codeTourEditor.openCopilotChatUpdate' });
+	}, [handler]);
+
 	if (!doc) {
 		return <div className="loading-indicator">Loading...</div>;
 	}
@@ -325,6 +383,8 @@ function Root() {
 					persistViewed={keys => { handler?.postMessage({ command: 'codeTourViewer.persistViewed', args: { keys } }); }}
 					tourFilePath={tourFilePath}
 					diffLayout={diffLayout}
+					prState={prState}
+					onRefreshPrState={onRefreshPrState}
 				/>
 			</div>
 		);
@@ -354,6 +414,10 @@ function Root() {
 					onRunAssistant={onRunAssistant}
 					onCancelAssistant={onCancelAssistant}
 					onDismissAssistantError={onDismissAssistantError}
+					prState={prState}
+					onRefreshPrState={onRefreshPrState}
+					onUpdateWithClaudeCode={onUpdateWithClaudeCode}
+					onUpdateWithCopilotChat={onUpdateWithCopilotChat}
 				/>
 			</div>
 			{isChangesOpen && (

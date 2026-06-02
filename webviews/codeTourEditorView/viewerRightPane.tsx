@@ -22,6 +22,8 @@ export interface CommentTarget {
 interface ViewerRightPaneProps {
 	diffLayout: 'inline' | 'sideBySide';
 	headSha?: string;
+	/** Set of TourHunkNode IDs whose underlying file has drifted from `baseBlob`. Drives the per-hunk "Outdated" / "History (Pinned)" badge. */
+	outdatedHunkIds?: Set<string>;
 	fileGroups: FileHunkGroup[];
 	totalsByFile: Map<string, number>;
 	threadsByHunkId: Map<string, IReviewThread[]>;
@@ -55,6 +57,7 @@ interface ViewerRightPaneProps {
 export function ViewerRightPane({
 	diffLayout,
 	headSha,
+	outdatedHunkIds,
 	fileGroups,
 	totalsByFile,
 	threadsByHunkId,
@@ -133,6 +136,7 @@ export function ViewerRightPane({
 						key={group.file}
 						diffLayout={diffLayout}
 						headSha={headSha}
+						outdatedHunkIds={outdatedHunkIds}
 						file={group.file}
 						hunks={group.hunks}
 						totalHunksForFile={totalsByFile.get(group.file) ?? group.hunks.length}
@@ -204,6 +208,7 @@ function FilterStatusBar({ label, shownHunkCount, totalHunkCount, shownFileCount
 interface FileGroupBlockProps {
 	diffLayout: 'inline' | 'sideBySide';
 	headSha?: string;
+	outdatedHunkIds?: Set<string>;
 	file: string;
 	hunks: TourHunkNode[];
 	totalHunksForFile: number;
@@ -228,6 +233,7 @@ interface FileGroupBlockProps {
 function FileGroupBlock({
 	diffLayout,
 	headSha,
+	outdatedHunkIds,
 	file,
 	hunks,
 	totalHunksForFile,
@@ -295,6 +301,7 @@ function FileGroupBlock({
 						key={node.id}
 						diffLayout={diffLayout}
 						headSha={headSha}
+						isOutdated={outdatedHunkIds?.has(node.id) ?? false}
 						node={node}
 						threads={threadsByHunkId.get(node.id) ?? []}
 						associated={associatedHunkIds.has(node.id)}
@@ -321,6 +328,8 @@ function FileGroupBlock({
 interface HunkCardProps {
 	diffLayout: 'inline' | 'sideBySide';
 	headSha?: string;
+	/** True when this hunk's file has drifted since the tour was authored. Drives the badge. */
+	isOutdated: boolean;
 	node: TourHunkNode;
 	threads: IReviewThread[];
 	associated: boolean;
@@ -359,9 +368,10 @@ function threadAttachesToLine(thread: IReviewThread, line: ParsedDiffLine): bool
 	return line.newLine !== undefined && line.newLine === thread.endLine;
 }
 
-function HunkCard({ diffLayout, headSha, node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, openDiffDisabled, openDiffDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
+function HunkCard({ diffLayout, headSha, isOutdated, node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, openDiffDisabled, openDiffDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
 	const { file, startLine, endLine, patch } = node.hunk;
 	const headShaShort = headSha ? headSha.substring(0, 7) : '';
+	const isPinned = !!node.hunk.pinned;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
 	const summaryInfo = useMemo(() => getHunkSummary(node.hunk), [node.hunk]);
 	const diffHunkHeaderText = useMemo(() => {
@@ -483,6 +493,16 @@ function HunkCard({ diffLayout, headSha, node, threads, associated, showHighligh
 						<span className="viewer-hunk-lines">L{startLine}&ndash;{endLine}</span>
 						{headShaShort && (
 						<span className="viewer-hunk-ref" title={headSha}>{headShaShort}</span>
+					)}
+					{isOutdated && isPinned && (
+						<span className="tour-hunk-badge tour-hunk-badge-pinned" title="This hunk's file has drifted from the PR. The author pinned it as history (the tour is not flagged outdated because of this hunk).">
+							History (Pinned)
+						</span>
+					)}
+					{isOutdated && !isPinned && (
+						<span className="tour-hunk-badge tour-hunk-badge-outdated" title="This hunk's file has drifted from the PR since the tour was authored.">
+							Outdated
+						</span>
 					)}
 					</div>
 					<button

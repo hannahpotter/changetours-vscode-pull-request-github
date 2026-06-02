@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import React, { useCallback, useMemo, useState } from 'react';
+import { editContentFingerprint } from './viewerModel';
 import type { HunkReference } from '../../src/github/codeTourMarkdown';
 import { ChangedFileInfo } from '../../src/github/views';
 import { DiffTable } from '../common/DiffTable';
@@ -410,13 +411,68 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseRef, base
 		});
 	}, []);
 
+	// Coverage by edit-content fingerprint, matching the banner's
+	// computeNewInPrCount in viewerModel.ts. Pinned tour hunks are skipped:
+	// a hunk pinned as historical context shouldn't claim coverage of the
+	// PR's current state at the same location. Without this, the banner
+	// reports "N uncovered" while the right pane reports 100% covered.
+	const coveredFingerprintsByFile = useMemo(() => {
+		const out = new Map<string, Set<string>>();
+		const add = (file: string, fp: string) => {
+			let s = out.get(file);
+			if (!s) { s = new Set(); out.set(file, s); }
+			s.add(fp);
+		};
+		for (const ch of codeTourHunks) {
+			if (ch.pinned) {
+				continue;
+			}
+			const fp = editContentFingerprint(ch.patch);
+			if (fp === undefined) {
+				continue;
+			}
+			add(ch.file, fp);
+			if (ch.previousFile) {
+				add(ch.previousFile, fp);
+			}
+		}
+		return out;
+	}, [codeTourHunks]);
+
+	// Keep emitting a line-range covered set for the children (DiffView uses
+	// it for per-row styling and the "hide covered" filter). It is derived
+	// from the fingerprint match: a PR hunk's line range is "covered" iff a
+	// non-pinned tour hunk has the same edit fingerprint.
 	const coveredHunksSet = useMemo(() => {
 		const set = new Set<string>();
-		for (const ch of codeTourHunks) {
-			set.add(`${ch.file}:${ch.startLine}:${ch.endLine}`);
+		for (const file of files) {
+			if (!file.patch) continue;
+			const fps = coveredFingerprintsByFile.get(file.fileName)
+				?? (file.previousFileName ? coveredFingerprintsByFile.get(file.previousFileName) : undefined);
+			if (!fps || fps.size === 0) continue;
+			const rawLines = file.patch.split('\n');
+			const lines = parsePatch(file.patch);
+			const ranges = computeHunkRanges(lines);
+			const hunkRawIndices: number[] = [];
+			for (let i = 0; i < rawLines.length; i++) {
+				if (rawLines[i].startsWith('@@')) {
+					hunkRawIndices.push(i);
+				}
+			}
+			for (const [headerIdx, range] of ranges.entries()) {
+				const parsedHunkIdx = lines.slice(0, headerIdx + 1).filter(l => l.type === 'hunk-header').length - 1;
+				const rawStart = hunkRawIndices[parsedHunkIdx];
+				const rawEnd = parsedHunkIdx + 1 < hunkRawIndices.length
+					? hunkRawIndices[parsedHunkIdx + 1]
+					: rawLines.length;
+				const fp = editContentFingerprint(rawLines.slice(rawStart, rawEnd).join('\n'));
+				if (fp !== undefined && fps.has(fp)) {
+					set.add(`${file.fileName}:${range.startLine}:${range.endLine}`);
+				}
+			}
 		}
 		return set;
-	}, [codeTourHunks]);
+	}, [files, coveredFingerprintsByFile]);
 
 	const { totalHunks, missingHunks, fileAllHunks } = useMemo(() => {
 		let total = 0;

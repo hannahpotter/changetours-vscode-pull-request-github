@@ -46,6 +46,7 @@ export const milestoneIcon = <Icon src={require('../../resources/icons/codicons/
 export const newCollectionIcon = <Icon src={require('../../resources/icons/codicons/new-collection.svg')} />;
 export const notebookTemplate = <Icon src={require('../../resources/icons/codicons/notebook-template.svg')} />;
 export const passIcon = <Icon src={require('../../resources/icons/codicons/pass.svg')} />;
+export const pinnedIcon = <Icon src={require('../../resources/icons/codicons/pinned.svg')} />;
 export const projectIcon = <Icon src={require('../../resources/icons/codicons/github-project.svg')} />;
 export const quoteIcon = <Icon src={require('../../resources/icons/codicons/quote.svg')} />;
 export const requestChangesIcon = <Icon src={require('../../resources/icons/codicons/request-changes.svg')} />;
@@ -55,9 +56,11 @@ export const stopCircleIcon = <Icon src={require('../../resources/icons/codicons
 export const syncIcon = <Icon src={require('../../resources/icons/codicons/sync.svg')} />;
 export const symbolStringIcon = <Icon src={require('../../resources/icons/codicons/symbol-string.svg')} />;
 export const tagIcon = <Icon src={require('../../resources/icons/codicons/tag.svg')} />;
+export const terminalIcon = <Icon src={require('../../resources/icons/codicons/terminal.svg')} />;
 export const tasklistIcon = <Icon src={require('../../resources/icons/codicons/tasklist.svg')} />;
 export const threeBars = <Icon src={require('../../resources/icons/codicons/three-bars.svg')} />;
 export const trashIcon = <Icon src={require('../../resources/icons/codicons/trash.svg')} />;
+export const unpinIcon	= <Icon src={require('../../resources/icons/codicons/unpin.svg')} />;
 export const warningIcon = <Icon src={require('../../resources/icons/codicons/warning.svg')} />;
 export const prMergeIcon = <Icon src={require('../../resources/icons/codicons/merge.svg')} />;
 export const skipIcon = <Icon src={require('../../resources/icons/codicons/skip.svg')} className='skip' />;

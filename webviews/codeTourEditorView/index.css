@@ -721,6 +721,330 @@
 	border-radius: 4px;
 	margin-bottom: 20px;
 	font-size: 13px;
+	gap: 12px;
+}
+
+/* Action group on the right side of the outdated banner; lets multiple
+ * buttons (Confirm all / Discard all / Update all / Refresh) sit together
+ * with consistent spacing. */
+.tour-pr-warning-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 0 0 auto;
+}
+
+/* Variant marker on the outdated/drift banner. Same warning colors as the
+ * checkout-PR banner today; the modifier exists so future visual tweaks can
+ * distinguish the two without forking the base layout. */
+.tour-outdated-warning {
+	/* same look as .tour-pr-warning for now */
+}
+
+/* Per-hunk badge (GitHub conversation-style "Outdated" tag). Three variants:
+ * - outdated: file drifted, not pinned (warning color)
+ * - pinned:   file drifted, author marked it as intentional history (neutral)
+ * - draft:    an auto-update is staged and awaiting Confirm/Undo (info)
+ */
+.tour-hunk-badge {
+	border-radius: 8px;
+	padding: 1px 8px;
+	font-size: 11px;
+	font-weight: 500;
+	line-height: 1.5;
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
+.tour-hunk-badge-outdated {
+	background: var(--vscode-inputValidation-warningBackground, rgba(255, 140, 0, 0.25));
+	border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(255, 140, 0, 0.55));
+	color: var(--vscode-editorForeground);
+}
+
+.tour-hunk-badge-pinned {
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+	border: 1px solid transparent;
+	opacity: 0.85;
+}
+
+.tour-hunk-badge-draft {
+	background: var(--vscode-inputValidation-infoBackground, rgba(0, 120, 212, 0.18));
+	border: 1px solid var(--vscode-inputValidation-infoBorder, rgba(0, 120, 212, 0.5));
+	color: var(--vscode-editorForeground);
+}
+
+/* Pending-update pill: groups the "Auto-updated · pending" badge with the
+ * inline Confirm/Discard icon buttons so they read as one stateful chip
+ * (matches the GitHub conversation "Outdated • Reply" pattern). The pill
+ * gets the same bluish background as the draft badge with the icon buttons
+ * tucked inside, so users find Confirm/Discard right next to the status
+ * instead of having to scan the right-side action bar for them. */
+.tour-hunk-pending-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 0;
+	background: var(--vscode-inputValidation-infoBackground, rgba(0, 120, 212, 0.18));
+	border: 1px solid var(--vscode-inputValidation-infoBorder, rgba(0, 120, 212, 0.5));
+	border-radius: 12px;
+	padding: 1px 4px 1px 0;
+	flex: 0 0 auto;
+}
+
+/* Inside the pill, the draft badge sheds its own border/background so it
+ * looks like text on the shared pill background. */
+.tour-hunk-pending-pill .tour-hunk-badge-draft {
+	background: transparent;
+	border: none;
+	padding-right: 6px;
+	padding-left: 8px;
+}
+
+.tour-hunk-pending-pill-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	margin: 0;
+	border: none;
+	background: transparent;
+	border-radius: 9px;
+	cursor: pointer;
+	/* Use the same white-on-blue treatment as the .tour-banner-assistant-button
+	 * chips so the ✓ / × icons sit visibly on the pill's bluish background.
+	 * `button-foreground` resolves to white in both light and dark themes. */
+	color: var(--vscode-button-foreground);
+}
+
+.tour-hunk-pending-pill-btn:hover {
+	background: var(--vscode-toolbar-hoverBackground);
+}
+
+.tour-hunk-pending-pill-btn .icon {
+	display: inline-flex;
+	width: 12px;
+	height: 12px;
+	line-height: 0;
+}
+
+/* Override webviews/common/common.css:201's blanket
+ * `:not(.copilot-icon) > svg path { fill: var(--vscode-foreground) }`
+ * so the ✓ / × icons inherit the pill button's white color rather than
+ * defaulting to the editor foreground (which reads as grey on the
+ * bluish pill background). Same trick used for the banner buttons. */
+.tour-hunk-pending-pill-btn .icon svg,
+.tour-hunk-pending-pill-btn .icon svg path {
+	fill: currentColor;
+}
+
+/* AI-driven update buttons in the outdated-tour banner. Icon-only chips
+ * with the action text in `title=` / `aria-label=` so screen readers and
+ * tooltips still carry the name (`Update with AI` / `Update with Claude CLI`
+ * / `Update with @change-tour`). Solid blue button with a white icon
+ * matches the existing VS Code primary-button vocabulary so users read
+ * them as the "AI-driven" path through the banner. */
+.tour-banner-assistant-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	background-color: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	cursor: pointer;
+	flex: 0 0 auto;
+}
+
+.tour-banner-assistant-button:hover:not(:disabled) {
+	background-color: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
+
+.tour-banner-assistant-button:focus,
+.tour-banner-assistant-button:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+.tour-banner-assistant-button:disabled {
+	background-color: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+	color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+	opacity: 0.55;
+	cursor: default;
+}
+
+.tour-banner-assistant-button .icon {
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	line-height: 0;
+}
+
+/* Force the SVG codicon to render in the button-foreground color rather than
+ * inheriting from the surrounding banner. `.icon` injects raw SVG via
+ * dangerouslySetInnerHTML; we have to target the leaf `path` element here
+ * because webviews/common/common.css:201 sets `:not(.copilot-icon) > svg
+ * path { fill: var(--vscode-foreground) }` globally, which would otherwise
+ * override the SVG root's `fill="currentColor"` and tint icons in the
+ * editor foreground instead of the button foreground. */
+.tour-banner-assistant-button,
+.tour-banner-assistant-button .icon {
+	color: var(--vscode-button-foreground);
+}
+
+.tour-banner-assistant-button .icon svg,
+.tour-banner-assistant-button .icon svg path {
+	fill: currentColor;
+}
+
+/* AI-review banner - same warning shape as the outdated banner but tinted
+ * with the focus accent so users distinguish "the AI just touched the doc"
+ * from "the file has drifted from the PR". Sticky so it stays visible as
+ * the user scrolls through the highlighted nodes - otherwise the only way
+ * to Accept/Revert/Next once you've scrolled down to review the changes
+ * is to scroll back up. */
+.tour-ai-review-banner {
+	background-color: var(--vscode-inputValidation-infoBackground, rgba(0, 120, 212, 0.18));
+	border-color: var(--vscode-inputValidation-infoBorder, rgba(0, 120, 212, 0.5));
+	position: sticky;
+	top: 0;
+	z-index: 5;
+}
+
+/* Per-node highlight for nodes the AI just added. Subtle accent-colored
+ * left border + faint background tint reads as "this is new" without
+ * overwhelming the surrounding tour content. Pairs with the AI-review
+ * banner's count: every node with this class is one of those N. */
+.tour-node-shell.tour-node-ai-added {
+	position: relative;
+	background-color: var(--vscode-inputValidation-infoBackground, rgba(0, 120, 212, 0.10));
+	border-radius: 4px;
+}
+
+.tour-node-shell.tour-node-ai-added::before {
+	content: '';
+	position: absolute;
+	left: -4px;
+	top: 4px;
+	bottom: 4px;
+	width: 3px;
+	border-radius: 2px;
+	background-color: var(--vscode-focusBorder);
+	pointer-events: none;
+}
+
+/* Pin toggle "active" state matches the other action-bar toggles (highlight
+ * toggle, default-collapsed toggle) so it reads as the same family of
+ * persistent on/off controls. The SVG inside picks up the active background;
+ * the icon swap (pinned vs unpin) carries the visual state. */
+.tour-pin-toggle.active,
+.tour-pin-toggle.active:hover,
+.tour-pin-toggle.active:focus {
+	background-color: var(--vscode-toolbar-hoverBackground);
+	outline: none;
+}
+
+/* Same badge family for the viewer-side hunk card. */
+.viewer-hunk-info .tour-hunk-badge {
+	margin-left: 4px;
+}
+
+/* Inline ambiguity picker for auto-update. Rendered between the hunk header
+ * and the diff body when the file has multiple candidate PR hunks. The
+ * candidate buttons reuse `.tour-action-btn` for visual continuity with the
+ * action bar above. */
+.tour-hunk-autoupdate-picker {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
+	border-top: 1px solid var(--vscode-panel-border, transparent);
+	background-color: var(--vscode-editorWidget-background, transparent);
+	font-size: 12px;
+}
+
+.tour-hunk-autoupdate-picker-label {
+	color: var(--vscode-descriptionForeground);
+}
+
+.tour-hunk-autoupdate-picker-options {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.tour-hunk-autoupdate-picker-options .tour-action-btn {
+	font-family: var(--vscode-editor-font-family, monospace);
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+/* Dropdown that lists candidate hunks when there are 2+ to choose from.
+ * Uses the VS Code dropdown tokens so it matches other selects in the
+ * webview. Monospace family + line-range labels stay readable for files
+ * with lots of hunks. */
+.tour-hunk-autoupdate-picker-select {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 12px;
+	padding: 2px 6px;
+	background-color: var(--vscode-dropdown-background, var(--vscode-input-background));
+	color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+	border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+	border-radius: 2px;
+	cursor: pointer;
+	max-width: 18em;
+}
+
+.tour-hunk-autoupdate-picker-select:focus,
+.tour-hunk-autoupdate-picker-select:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 0;
+}
+
+/* "Refresh narration with AI" toggle sitting below the candidate row in the
+ * auto-update picker. Aligns left so the choice reads as a follow-on option
+ * to the candidate-pick step rather than competing with the candidate buttons
+ * themselves. */
+.tour-hunk-autoupdate-picker-narration {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 6px;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	cursor: pointer;
+	user-select: none;
+}
+
+.tour-hunk-autoupdate-picker-narration input[type='checkbox'] {
+	margin: 0;
+	cursor: pointer;
+}
+
+/* The picker option whose old-side range best matches the outdated tour hunk.
+ * Tinted with the focus accent so it stands out from the other equal-rank
+ * candidates while still reading as a clickable button. */
+.tour-action-btn.tour-action-btn-suggested {
+	border-color: var(--vscode-focusBorder);
+	box-shadow: inset 0 0 0 1px var(--vscode-focusBorder);
+}
+
+.tour-action-btn-suggested-badge {
+	font-family: var(--vscode-font-family);
+	font-size: 10px;
+	font-weight: 500;
+	padding: 1px 6px;
+	border-radius: 8px;
+	background-color: var(--vscode-focusBorder);
+	color: var(--vscode-button-foreground, var(--vscode-editor-background));
+	line-height: 1.4;
 }
 
 /* - Group blocks --------------------------- */

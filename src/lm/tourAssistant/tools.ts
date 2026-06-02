@@ -234,6 +234,10 @@ function slimNodes(nodes: TourNode[]): unknown[] {
 			file: n.hunk.file,
 			lines: `${n.hunk.startLine}-${n.hunk.endLine}`,
 			highlights: n.hunk.highlights,
+			// `pinned` is an author-authored decision (set via the editor's pin
+			// button when the hunk has drifted). Surface it to the LLM so it
+			// doesn't strip the attribute on rewrites; the LLM does not set it.
+			pinned: n.hunk.pinned,
 		};
 	});
 }
@@ -311,6 +315,168 @@ function statusToString(status: GitChangeType): string {
 		case GitChangeType.MODIFY: return 'modified';
 		case GitChangeType.RENAME: return 'renamed';
 		default: return 'unknown';
+	}
+}
+
+/**
+ * Reduce a patch to its add/remove content (no `@@` headers, no context).
+ * Two patches with byte-identical `+`/`-` lines describe the same edit even
+ * if the surrounding file has shifted. Mirrors `editContentFingerprint` in
+ * webviews/codeTourEditorView/viewerModel.ts so the LLM's drift report uses
+ * the same definition of "same edit" as the editor's banner / per-hunk
+ * Outdated badge. Strips trailing CR so CRLF-encoded files match LF-encoded
+ * stored patches.
+ */
+function editContentFingerprint(patch: string | undefined): string | undefined {
+	if (!patch) {
+		return undefined;
+	}
+	const out: string[] = [];
+	for (const rawLine of patch.split('\n')) {
+		const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+		if (line.length === 0 || line.startsWith('@@')) {
+			continue;
+		}
+		const marker = line[0];
+		if (marker === '+' || marker === '-') {
+			out.push(line);
+		}
+	}
+	return out.join('\n');
+}
+
+/**
+ * Deterministic drift + coverage report. Computes EXACTLY the same lists the
+ * editor's UI surfaces in the outdated banner ("N hunks drifted from the PR",
+ * "M new hunks not covered"), so the LLM can act on them without having to
+ * re-derive drift from raw patches.
+ *
+ * Without this tool the LLM saw only `(file, lines)` per tour hunk and a
+ * separate list of PR hunks, with no way to detect content drift - so it
+ * tended to leave drifted hunks in place. With this tool the lists are
+ * handed to it directly; its job is just to execute the corrective edits.
+ */
+type GetDriftReportParams = Record<string, never>;
+
+class GetDriftReportTool implements vscode.LanguageModelTool<GetDriftReportParams> {
+	static readonly toolId = 'changeTour_getDriftReport';
+
+	constructor(private readonly reposManager: RepositoriesManager) { }
+
+	async prepareInvocation(): Promise<vscode.PreparedToolInvocation> {
+		return {
+			invocationMessage: vscode.l10n.t('Checking which Change Tour hunks have drifted from the PR'),
+			pastTenseMessage: vscode.l10n.t('Checked Change Tour drift against the PR'),
+		};
+	}
+
+	async invoke(): Promise<vscode.LanguageModelToolResult> {
+		const { doc, folderManager, prOwner, prRepo, prNumber } = await getTourPRContext(this.reposManager);
+		const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, prNumber);
+		if (!prModel) {
+			throw new Error(`Could not resolve pull request #${prNumber}.`);
+		}
+		const changes = await prModel.getFileChangesInfo();
+
+		// Build per-file maps from the current PR: fingerprint set + hunk list.
+		const prFingerprintsByFile = new Map<string, Set<string>>();
+		const prHunksByFile = new Map<string, Array<{ startLine: number; endLine: number; fp?: string }>>();
+		const renamedFrom = new Map<string, string>();
+		for (const change of changes) {
+			if (change.previousFileName && change.previousFileName !== change.fileName) {
+				renamedFrom.set(change.previousFileName, change.fileName);
+			}
+			if (!(change instanceof InMemFileChange) || !change.diffHunks?.length) {
+				continue;
+			}
+			const fpSet = new Set<string>();
+			const hunkList: Array<{ startLine: number; endLine: number; fp?: string }> = [];
+			for (const h of change.diffHunks) {
+				const newEnd = h.newLineNumber + Math.max(h.newLength, 1) - 1;
+				const patch = h.diffLines.map(l => l.raw).join('\n');
+				const fp = editContentFingerprint(patch);
+				if (fp) fpSet.add(fp);
+				hunkList.push({ startLine: h.newLineNumber, endLine: newEnd, fp });
+			}
+			prFingerprintsByFile.set(change.fileName, fpSet);
+			prHunksByFile.set(change.fileName, hunkList);
+		}
+
+		const resolvePrFile = (hunkFile: string, hunkPrevious?: string): string | undefined => {
+			if (prFingerprintsByFile.has(hunkFile)) return hunkFile;
+			const renamed = renamedFrom.get(hunkFile);
+			if (renamed && prFingerprintsByFile.has(renamed)) return renamed;
+			if (hunkPrevious && prFingerprintsByFile.has(hunkPrevious)) return hunkPrevious;
+			return undefined;
+		};
+
+		// Walk the tour. For each hunk: classify as fresh / drifted / removed-from-PR.
+		const drifted: Array<{ tourNodeId: string; file: string; oldLines: string; reason: string }> = [];
+		const removedFromPR: Array<{ tourNodeId: string; file: string; oldLines: string }> = [];
+		const coveredFps = new Map<string, Set<string>>(); // PR-file → set of fingerprints the tour already covers
+		const addCovered = (file: string, fp: string) => {
+			let s = coveredFps.get(file);
+			if (!s) { s = new Set(); coveredFps.set(file, s); }
+			s.add(fp);
+		};
+
+		const walk = (nodes: TourNode[]) => {
+			for (const n of nodes) {
+				if (n.type === 'hunk') {
+					const fingerprintFile = resolvePrFile(n.hunk.file, n.hunk.previousFile);
+					const prFps = fingerprintFile ? prFingerprintsByFile.get(fingerprintFile) : undefined;
+					const hunkFp = editContentFingerprint(n.hunk.patch);
+
+					if (!fingerprintFile || !prFps) {
+						removedFromPR.push({ tourNodeId: n.id, file: n.hunk.file, oldLines: `${n.hunk.startLine}-${n.hunk.endLine}` });
+					} else if (n.hunk.pinned) {
+						// Pinned hunks are intentional history - never flagged.
+						if (hunkFp) addCovered(fingerprintFile, hunkFp);
+					} else if (!hunkFp || !prFps.has(hunkFp)) {
+						drifted.push({
+							tourNodeId: n.id,
+							file: n.hunk.file,
+							oldLines: `${n.hunk.startLine}-${n.hunk.endLine}`,
+							reason: !hunkFp
+								? 'tour hunk has no patch content; cannot compare'
+								: 'patch content does not match any current PR hunk for this file',
+						});
+					} else {
+						addCovered(fingerprintFile, hunkFp);
+					}
+				}
+				if (n.type === 'group') {
+					walk(n.children);
+				}
+			}
+		};
+		walk(doc.children);
+
+		// Missing-in-tour: PR hunks no tour hunk covers (by content).
+		const missingInTour: Array<{ file: string; startLine: number; endLine: number }> = [];
+		for (const [file, hunks] of prHunksByFile) {
+			const covered = coveredFps.get(file);
+			for (const h of hunks) {
+				if (h.fp && covered && covered.has(h.fp)) continue;
+				missingInTour.push({ file, startLine: h.startLine, endLine: h.endLine });
+			}
+		}
+
+		const result = {
+			contract: [
+				`This tour has ${drifted.length} drifted hunk(s), ${missingInTour.length} hunk(s) new in the PR not yet covered, and ${removedFromPR.length} hunk(s) that no longer exist in the PR.`,
+				'Drifted: remove via changeTour_removeTourNode (use `tourNodeId`), then re-insert via changeTour_addHunkToTour (use one of the current PR hunks for that file from changeTour_getAvailablePRHunks).',
+				'Missing in tour: add via changeTour_addHunkToTour, placed into the most appropriate section.',
+				'Removed from PR: remove via changeTour_removeTourNode plus any narration that was specific to it.',
+				'Pinned hunks are intentional history and are never reported here.',
+			],
+			drifted,
+			missingInTour,
+			removedFromPR,
+		};
+		return new vscode.LanguageModelToolResult([
+			new vscode.LanguageModelTextPart(JSON.stringify(result, null, 2)),
+		]);
 	}
 }
 
@@ -552,6 +718,7 @@ function clampLevel(level: number): number {
 export function registerTourAssistantTools(context: vscode.ExtensionContext, reposManager: RepositoriesManager): void {
 	context.subscriptions.push(vscode.lm.registerTool(GetCurrentTourTool.toolId, new GetCurrentTourTool()));
 	context.subscriptions.push(vscode.lm.registerTool(GetAvailablePRHunksTool.toolId, new GetAvailablePRHunksTool(reposManager)));
+	context.subscriptions.push(vscode.lm.registerTool(GetDriftReportTool.toolId, new GetDriftReportTool(reposManager)));
 	context.subscriptions.push(vscode.lm.registerTool(AddSectionTool.toolId, new AddSectionTool()));
 	context.subscriptions.push(vscode.lm.registerTool(AddTextNodeTool.toolId, new AddTextNodeTool()));
 	context.subscriptions.push(vscode.lm.registerTool(AddHunkTool.toolId, new AddHunkTool(reposManager)));
@@ -574,6 +741,11 @@ export function getTourAssistantToolSpecs(): { name: string; description: string
 		{
 			name: GetAvailablePRHunksTool.toolId,
 			description: 'List every changed file + hunk in the pull request that the active Change Tour is bound to. Returns file paths, status (added/modified/deleted), and hunk line ranges with a preview.',
+			inputSchema: { type: 'object', properties: {} },
+		},
+		{
+			name: GetDriftReportTool.toolId,
+			description: 'Deterministic drift + coverage report for the active Change Tour. Returns three lists: hunks in the tour whose patch content no longer matches any current PR hunk (drifted), PR hunks no tour hunk covers by content (missingInTour), and tour hunks whose file is no longer in the PR diff (removedFromPR). Call this FIRST in the update flow - it is the ground truth for what needs to change.',
 			inputSchema: { type: 'object', properties: {} },
 		},
 		{

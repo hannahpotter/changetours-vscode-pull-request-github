@@ -101,6 +101,7 @@ function pickMode(command: string | undefined): AssistantMode {
 		case 'suggest': return 'suggest';
 		case 'narrate': return 'narrate';
 		case 'improve': return 'improve';
+		case 'update': return 'update';
 		default: return 'freeform';
 	}
 }
@@ -112,7 +113,10 @@ async function buildUserPrompt(
 ): Promise<string> {
 	const trimmed = rawPrompt.trim();
 	const base = baseUserPrompt(mode, trimmed);
-	if (mode !== 'generate' && mode !== 'improve') {
+	// PR description is useful framing for the modes that touch the whole tour
+	// or rewrite multiple hunks; the per-hunk modes (narrate, summarize, refresh)
+	// don't need it. `update` joins generate/improve in this set.
+	if (mode !== 'generate' && mode !== 'improve' && mode !== 'update') {
 		return base;
 	}
 	const description = await tryGetPRDescriptionBlock(reposManager);
@@ -137,6 +141,18 @@ function baseUserPrompt(mode: AssistantMode, trimmed: string): string {
 			return trimmed.length > 0
 				? `Polish the current Change Tour. Focus: ${trimmed}`
 				: 'Polish the current Change Tour - tighten narration, add useful highlights, and surface obvious gaps.';
+		case 'update':
+			return trimmed.length > 0
+				? `Update the current Change Tour to match the current state of the pull request. START by calling changeTour_getDriftReport - the three lists it returns are the ground truth. Process every entry, then call the report again to verify all lists are empty before stopping. Additional guidance from the user: ${trimmed}`
+				: 'Update the current Change Tour to match the current state of the pull request. START by calling changeTour_getDriftReport - the three lists it returns are the ground truth. Process every entry in `drifted`, `missingInTour`, and `removedFromPR`, then call the report again to verify all three lists are empty before stopping.';
+		case 'summarizeHunk':
+			return trimmed.length > 0
+				? `Write a one-line natural-language summary for: ${trimmed}`
+				: 'Write a one-line natural-language summary for the most recently added hunk.';
+		case 'refreshNarration':
+			return trimmed.length > 0
+				? `Refresh narration around: ${trimmed}`
+				: 'Refresh the narration around the most recently auto-updated hunk.';
 		case 'freeform':
 		default:
 			return trimmed;

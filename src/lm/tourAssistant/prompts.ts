@@ -17,7 +17,7 @@ import { CHANGE_TOUR_DIRNAME } from '../../github/codeTourFileLocator';
  * default prompt so users can add house rules without forking the defaults.
  */
 
-export type AssistantMode = 'generate' | 'suggest' | 'narrate' | 'improve' | 'freeform' | 'summarizeHunk';
+export type AssistantMode = 'generate' | 'suggest' | 'narrate' | 'improve' | 'freeform' | 'summarizeHunk' | 'update' | 'refreshNarration';
 
 const CUSTOM_INSTRUCTIONS_FILENAME = 'custom-instructions.md';
 const SEPARATOR = '\n\n--- User-provided instructions ---\n\n';

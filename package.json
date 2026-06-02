@@ -111,6 +111,10 @@
 					{
 						"name": "improve",
 						"description": "Polish the current Change Tour - tighten narration, add highlights, suggest regroupings."
+					},
+					{
+						"name": "update",
+						"description": "Update the tour to match the current state of the pull request - refresh drifted hunks, adjust narration, add new-in-PR hunks."
 					}
 				],
 				"when": "config.changeTour.assistant.enabled"
@@ -1054,6 +1058,12 @@
 			{
 				"command": "pr.editTourWithClaudeCode",
 				"title": "Edit Change Tour with Claude Code (Terminal)",
+				"category": "Change Tour",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "pr.updateTourWithClaudeCode",
+				"title": "Update Change Tour with Claude Code (Terminal)",
 				"category": "Change Tour",
 				"icon": "$(terminal)"
 			},
@@ -3151,6 +3161,11 @@
 					"when": "resourceFilename =~ /\\.changetour\\.md$/ && config.changeTour.assistant.enabled"
 				},
 				{
+					"command": "pr.updateTourWithClaudeCode",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/ && config.changeTour.assistant.enabled"
+				},
+				{
 					"command": "review.openFile",
 					"group": "navigation",
 					"when": "resourceScheme =~ /^review$/ && isInDiffEditor"
@@ -4002,6 +4017,22 @@
 				"displayName": "Get Available PR Hunks (Change Tour)",
 				"modelDescription": "List every changed file and hunk in the pull request that the active Change Tour is bound to. Returns file paths, status, and hunk line ranges with a preview.",
 				"icon": "$(diff)",
+				"canBeReferencedInPrompt": true,
+				"inputSchema": {
+					"type": "object",
+					"properties": {}
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_getDriftReport",
+				"tags": [
+					"change tour"
+				],
+				"toolReferenceName": "tourDriftReport",
+				"displayName": "Get Change Tour Drift Report",
+				"modelDescription": "Deterministic drift + coverage report for the active Change Tour. Returns three lists: hunks in the tour whose patch content no longer matches any current PR hunk (drifted), PR hunks no tour hunk covers by content (missingInTour), and tour hunks whose file is no longer in the PR diff (removedFromPR). Call this FIRST in the update flow - it is the ground truth for what needs to change.",
+				"icon": "$(diff-modified)",
 				"canBeReferencedInPrompt": true,
 				"inputSchema": {
 					"type": "object",

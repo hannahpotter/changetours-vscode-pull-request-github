@@ -5,12 +5,13 @@
 
 import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { computeNewInPrCount, computeOutdatedHunks, findShiftOnlyMatches, indexPrState, type PrState, suggestUpdateCandidateIdx } from './viewerModel';
 import { type CodeTourDocument, type HighlightRange, type HunkReference, serializeCodeTourMarkdown, type TourNode, type TourTextNode } from '../../src/github/codeTourMarkdown';
 import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import  { getHunkSummary, type ParsedDiffLine, parsePatch } from '../common/diffUtils';
-import { addIcon, chevronDownIcon, codeIcon, diffSingleIcon, editIcon, eyeClosedIcon, eyeIcon, gripperIcon, newCollectionIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, trashIcon } from '../components/icon';
+import { addIcon, checkIcon, chevronDownIcon, closeIcon, codeIcon, copilotIcon, diffSingleIcon, editIcon, eyeClosedIcon, eyeIcon, gripperIcon, newCollectionIcon, pinnedIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, syncIcon, terminalIcon, trashIcon, unpinIcon} from '../components/icon';
 
 type InsertKind = 'text' | 'code' | 'group';
 
@@ -84,9 +85,17 @@ interface CodeTourEditorProps {
 	onRequestChangesOpen?: () => void;
 	onError?: (message: string) => void;
 	assistantStatus?: AssistantStatus;
-	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => void;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration', ctx?: { hunkId?: string; groupId?: string }) => void;
 	onCancelAssistant?: () => void;
 	onDismissAssistantError?: () => void;
+	/** PR state snapshot used for outdated-hunk detection. */
+	prState?: PrState;
+	/** Trigger a fresh PR-state fetch (Refresh button in the outdated banner). */
+	onRefreshPrState?: () => void;
+	/** Open a terminal seeded with `claude "Use the change-tour skill to update @<path> …"`. */
+	onUpdateWithClaudeCode?: () => void;
+	/** Open Copilot Chat pre-populated with `@change-tour /update`. */
+	onUpdateWithCopilotChat?: () => void;
 }
 
 const HUNK_MIME_TYPE = 'application/vnd.codetour.hunk+json';
@@ -121,6 +130,47 @@ function localId(): string {
 
 function cloneDoc(doc: CodeTourDocument): EditorDocument {
 	return JSON.parse(JSON.stringify(doc));
+}
+
+/**
+ * Stable, parser-independent fingerprint for a tour node. The Change Tour
+ * parser regenerates `id` on every parse, so we can't compare snapshots by
+ * id. The fingerprint is shaped so it survives a serialize → parse round-trip
+ * and uniquely identifies a node based on its meaningful content:
+ *   - hunk: file + new-side line range + optional rename source
+ *   - text: trimmed prose content (text IS its identity)
+ *   - group: full ancestor path + title + level
+ *
+ * Used by the AI-review diff to compute "node IDs the AI just added" by
+ * walking both the pre-AI snapshot and the current doc and finding nodes
+ * whose fingerprint is present now but wasn't before.
+ */
+function nodeFingerprint(node: EditorNode, parentPath: string): string {
+	switch (node.type) {
+		case 'hunk':
+			return `hunk@${parentPath}|${node.hunk.file}|${node.hunk.startLine}-${node.hunk.endLine}|${node.hunk.previousFile ?? ''}`;
+		case 'text':
+			return `text@${parentPath}|${node.content.trim()}`;
+		case 'group':
+			return `group@${parentPath}|${node.title}|${node.level}`;
+		case 'dropzone':
+		default:
+			return `dropzone@${parentPath}|${node.id}`;
+	}
+}
+
+function collectFingerprints(children: EditorNode[]): Set<string> {
+	const out = new Set<string>();
+	const walk = (nodes: EditorNode[], parentPath: string) => {
+		for (const n of nodes) {
+			out.add(nodeFingerprint(n, parentPath));
+			if (n.type === 'group') {
+				walk(n.children, `${parentPath}/${n.title}`);
+			}
+		}
+	};
+	walk(children, '');
+	return out;
 }
 
 function updateNodeInList(nodes: EditorNode[], id: string, updater: (n: EditorNode) => EditorNode): EditorNode[] {
@@ -243,6 +293,7 @@ function NodeShell({
 	onReorder,
 	onHunkDropAtNode,
 	isEditMode,
+	isAiAdded,
 	children,
 }: {
 	node: EditorNode;
@@ -254,6 +305,8 @@ function NodeShell({
 	onReorder: (draggedId: string, targetId: string, position: DropPosition) => void;
 	onHunkDropAtNode?: (payload: HunkPayload, targetId: string, position: DropPosition) => void;
 	isEditMode: boolean;
+	/** True when the node was added by the AI in the current review session. Adds the highlight class. */
+	isAiAdded?: boolean;
 	children: React.ReactNode;
 }) {
 	const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
@@ -343,7 +396,8 @@ function NodeShell({
 				'tour-node-shell',
 				isDraggable ? 'tour-node-shell-draggable' : '',
 				dropPosition ? `tour-node-shell-drop-${dropPosition}` : '',
-				activeNodeId === node.id ? 'tour-node-active' : ''
+				activeNodeId === node.id ? 'tour-node-active' : '',
+				isAiAdded ? 'tour-node-ai-added' : ''
 			].filter(Boolean).join(' ')}
 			onDragOver={handleDragOver}
 			onDragLeave={handleDragLeave}
@@ -487,19 +541,30 @@ function rangesFromDrag(lines: ParsedDiffLine[], startIdx: number, endIdx: numbe
 }
 
 function HunkBlock({
-	node,
+	node: realNode,
 	doc,
 	onRemove,
 	onOpenDiff,
 	onHighlightsChange,
 	onSummaryChange,
 	onToggleHunkDefaultCollapsed,
+	onTogglePinned,
 	activePR,
 	isEditMode,
 	diffLayout,
 	onRunAssistant,
 	assistantRunning,
 	isDragging,
+	isOutdated,
+	pendingProposed,
+	canAutoUpdate,
+	onStageAutoUpdate,
+	onConfirmAutoUpdate,
+	onDiscardAutoUpdate,
+	autoUpdateCandidates,
+	suggestedAutoUpdateIdx,
+	pickerOpen,
+	onCancelAutoUpdatePick,
 }: {
 	node: EditorHunkNode;
 	doc: EditorDocument;
@@ -508,13 +573,38 @@ function HunkBlock({
 	onHighlightsChange?: (hunkId: string, highlights: HighlightRange[]) => void;
 	onSummaryChange?: (hunkId: string, summary: string) => void;
 	onToggleHunkDefaultCollapsed: (id: string) => void;
+	/** Toggle the hunk's `pinned` flag. Only meaningful when isOutdated is true. */
+	onTogglePinned?: (id: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
 	isEditMode: boolean;
 	diffLayout: 'inline' | 'sideBySide';
-	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => void;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration', ctx?: { hunkId?: string; groupId?: string }) => void;
 	assistantRunning?: boolean;
 	isDragging?: boolean;
+	/** True when this hunk's underlying file has drifted from `baseBlob`. */
+	isOutdated?: boolean;
+	/** When present, render the proposed (staged) hunk instead of the doc's stored hunk. */
+	pendingProposed?: HunkReference;
+	/** True when the per-hunk "Update" button should appear (file is present in the current PR diff). */
+	canAutoUpdate?: boolean;
+	onStageAutoUpdate?: (id: string, candidateIdx?: number, refreshNarration?: boolean) => void;
+	onConfirmAutoUpdate?: (id: string) => void;
+	onDiscardAutoUpdate?: (id: string) => void;
+	/** Candidate current-PR hunks for the file backing this hunk; used by the picker. */
+	autoUpdateCandidates?: Array<{ startLine: number; endLine: number; patch: string }>;
+	/** Index of the candidate the heuristic recommends (old-side range match, new-side overlap tiebreaker). Renders with a "Suggested" badge inside the picker. */
+	suggestedAutoUpdateIdx?: number;
+	/** True when the per-hunk picker for ambiguous auto-update should render inline. */
+	pickerOpen?: boolean;
+	onCancelAutoUpdatePick?: () => void;
 }) {
+	// Render against the proposed hunk when an auto-update is staged. The doc
+	// tree itself stays unchanged until the author hits Confirm; the proposed
+	// patch is purely an overlay until then.
+	const node: EditorHunkNode = pendingProposed
+		? { ...realNode, hunk: pendingProposed }
+		: realNode;
+	const hasPendingUpdate = !!pendingProposed;
 	const { file, startLine, endLine, patch } = node.hunk;
 	const headShaShort = doc.headSha ? doc.headSha.substring(0, 7) : '';
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
@@ -538,6 +628,19 @@ function HunkBlock({
 	const [highlightMode, setHighlightMode] = useState(false);
 	const [dragStart, setDragStart] = useState<number | null>(null);
 	const [dragEnd, setDragEnd] = useState<number | null>(null);
+	// Local toggle for the auto-update picker's "refresh narration" choice.
+	// Persists across re-renders so users don't have to re-check it if they
+	// open/close the picker. Default ON: most updates that warrant patch
+	// replacement also want adjacent prose to reflect the new behavior.
+	const [autoUpdateRefreshNarration, setAutoUpdateRefreshNarration] = useState(true);
+	// Selected candidate index in the auto-update picker dropdown. Seeded
+	// from the heuristic Suggested index (so a quick Enter on Stage takes
+	// the recommendation) and re-syncs whenever the suggestion changes or
+	// the picker is reopened on a different hunk.
+	const [pickerSelectedIdx, setPickerSelectedIdx] = useState(0);
+	useEffect(() => {
+		setPickerSelectedIdx(suggestedAutoUpdateIdx ?? 0);
+	}, [suggestedAutoUpdateIdx, pickerOpen]);
 
 	const committedHighlights = node.hunk.highlights ?? [];
 
@@ -702,6 +805,44 @@ function HunkBlock({
 						{headShaShort && (
 							<span className="tour-hunk-ref" title={doc.headSha}>{headShaShort}</span>
 						)}
+						{hasPendingUpdate && (
+							<span className="tour-hunk-pending-pill" title="A proposed update is staged. Apply with the check button or discard with the close button.">
+								<span className="tour-hunk-badge tour-hunk-badge-draft">
+									{/* allow-any-unicode-next-line */}
+									Auto-updated · pending
+								</span>
+								{isEditMode && onConfirmAutoUpdate && (
+									<button
+										type="button"
+										className="tour-hunk-pending-pill-btn tour-auto-update-confirm"
+										title="Apply this proposed update to the tour and save the file"
+										onClick={() => onConfirmAutoUpdate(realNode.id)}
+									>
+										{checkIcon}
+									</button>
+								)}
+								{isEditMode && onDiscardAutoUpdate && (
+									<button
+										type="button"
+										className="tour-hunk-pending-pill-btn tour-auto-update-discard"
+										title="Discard this proposed update; the tour stays unchanged"
+										onClick={() => onDiscardAutoUpdate(realNode.id)}
+									>
+										{closeIcon}
+									</button>
+								)}
+							</span>
+						)}
+						{!hasPendingUpdate && isOutdated && realNode.hunk.pinned && (
+							<span className="tour-hunk-badge tour-hunk-badge-pinned" title="This hunk's file has drifted from the PR. The author pinned it as history (the tour is not flagged outdated because of this hunk).">
+								History (Pinned)
+							</span>
+						)}
+						{!hasPendingUpdate && isOutdated && !realNode.hunk.pinned && (
+							<span className="tour-hunk-badge tour-hunk-badge-outdated" title="This hunk's file has drifted from the PR since the tour was authored. Click the pin button to keep it as history; click the update button to refresh it.">
+								Outdated
+							</span>
+						)}
 					</div>
 					<div className="tour-hunk-actions">
 						{isEditMode && onRunAssistant && (
@@ -739,6 +880,30 @@ function HunkBlock({
 								{node.hunk.defaultCollapsed ? eyeClosedIcon : eyeIcon}
 							</button>
 						)}
+						{isEditMode && isOutdated && !hasPendingUpdate && onTogglePinned && (
+							<button
+								type="button"
+								className={`tour-action-btn icon-button tour-pin-toggle${realNode.hunk.pinned ? ' active' : ''}`}
+								title={realNode.hunk.pinned
+									? 'Stop keeping this hunk as history (re-enable outdated detection for this hunk)'
+									: "Keep this hunk as history (don't flag the tour as outdated for this hunk)"}
+								aria-pressed={!!realNode.hunk.pinned}
+								onClick={() => onTogglePinned(realNode.id)}
+							>
+								{realNode.hunk.pinned ? unpinIcon : pinnedIcon}
+							</button>
+						)}
+						{isEditMode && canAutoUpdate && !hasPendingUpdate && onStageAutoUpdate && (
+							<button
+								type="button"
+								className="tour-action-btn icon-button tour-auto-update-stage"
+								title="Stage a proposed update to the current PR patch for this file. Review then Confirm to save, or Undo to discard."
+								onClick={() => onStageAutoUpdate(realNode.id)}
+							>
+								{syncIcon}
+							</button>
+						)}
+						{/* The standalone "refresh narration" sparkle is gone - the decision is made inside the picker BEFORE staging (see the autoUpdateRefreshNarration toggle). Keeping the option in the picker means the AI only fires when the author explicitly asks for it, and it fires together with the patch stage instead of being a separate manual step after. */}
 						{onOpenDiff && (
 							<button
 								className="tour-action-btn icon-button"
@@ -797,6 +962,74 @@ function HunkBlock({
 				<div className="tour-hunk-header-row tour-hunk-header-row-diff" title={diffHunkHeaderText}>
 					{diffHunkHeaderText}
 				</div>
+				{/* Ambiguity picker for auto-update: shown when the user clicked the Update button on a hunk whose file has multiple current PR hunks. Each candidate's new-side line range is the click target; the patch text feeds the stage handler. */}
+				{pickerOpen && autoUpdateCandidates && autoUpdateCandidates.length > 0 && onStageAutoUpdate && (
+					<div className="tour-hunk-autoupdate-picker">
+						<span className="tour-hunk-autoupdate-picker-label">
+							{autoUpdateCandidates.length === 1
+								? 'Stage the current PR hunk as the replacement?'
+								: `This file has ${autoUpdateCandidates.length} hunks in the PR. Which should replace this one?`}
+						</span>
+						<div className="tour-hunk-autoupdate-picker-options">
+							{autoUpdateCandidates.length === 1 ? (
+								<button
+									type="button"
+									className={`tour-action-btn${suggestedAutoUpdateIdx === 0 ? ' tour-action-btn-suggested' : ''}`}
+									title={autoUpdateCandidates[0].patch.split('\n').slice(0, 6).join('\n')}
+									onClick={() => onStageAutoUpdate(realNode.id, 0, autoUpdateRefreshNarration)}
+								>
+									Stage L{autoUpdateCandidates[0].startLine}&ndash;{autoUpdateCandidates[0].endLine}
+								</button>
+							) : (
+								<>
+									{/* Dropdown scales to N candidates without spilling the picker row. The Suggested candidate is preselected so a quick Enter on the Stage button takes the heuristic recommendation. */}
+									<select
+										className="tour-hunk-autoupdate-picker-select"
+										value={pickerSelectedIdx}
+										onChange={e => setPickerSelectedIdx(parseInt(e.target.value, 10))}
+										title={autoUpdateCandidates[pickerSelectedIdx]?.patch.split('\n').slice(0, 8).join('\n')}
+									>
+										{autoUpdateCandidates.map((c, idx) => (
+											<option key={idx} value={idx}>
+												L{c.startLine}&ndash;{c.endLine}{suggestedAutoUpdateIdx === idx ? ' (Suggested)' : ''}
+											</option>
+										))}
+									</select>
+									<button
+										type="button"
+										className="tour-action-btn"
+										title="Stage the selected hunk as the replacement"
+										onClick={() => onStageAutoUpdate(realNode.id, pickerSelectedIdx, autoUpdateRefreshNarration)}
+									>
+										Stage
+									</button>
+								</>
+							)}
+							{onCancelAutoUpdatePick && (
+								<button
+									type="button"
+									className="tour-action-btn"
+									title="Close without picking"
+									onClick={onCancelAutoUpdatePick}
+								>
+									Cancel
+								</button>
+							)}
+						</div>
+						{onRunAssistant && (
+							<label className="tour-hunk-autoupdate-picker-narration" title="When checked, the AI assistant rewrites adjacent text nodes to match the new hunk content after staging. Narration changes apply directly to the doc; the patch swap is still staged for Confirm / Discard.">
+								<span className="checkbox-wrapper">
+									<input
+										type="checkbox"
+										checked={autoUpdateRefreshNarration}
+										onChange={e => setAutoUpdateRefreshNarration(e.target.checked)}
+									/>
+								</span>
+								<span>Refresh narration with AI</span>
+							</label>
+						)}
+					</div>
+				)}
 			</div>
 			{!bodyHidden && (
 				lines.length > 0 ? (
@@ -950,6 +1183,17 @@ function GroupBlock({
 	onError,
 	onRunAssistant,
 	assistantRunning,
+	outdatedHunkIds,
+	onTogglePinned,
+	pendingUpdates,
+	autoUpdateAvailableNodeIds,
+	onStageAutoUpdate,
+	onConfirmAutoUpdate,
+	onDiscardAutoUpdate,
+	prStateIndex,
+	pickerOpenFor,
+	onCancelAutoUpdatePick,
+	aiAddedNodeIds,
 }: {
 	node: EditorGroupNode;
 	doc: EditorDocument;
@@ -979,8 +1223,19 @@ function GroupBlock({
 	diffLayout: 'inline' | 'sideBySide';
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
-	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => void;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration', ctx?: { hunkId?: string; groupId?: string }) => void;
 	assistantRunning?: boolean;
+	outdatedHunkIds?: Set<string>;
+	onTogglePinned?: (id: string) => void;
+	pendingUpdates?: Map<string, { proposed: HunkReference; original: HunkReference }>;
+	autoUpdateAvailableNodeIds?: Set<string>;
+	onStageAutoUpdate?: (id: string, candidateIdx?: number, refreshNarration?: boolean) => void;
+	onConfirmAutoUpdate?: (id: string) => void;
+	onDiscardAutoUpdate?: (id: string) => void;
+	prStateIndex?: { hunksByFile: Map<string, Array<{ startLine: number; endLine: number; patch: string }>>; blobsByFile: Map<string, string>; renamedFrom: Map<string, string> };
+	pickerOpenFor?: string;
+	onCancelAutoUpdatePick?: () => void;
+	aiAddedNodeIds?: Set<string>;
 }) {
 	// Seed and re-sync the editor's local collapse state to the section's
 	// `defaultCollapsed` flag, so toggling the eye in the section header also
@@ -1149,6 +1404,17 @@ function GroupBlock({
 								onHighlightsChange={onHighlightsChange}
 								onSummaryChange={onSummaryChange}
 								onRemove={onRemove}
+								outdatedHunkIds={outdatedHunkIds}
+								onTogglePinned={onTogglePinned}
+								pendingUpdates={pendingUpdates}
+								autoUpdateAvailableNodeIds={autoUpdateAvailableNodeIds}
+								onStageAutoUpdate={onStageAutoUpdate}
+								onConfirmAutoUpdate={onConfirmAutoUpdate}
+								onDiscardAutoUpdate={onDiscardAutoUpdate}
+								prStateIndex={prStateIndex}
+								pickerOpenFor={pickerOpenFor}
+								onCancelAutoUpdatePick={onCancelAutoUpdatePick}
+								aiAddedNodeIds={aiAddedNodeIds}
 								onOpenDiff={onOpenDiff}
 								activePR={activePR}
 								isEditMode={isEditMode}
@@ -1207,6 +1473,17 @@ function NodeRenderer({
 	onError,
 	onRunAssistant,
 	assistantRunning,
+	outdatedHunkIds,
+	onTogglePinned,
+	pendingUpdates,
+	autoUpdateAvailableNodeIds,
+	onStageAutoUpdate,
+	onConfirmAutoUpdate,
+	onDiscardAutoUpdate,
+	prStateIndex,
+	pickerOpenFor,
+	onCancelAutoUpdatePick,
+	aiAddedNodeIds,
 }: {
 	node: EditorNode;
 	doc: EditorDocument;
@@ -1236,8 +1513,26 @@ function NodeRenderer({
 	diffLayout: 'inline' | 'sideBySide';
 	onError?: (message: string) => void;
 	activePR?: { number: number; owner: string; repo: string };
-	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk', ctx?: { hunkId?: string; groupId?: string }) => void;
+	onRunAssistant?: (mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration', ctx?: { hunkId?: string; groupId?: string }) => void;
 	assistantRunning?: boolean;
+	/** Node IDs whose hunk has drifted from `baseBlob` since author time. */
+	outdatedHunkIds?: Set<string>;
+	/** Toggle a hunk's `pinned` flag (silences outdated detection for it). */
+	onTogglePinned?: (id: string) => void;
+	/** Staged auto-updates (nodeId → proposed/original snapshot). */
+	pendingUpdates?: Map<string, { proposed: HunkReference; original: HunkReference }>;
+	/** Hunks where a one-click "Update" is unambiguous (single current PR hunk for the file). */
+	autoUpdateAvailableNodeIds?: Set<string>;
+	onStageAutoUpdate?: (id: string, candidateIdx?: number, refreshNarration?: boolean) => void;
+	onConfirmAutoUpdate?: (id: string) => void;
+	onDiscardAutoUpdate?: (id: string) => void;
+	/** Indexed PR state (file → list of candidate hunks). Used by the per-hunk picker. */
+	prStateIndex?: { hunksByFile: Map<string, Array<{ startLine: number; endLine: number; patch: string }>>; blobsByFile: Map<string, string>; renamedFrom: Map<string, string> };
+	/** Node ID whose ambiguous-pick picker is currently open. */
+	pickerOpenFor?: string;
+	onCancelAutoUpdatePick?: () => void;
+	/** Set of node IDs added by the AI in the current review session - drives the per-node highlight. */
+	aiAddedNodeIds?: Set<string>;
 }) {
 	switch (node.type) {
 		case 'group':
@@ -1252,6 +1547,7 @@ function NodeRenderer({
 					onReorder={onReorder}
 					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
+					isAiAdded={aiAddedNodeIds?.has(node.id)}
 				>
 					<GroupBlock
 						node={node}
@@ -1283,6 +1579,17 @@ function NodeRenderer({
 						onError={onError}
 						onRunAssistant={onRunAssistant}
 						assistantRunning={assistantRunning}
+						outdatedHunkIds={outdatedHunkIds}
+						onTogglePinned={onTogglePinned}
+						pendingUpdates={pendingUpdates}
+						autoUpdateAvailableNodeIds={autoUpdateAvailableNodeIds}
+						onStageAutoUpdate={onStageAutoUpdate}
+						onConfirmAutoUpdate={onConfirmAutoUpdate}
+						onDiscardAutoUpdate={onDiscardAutoUpdate}
+					prStateIndex={prStateIndex}
+						pickerOpenFor={pickerOpenFor}
+						onCancelAutoUpdatePick={onCancelAutoUpdatePick}
+						aiAddedNodeIds={aiAddedNodeIds}
 					/>
 				</NodeShell>
 			);
@@ -1298,6 +1605,7 @@ function NodeRenderer({
 					onReorder={onReorder}
 					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
+					isAiAdded={aiAddedNodeIds?.has(node.id)}
 				>
 					<TextBlock node={node as TourTextNode} onChange={onTextChange} onRemove={onRemove} isEditMode={isEditMode} />
 				</NodeShell>
@@ -1314,8 +1622,18 @@ function NodeRenderer({
 					onReorder={onReorder}
 					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
+					isAiAdded={aiAddedNodeIds?.has(node.id)}
 				>
-					<HunkBlock node={node as EditorHunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} onSummaryChange={onSummaryChange} onToggleHunkDefaultCollapsed={onToggleHunkDefaultCollapsed} activePR={activePR} isEditMode={isEditMode} diffLayout={diffLayout} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} isDragging={!!dragState || !!isExternalHunkDragActive} />
+					{(() => {
+						const hunkNode = node as EditorHunkNode;
+						const candidates = prStateIndex?.hunksByFile.get(hunkNode.hunk.file);
+						const suggestedIdx = candidates && candidates.length > 1
+							? suggestUpdateCandidateIdx(hunkNode.hunk, candidates)
+							: undefined;
+						return (
+							<HunkBlock node={hunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} onSummaryChange={onSummaryChange} onToggleHunkDefaultCollapsed={onToggleHunkDefaultCollapsed} onTogglePinned={onTogglePinned} isOutdated={outdatedHunkIds?.has(node.id)} pendingProposed={pendingUpdates?.get(node.id)?.proposed} canAutoUpdate={autoUpdateAvailableNodeIds?.has(node.id)} onStageAutoUpdate={onStageAutoUpdate} onConfirmAutoUpdate={onConfirmAutoUpdate} onDiscardAutoUpdate={onDiscardAutoUpdate} autoUpdateCandidates={candidates} suggestedAutoUpdateIdx={suggestedIdx} pickerOpen={pickerOpenFor === node.id} onCancelAutoUpdatePick={onCancelAutoUpdatePick} activePR={activePR} isEditMode={isEditMode} diffLayout={diffLayout} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} isDragging={!!dragState || !!isExternalHunkDragActive} />
+						);
+					})()}
 				</NodeShell>
 			);
 		case 'dropzone':
@@ -1331,6 +1649,7 @@ function NodeRenderer({
 					onReorder={onReorder}
 					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
+					isAiAdded={aiAddedNodeIds?.has(node.id)}
 				>
 					<DropZoneBlock node={node} doc={doc} onDrop={onDropZoneDrop} onRemove={onRemove} onError={onError} />
 				</NodeShell>
@@ -1435,7 +1754,7 @@ function InsertGap({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, onRequestChangesOpen, activePR, isEditMode = true, diffLayout = 'inline', scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError, assistantStatus, onRunAssistant, onCancelAssistant, onDismissAssistantError }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, onRequestChangesOpen, activePR, isEditMode = true, diffLayout = 'inline', scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError, assistantStatus, onRunAssistant, onCancelAssistant, onDismissAssistantError, prState, onRefreshPrState, onUpdateWithClaudeCode, onUpdateWithCopilotChat }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [titleDraft, setTitleDraft] = useState(initialDoc.title);
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
@@ -1731,6 +2050,447 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		doc.prRepo?.toLowerCase() !== activePR.repo?.toLowerCase()
 	);
 
+	// Outdated-hunk detection. Same machinery as the viewer; the editor adds a
+	// pin button (toggles hunk.pinned) and an auto-update path that re-fetches
+	// the current patch + baseBlob from `prState`.
+	const prStateIndex = useMemo(() => indexPrState(prState), [prState]);
+
+	// Silent line-number refresh for hunks whose content is unchanged but whose
+	// position shifted due to unrelated edits elsewhere in the file. Outdated
+	// detection treats these as fresh; the stored startLine/endLine/patch are
+	// still stale though, which would break line-aware features (open-in-file,
+	// jump-to-hunk, etc.). We rewrite them in place via the normal applyLocal
+	// pipeline so the saved file stays accurate. The user sees the file dirty
+	// after opening the tour - that's the correct signal: the on-disk content
+	// did need a (trivial) update.
+	useEffect(() => {
+		if (!isEditMode) {
+			return;
+		}
+		const updates = findShiftOnlyMatches(doc as unknown as CodeTourDocument, prState, prStateIndex);
+		if (updates.length === 0) {
+			return;
+		}
+		const updateMap = new Map(updates.map(u => [u.nodeId, u] as const));
+		applyLocal(prev => {
+			const refresh = (nodes: EditorNode[]): EditorNode[] => nodes.map(n => {
+				if (n.type === 'hunk') {
+					const u = updateMap.get(n.id);
+					if (u) {
+						return {
+							...n,
+							hunk: {
+								...n.hunk,
+								startLine: u.newStartLine,
+								endLine: u.newEndLine,
+								patch: u.newPatch,
+								baseBlob: u.newBaseBlob,
+							},
+						};
+					}
+				}
+				if (n.type === 'group') {
+					return { ...n, children: refresh(n.children) };
+				}
+				return n;
+			});
+			return { ...prev, children: refresh(prev.children) };
+		});
+	}, [isEditMode, doc, prState, prStateIndex]);
+
+	const outdatedHunkIds = useMemo(() => computeOutdatedHunks(doc as unknown as CodeTourDocument, prState, prStateIndex), [doc, prState, prStateIndex]);
+	const { count: newInPrCount } = useMemo(() => computeNewInPrCount(doc as unknown as CodeTourDocument, prState, prStateIndex), [doc, prState, prStateIndex]);
+	const outdatedUnpinnedCount = useMemo(() => {
+		let n = 0;
+		const walk = (nodes: EditorNode[]) => {
+			for (const node of nodes) {
+				if (node.type === 'hunk' && outdatedHunkIds.has(node.id) && !node.hunk.pinned) {
+					n++;
+				} else if (node.type === 'group') {
+					walk(node.children);
+				}
+			}
+		};
+		walk(doc.children);
+		return n;
+	}, [doc, outdatedHunkIds]);
+	const isTourOutdated = outdatedUnpinnedCount > 0;
+
+	// Toggle a hunk's `pinned` flag in the in-memory editor doc. The standard
+	// applyLocal pipeline serializes the change and triggers `onDocumentChange`,
+	// which writes through to disk on the next host-side save.
+	const handleToggleHunkPinned = useCallback((nodeId: string) => {
+		applyLocal(prev => {
+			const flip = (nodes: EditorNode[]): EditorNode[] => nodes.map(n => {
+				if (n.type === 'hunk' && n.id === nodeId) {
+					return { ...n, hunk: { ...n.hunk, pinned: n.hunk.pinned ? undefined : true } };
+				}
+				if (n.type === 'group') {
+					return { ...n, children: flip(n.children) };
+				}
+				return n;
+			});
+			return { ...prev, children: flip(prev.children) };
+		});
+	}, []);
+
+	// Staged auto-updates. Each entry holds the proposed replacement hunk plus
+	// the original (in case the user undoes). Pending entries are *not* in the
+	// editor's doc tree - the proposed patch is overlaid in the renderer so
+	// the file on disk stays untouched until the user clicks Confirm (which
+	// applies to the doc and triggers the normal save round-trip) or Undo.
+	const [pendingUpdates, setPendingUpdates] = useState<Map<string, { proposed: HunkReference; original: HunkReference }>>(new Map());
+
+	// Node IDs where the per-hunk "Update" button should appear: hunk is
+	// outdated, not already pinned, not already staged for update, AND its
+	// file is present in the current PR diff (at least one candidate hunk to
+	// pull a replacement from). When the file has multiple candidate hunks,
+	// the picker UI in HunkBlock lets the author choose which one is the
+	// replacement; clicking the button on an ambiguous file opens that picker
+	// instead of immediately staging.
+	const autoUpdateAvailableNodeIds = useMemo(() => {
+		const out = new Set<string>();
+		const walk = (nodes: EditorNode[]) => {
+			for (const node of nodes) {
+				if (node.type === 'hunk' && outdatedHunkIds.has(node.id) && !node.hunk.pinned && !pendingUpdates.has(node.id)) {
+					const hunks = prStateIndex.hunksByFile.get(node.hunk.file);
+					if (hunks && hunks.length >= 1) {
+						out.add(node.id);
+					}
+				} else if (node.type === 'group') {
+					walk(node.children);
+				}
+			}
+		};
+		walk(doc.children);
+		return out;
+	}, [doc, outdatedHunkIds, pendingUpdates, prStateIndex]);
+
+	// "Unambiguous" subset of the above - files with exactly one candidate
+	// hunk. Drives the banner-level "Update all" bulk action; ambiguous files
+	// are left for the per-hunk picker.
+	const autoUpdateUnambiguousNodeIds = useMemo(() => {
+		const out = new Set<string>();
+		const walk = (nodes: EditorNode[]) => {
+			for (const node of nodes) {
+				if (node.type === 'hunk' && autoUpdateAvailableNodeIds.has(node.id)) {
+					const hunks = prStateIndex.hunksByFile.get(node.hunk.file)!;
+					if (hunks.length === 1) {
+						out.add(node.id);
+					}
+				} else if (node.type === 'group') {
+					walk(node.children);
+				}
+			}
+		};
+		walk(doc.children);
+		return out;
+	}, [doc, autoUpdateAvailableNodeIds, prStateIndex]);
+
+	// Per-hunk picker visibility: which hunk's "choose which PR hunk to apply"
+	// menu is currently open. Cleared on stage / cancel / doc replacement.
+	const [pickerOpenFor, setPickerOpenFor] = useState<string | undefined>(undefined);
+
+	// Stage an auto-update for a single hunk.
+	// - With `candidateIdx` undefined: open the per-hunk picker so the author
+	//   chooses a candidate and decides whether to refresh adjacent narration
+	//   with AI. The picker shows even for single-candidate files so the
+	//   refresh-narration toggle is always reachable.
+	// - With `candidateIdx` set: stage that specific candidate directly. Used
+	//   by the picker once the author has chosen.
+	// - With `refreshNarration: true`: after staging, dispatch the assistant in
+	//   `refreshHunkNarration` mode so the prose around the hunk updates to
+	//   match the new patch content. Narration changes apply directly (the LLM
+	//   tools mutate the doc); only the patch swap is staged in pendingUpdates.
+	const handleStageAutoUpdate = useCallback((nodeId: string, candidateIdx?: number, refreshNarration?: boolean) => {
+		const findHunk = (nodes: EditorNode[]): EditorHunkNode | undefined => {
+			for (const n of nodes) {
+				if (n.type === 'hunk' && n.id === nodeId) return n;
+				if (n.type === 'group') {
+					const found = findHunk(n.children);
+					if (found) return found;
+				}
+			}
+			return undefined;
+		};
+		const node = findHunk(doc.children);
+		if (!node) return;
+		const candidates = prStateIndex.hunksByFile.get(node.hunk.file);
+		if (!candidates || candidates.length === 0) return;
+		if (candidateIdx === undefined) {
+			setPickerOpenFor(nodeId);
+			return;
+		}
+		const chosen = candidates[candidateIdx];
+		const proposed: HunkReference = {
+			...node.hunk,
+			startLine: chosen.startLine,
+			endLine: chosen.endLine,
+			patch: chosen.patch,
+			baseBlob: prStateIndex.blobsByFile.get(node.hunk.file) ?? node.hunk.baseBlob,
+		};
+		setPendingUpdates(prev => {
+			const next = new Map(prev);
+			next.set(nodeId, { proposed, original: node.hunk });
+			return next;
+		});
+		setPickerOpenFor(undefined);
+		if (refreshNarration && onRunAssistant) {
+			onRunAssistant('refreshHunkNarration', { hunkId: nodeId });
+		}
+	}, [doc, prStateIndex, onRunAssistant]);
+
+	const handleCancelAutoUpdatePick = useCallback(() => setPickerOpenFor(undefined), []);
+
+	// Confirm one pending update: replace the doc's hunk with the proposed
+	// version and drop the pending entry. The applyLocal pipeline handles
+	// the disk save downstream.
+	const handleConfirmAutoUpdate = useCallback((nodeId: string) => {
+		const entry = pendingUpdates.get(nodeId);
+		if (!entry) return;
+		applyLocal(prev => {
+			const replace = (nodes: EditorNode[]): EditorNode[] => nodes.map(n => {
+				if (n.type === 'hunk' && n.id === nodeId) {
+					return { ...n, hunk: entry.proposed };
+				}
+				if (n.type === 'group') {
+					return { ...n, children: replace(n.children) };
+				}
+				return n;
+			});
+			return { ...prev, children: replace(prev.children) };
+		});
+		setPendingUpdates(prev => {
+			const next = new Map(prev);
+			next.delete(nodeId);
+			return next;
+		});
+	}, [pendingUpdates]);
+
+	// Discard one pending update: drop the entry without touching the doc.
+	const handleDiscardAutoUpdate = useCallback((nodeId: string) => {
+		setPendingUpdates(prev => {
+			const next = new Map(prev);
+			next.delete(nodeId);
+			return next;
+		});
+	}, []);
+
+	// Confirm every pending update in one applyLocal pass + one save.
+	const handleConfirmAllUpdates = useCallback(() => {
+		if (pendingUpdates.size === 0) return;
+		applyLocal(prev => {
+			const replace = (nodes: EditorNode[]): EditorNode[] => nodes.map(n => {
+				if (n.type === 'hunk') {
+					const entry = pendingUpdates.get(n.id);
+					if (entry) {
+						return { ...n, hunk: entry.proposed };
+					}
+				}
+				if (n.type === 'group') {
+					return { ...n, children: replace(n.children) };
+				}
+				return n;
+			});
+			return { ...prev, children: replace(prev.children) };
+		});
+		setPendingUpdates(new Map());
+	}, [pendingUpdates]);
+
+	const handleDiscardAllUpdates = useCallback(() => setPendingUpdates(new Map()), []);
+
+	// Ordered list of pending-update node IDs in document order. Drives the
+	// banner's "Show next pending" navigation and lets the cycle move through
+	// updates in a predictable, top-to-bottom order regardless of the order
+	// the user staged them.
+	const pendingNodeIdsInDocOrder = useMemo(() => {
+		if (pendingUpdates.size === 0) {
+			return [] as string[];
+		}
+		const ids: string[] = [];
+		const walk = (nodes: EditorNode[]) => {
+			for (const node of nodes) {
+				if (node.type === 'hunk' && pendingUpdates.has(node.id)) {
+					ids.push(node.id);
+				} else if (node.type === 'group') {
+					walk(node.children);
+				}
+			}
+		};
+		walk(doc.children);
+		return ids;
+	}, [doc, pendingUpdates]);
+
+	// Cycle pointer for the "Show next pending" button. Resets when the set of
+	// pending IDs changes (e.g. after a Confirm all or a stage).
+	const pendingNavIdxRef = useRef(0);
+	const [pendingNavLabelIdx, setPendingNavLabelIdx] = useState(0);
+	useEffect(() => {
+		pendingNavIdxRef.current = 0;
+		setPendingNavLabelIdx(0);
+	}, [pendingUpdates]);
+
+	const handleShowNextPendingUpdate = useCallback(() => {
+		if (pendingNodeIdsInDocOrder.length === 0) {
+			return;
+		}
+		const idx = pendingNavIdxRef.current % pendingNodeIdsInDocOrder.length;
+		const targetId = pendingNodeIdsInDocOrder[idx];
+		pendingNavIdxRef.current = (idx + 1) % pendingNodeIdsInDocOrder.length;
+		setPendingNavLabelIdx(pendingNavIdxRef.current);
+		const el = document.getElementById(`node-${targetId}`);
+		if (el) {
+			el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el.classList.add('tour-node-flash');
+			setTimeout(() => el.classList.remove('tour-node-flash'), 1500);
+		}
+	}, [pendingNodeIdsInDocOrder]);
+
+	// Bulk stage every unambiguously updatable hunk in one shot. Skips hunks
+	// that are pinned, already pending, or whose file has multiple current PR
+	// hunks (ambiguous).
+	// Stage every unambiguous auto-update in one shot. `refreshNarration`
+	// (when true) also dispatches the assistant in `refreshHunkNarration` mode
+	// for each newly-staged hunk so the surrounding prose updates to match.
+	// Returns the list of hunk IDs that were just staged so callers can chain
+	// further AI work (e.g. agentic Update with AI).
+	const handleUpdateAllUnambiguous = useCallback((opts?: { refreshNarration?: boolean }): string[] => {
+		if (autoUpdateUnambiguousNodeIds.size === 0) return [];
+		const next = new Map(pendingUpdates);
+		const newlyStaged: string[] = [];
+		const walk = (nodes: EditorNode[]) => {
+			for (const node of nodes) {
+				if (node.type === 'hunk' && autoUpdateUnambiguousNodeIds.has(node.id)) {
+					const hunks = prStateIndex.hunksByFile.get(node.hunk.file)!;
+					next.set(node.id, {
+						proposed: {
+							...node.hunk,
+							startLine: hunks[0].startLine,
+							endLine: hunks[0].endLine,
+							patch: hunks[0].patch,
+							baseBlob: prStateIndex.blobsByFile.get(node.hunk.file) ?? node.hunk.baseBlob,
+						},
+						original: node.hunk,
+					});
+					newlyStaged.push(node.id);
+				} else if (node.type === 'group') {
+					walk(node.children);
+				}
+			}
+		};
+		walk(doc.children);
+		setPendingUpdates(next);
+		if (opts?.refreshNarration && onRunAssistant) {
+			for (const id of newlyStaged) {
+				onRunAssistant('refreshHunkNarration', { hunkId: id });
+			}
+		}
+		return newlyStaged;
+	}, [autoUpdateUnambiguousNodeIds, doc, pendingUpdates, prStateIndex, onRunAssistant]);
+
+	// Top-level "Update with AI" entry point. Stages every unambiguous update
+	// (the user then sees the same Pending pills they would after a manual
+	// per-hunk pick) and *also* runs the agentic `updateTour` assistant for
+	// the ambiguous cases + narration. The two phases work together: the
+	// staged pending pills are visible while the LLM works on the rest, so
+	// the user can review and confirm the patch swaps even before the AI
+	// finishes its narration pass.
+	const handleUpdateWithAI = useCallback(() => {
+		if (!onRunAssistant) return;
+		handleUpdateAllUnambiguous({ refreshNarration: true });
+		onRunAssistant('updateTour');
+	}, [handleUpdateAllUnambiguous, onRunAssistant]);
+
+	// AI review session: when the assistant runs (any mode), snapshot the
+	// pre-AI doc and surface the diff so the user can see *what* the AI added
+	// and revert if unhappy. Patch swaps the user staged manually keep going
+	// through pendingUpdates; this catches the other LLM mutations (text node
+	// additions, hunk insertions for ambiguous files, removals, etc).
+	const [aiSessionSnapshot, setAiSessionSnapshot] = useState<EditorDocument | undefined>(undefined);
+	const previousAssistantRunningRef = useRef(false);
+	useEffect(() => {
+		const isRunning = !!assistantStatus?.running;
+		if (isRunning && !previousAssistantRunningRef.current) {
+			// Transition: idle → running. Snapshot the doc as it is right now.
+			// If the user has staged pending updates, those are NOT in the
+			// snapshot (the doc's hunks still show original patches); confirming
+			// them later goes through the usual applyLocal pipeline. The AI's
+			// own mutations (text, new hunks, etc.) are what we're tracking.
+			setAiSessionSnapshot(prev => prev ?? cloneDoc(doc as unknown as CodeTourDocument));
+		}
+		previousAssistantRunningRef.current = isRunning;
+	}, [assistantStatus?.running, doc]);
+
+	// Live diff of pre-AI snapshot vs current doc → IDs of newly-introduced
+	// nodes. Recomputes on every doc edit while the session is open, so the
+	// user sees nodes light up the moment the assistant calls a write tool.
+	const aiAddedNodeIds = useMemo(() => {
+		if (!aiSessionSnapshot) {
+			return new Set<string>();
+		}
+		const before = collectFingerprints(aiSessionSnapshot.children);
+		const added = new Set<string>();
+		const walk = (nodes: EditorNode[], parentPath: string) => {
+			for (const n of nodes) {
+				if (n.type !== 'dropzone') {
+					const fp = nodeFingerprint(n, parentPath);
+					if (!before.has(fp)) {
+						added.add(n.id);
+					}
+				}
+				if (n.type === 'group') {
+					walk(n.children, `${parentPath}/${n.title}`);
+				}
+			}
+		};
+		walk(doc.children, '');
+		return added;
+	}, [aiSessionSnapshot, doc]);
+
+	const handleAcceptAiChanges = useCallback(() => {
+		setAiSessionSnapshot(undefined);
+	}, []);
+
+	const handleRevertAiChanges = useCallback(() => {
+		if (!aiSessionSnapshot) return;
+		applyLocal(() => cloneDoc(aiSessionSnapshot as unknown as CodeTourDocument));
+		setAiSessionSnapshot(undefined);
+		setPendingUpdates(new Map());
+		setPickerOpenFor(undefined);
+	}, [aiSessionSnapshot]);
+
+	const aiAddedNodeIdsInDocOrder = useMemo(() => {
+		if (aiAddedNodeIds.size === 0) return [] as string[];
+		const ids: string[] = [];
+		const walk = (nodes: EditorNode[]) => {
+			for (const n of nodes) {
+				if (aiAddedNodeIds.has(n.id)) ids.push(n.id);
+				if (n.type === 'group') walk(n.children);
+			}
+		};
+		walk(doc.children);
+		return ids;
+	}, [aiAddedNodeIds, doc]);
+
+	// Counter for the "Next (k/N)" button label. State (not a ref) so the
+	// label re-renders when the user advances; reset whenever the session
+	// flips (start / accept / revert).
+	const [aiNavIdx, setAiNavIdx] = useState(0);
+	useEffect(() => {
+		setAiNavIdx(0);
+	}, [aiSessionSnapshot]);
+	const handleShowNextAiChange = useCallback(() => {
+		if (aiAddedNodeIdsInDocOrder.length === 0) return;
+		const target = aiAddedNodeIdsInDocOrder[aiNavIdx % aiAddedNodeIdsInDocOrder.length];
+		setAiNavIdx(prev => (prev + 1) % aiAddedNodeIdsInDocOrder.length);
+		const el = document.getElementById(`node-${target}`);
+		if (el) {
+			el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el.classList.add('tour-node-flash');
+			setTimeout(() => el.classList.remove('tour-node-flash'), 1500);
+		}
+	}, [aiAddedNodeIdsInDocOrder, aiNavIdx]);
+
 	// When the extension host sends an updated document (undo/redo), accept it
 	// - unless we just pushed a change ourselves.
 	useEffect(() => {
@@ -1750,6 +2510,13 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			pendingDocumentSyncTimerRef.current = undefined;
 		}
 		setDoc(cloneDoc(initialDoc));
+		// Pending auto-updates and any open picker are in-memory drafts against
+		// the editor's local doc state. When the host pushes a fresh doc
+		// (undo/redo, external edit), the drafts no longer make sense against
+		// the new tree - drop them to keep the proposed-vs-original anchor
+		// consistent.
+		setPendingUpdates(new Map());
+		setPickerOpenFor(undefined);
 	}, [initialDoc]);
 
 	useEffect(() => {
@@ -2337,6 +3104,115 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					)}
 				</div>
 			)}
+			{aiSessionSnapshot && (
+				<div className="tour-pr-warning tour-ai-review-banner">
+					<span>
+						{assistantStatus?.running
+							? (aiAddedNodeIds.size === 0
+								? 'AI is updating the tour…'
+								: <>AI is updating the tour - <strong>{aiAddedNodeIds.size} new node{aiAddedNodeIds.size === 1 ? '' : 's'}</strong> so far. They are highlighted below.</>)
+							: (aiAddedNodeIds.size === 0
+								? 'AI finished without adding new nodes. Review and Accept or Revert.'
+								: <>AI made changes - <strong>{aiAddedNodeIds.size} new node{aiAddedNodeIds.size === 1 ? '' : 's'}</strong> highlighted below.</>)
+						}
+					</span>
+					<div className="tour-pr-warning-actions">
+						{aiAddedNodeIds.size > 0 && (
+							<button
+								className="tour-action-btn"
+								onClick={handleShowNextAiChange}
+								title="Scroll to the next AI-added node"
+							>
+								Next ({(aiNavIdx % Math.max(1, aiAddedNodeIdsInDocOrder.length)) + 1}/{aiAddedNodeIdsInDocOrder.length})
+							</button>
+						)}
+						<button
+							className="tour-action-btn"
+							onClick={handleAcceptAiChanges}
+							title="Keep all AI changes; dismiss the highlight and review banner."
+							disabled={!!assistantStatus?.running}
+						>
+							Accept
+						</button>
+						<button
+							className="tour-action-btn"
+							onClick={handleRevertAiChanges}
+							title="Roll the doc back to the state it was in before the AI started. Any pending patch updates are dropped too."
+							disabled={!!assistantStatus?.running}
+						>
+							Revert all
+						</button>
+					</div>
+				</div>
+			)}
+			{(isTourOutdated || newInPrCount > 0 || pendingUpdates.size > 0) && (
+				<div className="tour-pr-warning tour-outdated-warning">
+					<span>
+						{isTourOutdated && (
+							<>This Change Tour is outdated. <strong>{outdatedUnpinnedCount} hunk{outdatedUnpinnedCount === 1 ? '' : 's'}</strong> drifted from the pull request.{(newInPrCount > 0 || pendingUpdates.size > 0) ? ' ' : ''}</>
+						)}
+						{newInPrCount > 0 && (
+							<>The PR has <strong>{newInPrCount} new hunk{newInPrCount === 1 ? '' : 's'}</strong> not covered by this tour.{pendingUpdates.size > 0 ? ' ' : ''}</>
+						)}
+						{pendingUpdates.size > 0 && (
+							<><strong>{pendingUpdates.size} pending update{pendingUpdates.size === 1 ? '' : 's'}</strong> ready to confirm.</>
+						)}
+					</span>
+					<div className="tour-pr-warning-actions">
+						{pendingUpdates.size > 0 && (
+							<>
+								<button className="tour-action-btn" onClick={handleConfirmAllUpdates} title="Apply all staged updates and save the file">
+									Confirm all
+								</button>
+								<button className="tour-action-btn" onClick={handleDiscardAllUpdates} title="Drop all staged updates (the doc is not modified)">
+									Discard all
+								</button>
+							</>
+						)}
+						{autoUpdateUnambiguousNodeIds.size > 0 && (
+							<button className="tour-action-btn" onClick={() => handleUpdateAllUnambiguous()} title="Stage proposed updates for every drifted hunk whose file has exactly one current PR hunk. Files with multiple hunks need the per-hunk picker. Narration is not refreshed - use Update with AI for that.">
+								Update {autoUpdateUnambiguousNodeIds.size === outdatedUnpinnedCount ? 'all' : autoUpdateUnambiguousNodeIds.size}
+							</button>
+						)}
+						{isTourOutdated && onRunAssistant && (
+							<button
+								className="tour-banner-assistant-button"
+								disabled={!!assistantStatus?.running}
+								onClick={handleUpdateWithAI}
+								title="Update with AI - stage every unambiguous patch swap (review them in the Pending pills) and run the assistant to refresh narration and handle ambiguous hunks. Patch swaps stay pending until you click the check button; narration applies directly."
+								aria-label="Update with AI"
+							>
+								{sparkleIcon}
+							</button>
+						)}
+						{isTourOutdated && onUpdateWithClaudeCode && (
+							<button
+								className="tour-banner-assistant-button"
+								onClick={onUpdateWithClaudeCode}
+								title="Update with Claude CLI - open a terminal seeded with an update-this-tour prompt. The change-tour skill is installed at .claude/skills/change-tour/ if it isn't already."
+								aria-label="Update with Claude CLI"
+							>
+								{terminalIcon}
+							</button>
+						)}
+						{isTourOutdated && onUpdateWithCopilotChat && (
+							<button
+								className="tour-banner-assistant-button"
+								onClick={onUpdateWithCopilotChat}
+								title="Update with @change-tour - open Copilot Chat with `@change-tour /update` pre-loaded so you can review and submit the update request."
+								aria-label="Update with Copilot Chat"
+							>
+								{copilotIcon}
+							</button>
+						)}
+						{onRefreshPrState && (
+							<button className="tour-action-btn" onClick={onRefreshPrState} title="Re-fetch the PR's current state">
+								Refresh
+							</button>
+						)}
+					</div>
+				</div>
+			)}
 			{isEditMode ? (
 				<input
 					className="tour-title-input"
@@ -2401,6 +3277,17 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							onError={onError}
 							onRunAssistant={onRunAssistant}
 							assistantRunning={!!assistantStatus?.running}
+							outdatedHunkIds={outdatedHunkIds}
+							onTogglePinned={handleToggleHunkPinned}
+							pendingUpdates={pendingUpdates}
+							autoUpdateAvailableNodeIds={autoUpdateAvailableNodeIds}
+							onStageAutoUpdate={handleStageAutoUpdate}
+							onConfirmAutoUpdate={handleConfirmAutoUpdate}
+							onDiscardAutoUpdate={handleDiscardAutoUpdate}
+							prStateIndex={prStateIndex}
+							pickerOpenFor={pickerOpenFor}
+							onCancelAutoUpdatePick={handleCancelAutoUpdatePick}
+							aiAddedNodeIds={aiAddedNodeIds}
 						/>
 					</React.Fragment>
 				))}

@@ -57,6 +57,14 @@ export interface HunkReference {
 	 * the underlying code has drifted from what this hunk shows.
 	 */
 	baseBlob?: string;
+	/**
+	 * When true, the outdated-hunk detector silences this hunk: even if the
+	 * underlying file has drifted from `baseBlob`, the hunk does not contribute
+	 * to the tour-level "outdated" banner. The badge still renders as
+	 * "History (Pinned)" so readers can tell the stale state is intentional.
+	 * Set via the editor's pin button; preserved verbatim by the LLM tools.
+	 */
+	pinned?: boolean;
 }
 
 const SUMMARY_PREVIEW_MAX_LEN = 60;
@@ -219,6 +227,7 @@ interface HunkAttributes {
 	highlights?: string;
 	summary?: string;
 	baseBlob?: string;
+	pinned?: string;
 }
 
 /**
@@ -299,6 +308,7 @@ export function buildHunkBlock(hunk: HunkReference, level?: number): string {
 		attrs.push(`summary=${serializeHunkAttributeValue(hunk.summary)}`);
 	}
 	if (hunk.baseBlob) attrs.push(`baseBlob=${serializeHunkAttributeValue(hunk.baseBlob)}`);
+	if (hunk.pinned) attrs.push(`pinned=true`);
 	lines.push(`<!-- changetour:hunk ${attrs.join(' ')} -->`);
 	lines.push('');
 
@@ -428,6 +438,7 @@ function tryParseHunkBlock(
 		defaultCollapsed: isOpen ? undefined : true,
 		summary: attrs.summary && attrs.summary.trim().length > 0 ? attrs.summary : undefined,
 		baseBlob: attrs.baseBlob,
+		pinned: attrs.pinned === 'true' ? true : undefined,
 	};
 	const level = attrs.level ? parseInt(attrs.level, 10) : undefined;
 	return { hunk, level: Number.isFinite(level) ? level : undefined, nextIdx: i };

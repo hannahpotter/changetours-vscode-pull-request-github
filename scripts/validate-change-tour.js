@@ -40,12 +40,18 @@ const { execFileSync } = require('child_process');
 const REQUIRED_FRONTMATTER_KEYS = ['schemaVersion', 'isPR', 'prNumber', 'prOwner', 'prRepo', 'baseSha', 'headSha'];
 const RECOMMENDED_FRONTMATTER_KEYS = ['baseRef'];
 
+// Permissive line-recognition regexes (allow leading whitespace so we can
+// reliably *find* a hunk block even when the author indented it by accident).
+// Indentation itself is reported as a separate error below - the in-extension
+// parser tolerates leading whitespace but GitHub's renderer treats 4+ leading
+// spaces as a code block, which silently breaks the entire <details> visual.
 const DETAILS_OPEN_RE = /^\s*<details(\s+open)?\s*>\s*$/;
 const DETAILS_CLOSE_RE = /^\s*<\/details>\s*$/;
 const SUMMARY_LINE_RE = /^\s*<summary>.*<\/summary>\s*$/;
 const HUNK_METADATA_RE = /^\s*<!--\s*changetour:hunk\s+(.*?)\s*-->\s*$/;
 const DIFF_FENCE_OPEN_RE = /^\s*```diff\s*$/;
 const DIFF_FENCE_CLOSE_RE = /^\s*```\s*$/;
+const HAS_LEADING_WHITESPACE_RE = /^[ \t]+/;
 const HUNK_HEADER_LINE_RE = /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/;
 const HUNK_BODY_RANGE_RE = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/;
 const LEGACY_HUNK_OPEN_RE = /^:::hunk(\s|$)/;
@@ -209,7 +215,7 @@ function validateStructure(text) {
 		// <details> for narration too. If the shape doesn't match, fall back to
 		// treating this line as plain content (no error).
 		skipBlanks();
-		const summaryLine = j;
+		const summaryLineIdx = j;
 		if (j >= lines.length || !SUMMARY_LINE_RE.test(lines[j])) {
 			i++;
 			continue;
@@ -227,9 +233,33 @@ function validateStructure(text) {
 			i++;
 			continue;
 		}
+		const metaLineIdx = j;
 		const metaLine = j + 1;
 		const attrs = parseHunkAttributes(metaMatch[1]);
 		j++;
+
+		// Indentation check on the four structural HTML lines we just matched.
+		// GitHub treats lines indented 4+ spaces as code blocks, so any leading
+		// whitespace on these elements silently breaks the rendered <details>
+		// surface even though the in-extension parser tolerates it. We require
+		// column-zero placement to match the canonical shape and the LLM
+		// instructions.
+		const indentationErrors = [];
+		if (HAS_LEADING_WHITESPACE_RE.test(lines[i])) {
+			indentationErrors.push({ line: openLine, what: '`<details>`' });
+		}
+		if (HAS_LEADING_WHITESPACE_RE.test(lines[summaryLineIdx])) {
+			indentationErrors.push({ line: summaryLineIdx + 1, what: '`<summary>`' });
+		}
+		if (HAS_LEADING_WHITESPACE_RE.test(lines[metaLineIdx])) {
+			indentationErrors.push({ line: metaLineIdx + 1, what: '`<!-- changetour:hunk ... -->`' });
+		}
+		for (const e of indentationErrors) {
+			errors.push({
+				line: e.line,
+				message: `${e.what} line has leading whitespace. Hunks must be at column zero - indented HTML becomes a literal code block on GitHub and breaks the rendered <details> surface.`,
+			});
+		}
 
 		// From this point on we're committed to treating this as a hunk
 		// block - structural issues below are real errors, not "this isn't
@@ -249,6 +279,12 @@ function validateStructure(text) {
 				}
 			}
 		}
+		if ('pinned' in attrs && attrs.pinned !== 'true') {
+			errors.push({
+				line: metaLine,
+				message: `Hunk \`pinned\` must be \`true\` if present (got \`${attrs.pinned}\`). Omit the attribute to indicate "not pinned".`,
+			});
+		}
 
 		skipBlanks();
 		if (j >= lines.length || !DIFF_FENCE_OPEN_RE.test(lines[j])) {
@@ -258,6 +294,13 @@ function validateStructure(text) {
 			});
 			i = j;
 			continue;
+		}
+		const fenceOpenLineIdx = j;
+		if (HAS_LEADING_WHITESPACE_RE.test(lines[fenceOpenLineIdx])) {
+			errors.push({
+				line: fenceOpenLineIdx + 1,
+				message: '```diff fence line has leading whitespace. The fence must start at column zero.',
+			});
 		}
 		j++;
 
@@ -295,6 +338,13 @@ function validateStructure(text) {
 			i = j;
 			continue;
 		}
+		const closeLineIdx = j;
+		if (HAS_LEADING_WHITESPACE_RE.test(lines[closeLineIdx])) {
+			errors.push({
+				line: closeLineIdx + 1,
+				message: '`</details>` line has leading whitespace. It must start at column zero.',
+			});
+		}
 		j++; // consume </details>
 
 		// Derive line range from the @@ +C,D @@ header.
@@ -318,11 +368,6 @@ function validateStructure(text) {
 				previousFile: attrs.previousFile,
 			});
 		}
-
-		// `summaryLine` is referenced only to keep its purpose obvious in the
-		// state machine; the structural validator doesn't require us to assert
-		// anything about its contents.
-		void summaryLine;
 
 		i = j;
 	}

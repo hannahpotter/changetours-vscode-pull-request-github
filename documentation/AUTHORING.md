@@ -1,23 +1,5 @@
-> Change Tours: Pull Request Code Reviews via Structured Narratives in VS Code
+# Authoring Change Tours
 
-This extension allows you to create and review Change Tours of GitHub pull requests in Visual Studio Code.
-
-# How to use
-
-## Running extension locally
-[How to Build and Run](https://github.com/Microsoft/vscode-pull-request-github/wiki/Contributing#build-and-run)
-> [!NOTE]
-> This runs with regular VS Code (Insiders version not required)
-
-## Authoring a Change Tour
-
-Open a pull request overview and choose to open an existing Change Tour file or create a new one for the pull request. New tours are created at `<repoRoot>/.changetours/<prNumber>-<sanitized-title>.changetour.md`.
-
-When a Change Tour is opened, an overview can be seen by clicking the GitHub Pull Request icon in the activity bar.
-
-Actions to see all of the changes and open the pull request overview for a tour's associated pull request, as well as toggling edit and view modes for a tour are found in the editor tool bar.
-
-## Viewing a Change Tour
 
 # AI assistant
 The extension includes an LLM assistant that can build Change Tours for you. It works in two modes:
@@ -79,7 +61,7 @@ claude "Use the change-tour skill on @path/to/file.changetour.md"
 to edit an existing tour, or
 
 ```
-claude "Use the change-tour skill to bootstrap a Change Tour for PR <num>"
+claude "Use the change-tour skill to bootstrap a change tour for PR <num>"
 ```
 
 to create one from scratch. Claude executes the request, prints its output, and exits. Good for scripting, CI, or one-and-done edits.
@@ -93,7 +75,7 @@ claude
 
 `claude` with no prompt argument opens an interactive session in your terminal. From the prompt you can:
 
-- **Invoke the skill by name or intent**: type `Use the change-tour skill to edit @path/to/file.changetour.md` (or `... to bootstrap a Change Tour for PR 1234`). Claude Code auto-loads project-scoped skills from `.claude/skills/`, so the change-tour skill is available as soon as you're in the repo.
+- **Invoke the skill by name or intent**: type `Use the change-tour skill to edit @path/to/file.changetour.md` (or `... to bootstrap a change tour for PR 1234`). Claude Code auto-loads project-scoped skills from `.claude/skills/`, so the change-tour skill is available as soon as you're in the repo.
 - **Attach files with `@`**: `@path/to/file` adds that file to the conversation context. Tab-completes paths.
 - **Iterate**: after Claude finishes a pass, just keep typing: "tighten the narration in the Data model section", "regroup hunks 3-5 under a new heading", "add a Miscellaneous section for the trivial test changes", etc. Claude keeps the conversation history within the session.
 - **Resume later**: exit with Ctrl+D. Use `claude --continue` from the same directory to resume the most recent session, or `claude --resume` to pick from a list.
@@ -130,7 +112,3 @@ Relevant settings (search "Change Tour" in settings UI):
 ## Notes
 
 The assistant only generates valid tours: every hunk it inserts is resolved server-side against the bound pull request's diff, so refs and patch content are always correct. The toolbar button is disabled until the document has pull request frontmatter (created automatically by "Pull Request: New Change Tour").
-
-# GitHub Pull Requests VS Code Extension
-
-This extension is built from a fork of the [GitHub Pull Requests VS Code Extension](https://github.com/Microsoft/vscode-pull-request-github). See [its documentation](https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github) for the GitHub features.

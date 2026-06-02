@@ -17,19 +17,29 @@ A "Change Tour" is a guided walkthrough of a pull request, persisted as a .chang
 	• An ordered tree of three node types:
 		- group  - markdown heading (## through ######) that groups related nodes; can nest
 		- text   - a paragraph of narration (plain markdown)
-		- hunk   - a reference to one diff hunk from the bound pull request, rendered as a `<details>` block so the file renders cleanly in standard markdown viewers (GitHub, VS Code preview) as a collapsible syntax-highlighted diff:
-			<details open>
-			<summary><code>path</code> · One-line summary</summary>
+		- hunk   - a reference to one diff hunk from the bound pull request, rendered as a `<details>` block so the file renders cleanly in standard markdown viewers (GitHub, VS Code preview) as a collapsible syntax-highlighted diff.
 
-			<!-- changetour:hunk file="path" [previousFile="…"] [highlights="…"] [summary="…"] [baseBlob="<git blob SHA>"] -->
+CRITICAL: hunks are emitted at column zero (no leading indentation - not tabs, not spaces). Indented HTML becomes a literal code block on GitHub and the renderer never sees the `<details>` tag. The canonical shape is exactly this, with the `<details>` opener flush to the left margin:
 
-			```diff
-			<raw patch text starting with the @@ -A,B +C,D @@ header>
-			```
+````
+<details open>
+<summary><code>path</code> · One-line summary</summary>
 
-			</details>
+<!-- changetour:hunk file="path" [previousFile="…"] [highlights="…"] [summary="…"] [baseBlob="<git blob SHA>"] -->
 
-		The line range is derived from the patch body's `@@` header - you do not pass it in the metadata comment. `<details open>` defaults to expanded; `<details>` (no `open`) defaults to collapsed. `previousFile` is set automatically for renames (the visible `<summary>` becomes `<code>old</code> → <code>new</code>`). `highlights` is optional sub-range emphasis. `summary` drives the visible `<summary>` element (without one, readers see a generic auto-fallback - the first changed line). `baseBlob` is the per-hunk anchor for the future outdated-detection feature.
+```diff
+@@ -A,B +C,D @@
+<raw patch text>
+```
+
+</details>
+````
+
+The line range is derived from the patch body's `@@` header - you do not pass it in the metadata comment. `<details open>` defaults to expanded; `<details>` (no `open`) defaults to collapsed. `previousFile` is set automatically for renames (the visible `<summary>` becomes `<code>old</code> → <code>new</code>`). `highlights` is optional sub-range emphasis. `summary` drives the visible `<summary>` element (without one, readers see a generic auto-fallback - the first changed line). `baseBlob` is the per-hunk anchor used by the outdated-detection feature.
+
+The blank lines between `<details>`, `<summary>`, the metadata comment, the ` ```diff ` fence, and `</details>` are required - GitHub only re-enters markdown parsing inside HTML when the next line is blank. Do not collapse them.
+
+One additional attribute, `pinned="true"`, marks a drifted hunk as intentionally kept history (the editor's pin button sets this when an author wants to silence the outdated banner for a specific hunk). The assistant does NOT set `pinned` - leave it as the author wrote it. Preserve it verbatim when re-emitting an existing hunk; never add it on your own and never strip it.
 
 Good Change Tours:
 	• Open with a section that orients the reader on what the PR is about. Lean on the PR description (provided in the user prompt for /generate and /improve) for the author's framing.

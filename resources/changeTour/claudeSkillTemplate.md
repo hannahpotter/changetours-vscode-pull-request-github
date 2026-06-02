@@ -134,7 +134,9 @@ Whether you bootstrapped the tour or are editing an existing one, **run the pref
 
 5. **Highlights are optional.** Use `highlights="new:14-18,old:22-25"` (inside the metadata comment) only when the hunk is >20 lines AND a specific sub-range carries the point.
 
-6. **`baseBlob` is optional but recommended.** Stamp it from the PR file API's `sha` field for the file at PR head (`gh api repos/<owner>/<repo>/pulls/<num>/files | jq '.[].sha'`). The future outdated-detection feature uses it as the per-hunk anchor for drift checks.
+6. **`baseBlob` is optional but recommended.** Stamp it from the PR file API's `sha` field for the file at PR head (`gh api repos/<owner>/<repo>/pulls/<num>/files | jq '.[].sha'`). The outdated-detection feature uses it as the per-hunk anchor for drift checks.
+
+7. **Never set `pinned="true"` yourself.** This attribute is set by the editor's pin button when an author wants to keep a drifted hunk as historical context without triggering the "tour is outdated" banner. If you're rewriting an existing hunk that has `pinned="true"`, preserve it verbatim. Never add it on your own and never strip it on rewrites.
 
 ## Validate after every significant edit
 
@@ -159,6 +161,53 @@ Exit 0 means the tour passed. After a `/generate` or similar full-build run, end
 ```
 node .claude/skills/change-tour/validate-change-tour.js <relPath> --require-full-coverage
 ```
+
+## Updating an existing tour (drift detection)
+
+When the user asks you to **update** a tour whose underlying PR has moved on, do NOT eyeball the diff to guess what drifted. The bundled drift report script computes the exact set of stale and missing hunks for you:
+
+```
+node .claude/skills/change-tour/drift-report-change-tour.js <relPath> --json
+```
+
+Output shape:
+
+```json
+{
+	"drifted":       [{ "tourNodeId": "<file>:<oldLines>", "file": "...", "oldLines": "L-L", "reason": "..." }],
+	"missingInTour": [{ "file": "...", "startLine": N, "endLine": M }],
+	"removedFromPR": [{ "tourNodeId": "<file>:<oldLines>", "file": "...", "oldLines": "L-L" }]
+}
+```
+
+This is the **ground truth**. Patch-content drift is impossible to derive reliably from line ranges alone, so don't try. The script's output is what the in-extension assistant uses too; trust it.
+
+### Update workflow
+
+1. Run the drift report (above) to get the three lists.
+2. For every entry in `drifted`:
+   - Find the entry in the tour file (search for `file=` and the `oldLines` range in the metadata comments).
+   - Remove the entire `<details> … </details>` block.
+   - Read `gh pr diff <num>` to find the current PR hunk(s) for that file. The relevant replacement is usually the hunk whose new-side range is closest to (or overlaps) the tour's old `oldLines`.
+   - Insert a fresh `<details>` block at the same position with the current PR patch. Stamp a fresh `baseBlob` from `gh api repos/<owner>/<repo>/pulls/<num>/files | jq '.[].sha'`. Preserve any `summary=`, `highlights=`, and `pinned=` attributes the old block had if they still apply.
+   - Audit the text node(s) immediately before and after. If they described the OLD behavior of the hunk, rewrite them to match the new behavior. If they describe the section's broader theme, leave them alone.
+3. For every entry in `missingInTour`:
+   - Add a fresh `<details>` block with the PR hunk, inserted into the section whose theme it best matches.
+   - Add a short text node above it (1-2 sentences explaining WHY) only if the change isn't self-evident from the diff.
+4. For every entry in `removedFromPR`:
+   - Remove the `<details>` block and any text node whose entire content was about that hunk's file.
+
+### Verification (do NOT skip)
+
+After your edits, run the drift report a SECOND time. The expected output is:
+
+```json
+{ "drifted": [], "missingInTour": [], "removedFromPR": [] }
+```
+
+If any list is still non-empty, the update is incomplete. Process the remaining entries and run the report a third time. Repeat until all three lists are empty. Then run the validator (`--require-full-coverage`) to confirm the rewrite is well-formed.
+
+The partial-update-then-stop failure mode is the most common one with this workflow. The verification step exists because of it.
 
 If that exits non-zero, address the reported uncovered hunks before declaring done.
 

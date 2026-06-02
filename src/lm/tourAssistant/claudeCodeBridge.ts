@@ -16,33 +16,41 @@ import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
  *     opens a terminal with a short `claude` invocation that triggers the skill.
  *     The skill body has the full format contract + bootstrap recipe so users
  *     can also run the same command from any shell outside VS Code.
+ *   - `pr.updateTourWithClaudeCode` - same setup, but seeds the terminal with
+ *     an "update this tour to match the PR's current state" prompt instead of
+ *     the open-ended edit prompt. Surfaced from the outdated-tour banner and
+ *     the `.changetour.md` editor title menu.
  *   - `pr.setAnthropicApiKey` - stores an Anthropic API key in SecretStorage
  *     for the AnthropicProvider fallback.
  */
 export function registerExternalIntegrationCommands(context: vscode.ExtensionContext): void {
-	context.subscriptions.push(
-		vscode.commands.registerCommand('pr.editTourWithClaudeCode', async (uri?: vscode.Uri) => {
-			const tourUri = pickTourUri(uri);
-			const workspaceRoot = resolveWorkspaceRoot(tourUri);
-			if (!workspaceRoot) {
-				vscode.window.showErrorMessage(vscode.l10n.t('Open a workspace folder first - the Claude Code skill installs into the repo at .claude/skills/change-tour.'));
-				return;
-			}
+	const registerClaudeCommand = (commandId: string, framing: 'edit' | 'update') => {
+		context.subscriptions.push(
+			vscode.commands.registerCommand(commandId, async (uri?: vscode.Uri) => {
+				const tourUri = pickTourUri(uri);
+				const workspaceRoot = resolveWorkspaceRoot(tourUri);
+				if (!workspaceRoot) {
+					vscode.window.showErrorMessage(vscode.l10n.t('Open a workspace folder first - the Claude Code skill installs into the repo at .claude/skills/change-tour.'));
+					return;
+				}
 
-			try {
-				await ensureSkillInstalled(context, workspaceRoot);
-			} catch (err) {
-				vscode.window.showErrorMessage(vscode.l10n.t('Could not install the change-tour Claude Code skill: {0}', err instanceof Error ? err.message : String(err)));
-				return;
-			}
+				try {
+					await ensureSkillInstalled(context, workspaceRoot);
+				} catch (err) {
+					vscode.window.showErrorMessage(vscode.l10n.t('Could not install the change-tour Claude Code skill: {0}', err instanceof Error ? err.message : String(err)));
+					return;
+				}
 
-			const terminal = vscode.window.createTerminal({ name: 'Claude Code · Change Tour' });
-			const command = buildClaudeCommand(tourUri);
-			// `false` (no newline) lets the user review/edit the prompt before pressing Enter.
-			terminal.sendText(command, false);
-			terminal.show();
-		}),
-	);
+				const terminal = vscode.window.createTerminal({ name: 'Claude Code · Change Tour' });
+				const command = buildClaudeCommand(tourUri, framing);
+				// `false` (no newline) lets the user review/edit the prompt before pressing Enter.
+				terminal.sendText(command, false);
+				terminal.show();
+			}),
+		);
+	};
+	registerClaudeCommand('pr.editTourWithClaudeCode', 'edit');
+	registerClaudeCommand('pr.updateTourWithClaudeCode', 'update');
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('pr.setAnthropicApiKey', async () => {
@@ -108,24 +116,35 @@ async function ensureSkillInstalled(context: vscode.ExtensionContext, workspaceR
 		installedSkill = true;
 	}
 
-	// Always copy the validator alongside the skill so `node validate-change-tour.js …`
-	// works from any shell, even outside the extension's own repo. Overwriting is safe -
-	// the validator is a tool, not a prompt, and users shouldn't be editing it.
-	const validatorSrc = path.join(context.extensionPath, 'scripts', 'validate-change-tour.js');
-	const validatorDest = vscode.Uri.joinPath(skillDir, 'validate-change-tour.js');
-	const validatorBytes = await vscode.workspace.fs.readFile(vscode.Uri.file(validatorSrc));
-	await vscode.workspace.fs.writeFile(validatorDest, validatorBytes);
+	// Always copy the validator + drift report alongside the skill so the
+	// scripts are runnable from any shell, even outside the extension's own
+	// repo. Overwriting is safe - these are tools, not prompts, and users
+	// shouldn't be editing them. The drift report is what gives Claude CLI
+	// the same ground-truth signal the in-extension `changeTour_getDriftReport`
+	// tool gives the in-extension assistant.
+	const copyScript = async (basename: string) => {
+		const src = path.join(context.extensionPath, 'scripts', basename);
+		const dest = vscode.Uri.joinPath(skillDir, basename);
+		const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(src));
+		await vscode.workspace.fs.writeFile(dest, bytes);
+	};
+	await copyScript('validate-change-tour.js');
+	await copyScript('drift-report-change-tour.js');
 
 	if (installedSkill) {
 		vscode.window.showInformationMessage(vscode.l10n.t('Installed Claude Code skill at .claude/skills/change-tour/.'));
 	}
 }
 
-function buildClaudeCommand(tourUri: vscode.Uri | undefined): string {
+function buildClaudeCommand(tourUri: vscode.Uri | undefined, framing: 'edit' | 'update'): string {
 	if (!tourUri) {
+		// No active tour - bootstrap is the only sensible action regardless of framing.
 		return `claude "Use the change-tour skill to bootstrap a new change tour for the current pull request"`;
 	}
 	const relPath = vscode.workspace.asRelativePath(tourUri);
+	if (framing === 'update') {
+		return `claude "Use the change-tour skill to update @${relPath} to match the current state of the pull request. START by running the bundled drift report (node .claude/skills/change-tour/drift-report-change-tour.js @${relPath} --json) - the three lists it returns are the ground truth for what needs to change. Process every entry in drifted, missingInTour, and removedFromPR. When done, run the report again to verify all three lists are empty before stopping."`;
+	}
 	return `claude "Use the change-tour skill to edit @${relPath}"`;
 }
 

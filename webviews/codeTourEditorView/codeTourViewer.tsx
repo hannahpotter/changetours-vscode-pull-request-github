@@ -7,6 +7,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ViewerLeftPane } from './viewerLeftPane';
 import {
 	associatedHunkIds as computeAssociatedHunkIds,
+	computeNewInPrCount,
+	computeOutdatedHunks,
 	dedupAndGroupByFile,
 	descendantHunkKeys,
 	findNode,
@@ -14,6 +16,8 @@ import {
 	flattenHunks,
 	hunkKeyFor,
 	hunksForSection,
+	indexPrState,
+	type PrState,
 } from './viewerModel';
 import { type CommentTarget, ViewerRightPane } from './viewerRightPane';
 import { DiffSide, type IComment, type IReviewThread } from '../../src/common/comment';
@@ -74,6 +78,10 @@ interface CodeTourViewerProps {
 	persistViewed: (keys: string[]) => void;
 	tourFilePath: string | undefined;
 	diffLayout: 'inline' | 'sideBySide';
+	/** Latest snapshot of the bound PR; drives the outdated-hunk banner. */
+	prState?: PrState;
+	/** Re-fetch PR state from the extension (Refresh button in the banner). */
+	onRefreshPrState?: () => void;
 }
 
 interface PendingComment {
@@ -114,7 +122,7 @@ function collectTextNodes(doc: CodeTourDocument): TourTextNode[] {
 	return out;
 }
 
-export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, onCheckoutPR, initialViewedKeys, persistViewed, tourFilePath, diffLayout }: CodeTourViewerProps) {
+export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, onCheckoutPR, initialViewedKeys, persistViewed, tourFilePath, diffLayout, prState, onRefreshPrState }: CodeTourViewerProps) {
 	const [selectedSectionId, setSelectedSectionId] = useState<string | undefined>(undefined);
 	const [selectedTextNodeId, setSelectedTextNodeId] = useState<string | undefined>(undefined);
 	// Seed from groups marked `defaultCollapsed` in the doc (the tour creator's
@@ -451,6 +459,24 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 
 	const allFileGroups = useMemo(() => dedupAndGroupByFile(flattenHunks(doc)), [doc]);
 
+	// Outdated-hunk detection. Index the PR state once and feed both helpers from
+	// the same map. `outdatedHunkIds` drives the per-hunk "Outdated" badge in the
+	// right pane; `isTourOutdated` consults `pinned` to decide if the top banner
+	// should appear.
+	const prStateIndex = useMemo(() => indexPrState(prState), [prState]);
+	const outdatedHunkIds = useMemo(() => computeOutdatedHunks(doc, prState, prStateIndex), [doc, prState, prStateIndex]);
+	const { count: newInPrCount } = useMemo(() => computeNewInPrCount(doc, prState, prStateIndex), [doc, prState, prStateIndex]);
+	const outdatedUnpinnedCount = useMemo(() => {
+		let n = 0;
+		for (const node of flattenHunks(doc)) {
+			if (outdatedHunkIds.has(node.id) && !node.hunk.pinned) {
+				n++;
+			}
+		}
+		return n;
+	}, [doc, outdatedHunkIds]);
+	const isTourOutdated = outdatedUnpinnedCount > 0;
+
 	const selectedSection = useMemo(() => {
 		if (!selectedSectionId) {
 			return undefined;
@@ -632,6 +658,8 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		});
 	}, [commentsEnabled, commentsDisabledReason, doc.prNumber, doc.prOwner, doc.prRepo, postMessage]);
 
+	const showOutdatedBanner = isTourOutdated || newInPrCount > 0;
+
 	return (
 		<div className="viewer-root">
 			{openDiffDisabled && (
@@ -642,6 +670,26 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 							Checkout PR
 						</button>
 					)}
+				</div>
+			)}
+			{showOutdatedBanner && (
+				<div className="tour-pr-warning tour-outdated-warning viewer-pr-warning">
+					<span>
+						{isTourOutdated && (
+							<>This Change Tour is outdated. <strong>{outdatedUnpinnedCount} hunk{outdatedUnpinnedCount === 1 ? '' : 's'}</strong> drifted from the pull request.{newInPrCount > 0 ? ' ' : ''}</>
+						)}
+						{newInPrCount > 0 && (
+							<>The PR has <strong>{newInPrCount} new hunk{newInPrCount === 1 ? '' : 's'}</strong> not covered by this tour.</>
+						)}
+					</span>
+					<div className="tour-pr-warning-actions">
+						{/* View mode is read-only: the Outdated banner stays informational. The Claude CLI / @change-tour / "Update with AI" actions all mutate the tour file, so they only render in edit mode (CodeTourEditor). */}
+						{onRefreshPrState && (
+							<button className="tour-action-btn" onClick={onRefreshPrState} title="Re-fetch the PR's current state">
+								Refresh
+							</button>
+						)}
+					</div>
 				</div>
 			)}
 			<div className="viewer-panes">
@@ -664,6 +712,7 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 			<ViewerRightPane
 				diffLayout={diffLayout}
 				headSha={doc.headSha}
+				outdatedHunkIds={outdatedHunkIds}
 				fileGroups={fileGroups}
 				totalsByFile={totalsByFile}
 				threadsByHunkId={threadsByHunkId}

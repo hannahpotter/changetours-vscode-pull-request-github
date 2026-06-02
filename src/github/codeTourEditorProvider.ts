@@ -327,6 +327,15 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		switch (message.command) {
 			case 'ready':
 				this._sendDocumentToWebview(panel.webview, document);
+				// Kick off the PR data fetch in the background so the outdated-hunk
+				// banner can render as soon as it's available. We don't await -
+				// the webview renders immediately from the initialize message; the
+				// changes data arrives later and triggers re-detection. Failure is
+				// silent (no PR resolved, offline, etc.) - the banner just stays
+				// hidden in that case.
+				this._sendChangesData(document, panel).catch(e =>
+					Logger.error(`Failed to fetch PR changes on init: ${formatError(e)}`, CodeTourEditorProvider.name),
+				);
 				return;
 
 			case 'codeTourEditor.updateDocument': {
@@ -396,7 +405,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 
 			case 'codeTourEditor.runAssistant': {
 				const { mode, hunkId, groupId, requestId } = message.args as {
-					mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk';
+					mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration';
 					hunkId?: string;
 					groupId?: string;
 					requestId: string;
@@ -531,54 +540,84 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				return;
 			}
 
-			case 'codeTourEditor.requestChanges': {
-				try {
-					const parsed = parseCodeTourMarkdown(document.getText());
-					if (parsed.isPR && parsed.prOwner && parsed.prRepo && parsed.prNumber) {
-						const { prOwner, prRepo, prNumber } = parsed;
-						const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
-						if (folderManager) {
-							const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
-							if (prModel) {
-								const rawChanges = await prModel.getRawFileChangesInfo();
-								const files = rawChanges.map(change => ({
-									fileName: change.filename,
-									status: change.status,
-									additions: change.additions,
-									deletions: change.deletions,
-									previousFileName: change.previous_filename,
-									patch: change.patch,
-									// Per-file blob SHA at PR head. Drag/drop carries this into the hunk's
-									// `baseBlob` so the future outdated-detection flow can compare against
-									// the file's current blob.
-									blobSha: change.sha,
-								}));
-								panel.webview.postMessage({
-									res: {
-										command: 'codeTourEditor.changesData',
-										data: {
-											title: prModel.title,
-											number: prModel.number,
-											owner: prOwner,
-											repo: prRepo,
-											baseRef: prModel.base.ref,
-											baseSha: prModel.base.sha,
-											headSha: prModel.head?.sha,
-											files
-										}
-									}
-								});
-							}
-						}
-					}
-				} catch (e) {
-					Logger.error(`Failed to fetch PR changes: ${formatError(e)}`, CodeTourEditorProvider.name);
-				}
+			case 'codeTourEditor.requestChanges':
+				await this._sendChangesData(document, panel);
 				return;
-			}
+
+			case 'codeTourEditor.openClaudeCodeUpdate':
+				// Delegate to the existing Claude CLI bridge so the same skill
+				// install + terminal prompt path runs from either the title-menu
+				// or the outdated-banner button.
+				await vscode.commands.executeCommand('pr.updateTourWithClaudeCode', document.uri);
+				return;
+
+			case 'codeTourEditor.openCopilotChatUpdate':
+				// Pre-populate the chat panel with `@change-tour /update`. The
+				// user reviews and presses enter; the participant runs the
+				// `update` AssistantMode against the active tour.
+				await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@change-tour /update ' });
+				return;
 
 			default:
 				return;
+		}
+	}
+
+	/**
+	 * Fetch the bound PR's current diff and post a `changesData` message back
+	 * to the webview. Used for two things: the changes-pane file list (drag/drop
+	 * authoring) and the outdated-hunk detector (per-file blob SHAs + current
+	 * head SHA + per-file patch). The webview parses each file's patch locally
+	 * to derive per-file hunks for the auto-update flow.
+	 *
+	 * Silent on failure (no PR bound, offline, mismatched binding) - the
+	 * outdated banner stays hidden in those cases, which is the right thing.
+	 */
+	private async _sendChangesData(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
+		try {
+			const parsed = parseCodeTourMarkdown(document.getText());
+			if (!parsed.isPR || !parsed.prOwner || !parsed.prRepo || !parsed.prNumber) {
+				return;
+			}
+			const { prOwner, prRepo, prNumber } = parsed;
+			const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
+			if (!folderManager) {
+				return;
+			}
+			const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+			if (!prModel) {
+				return;
+			}
+			const rawChanges = await prModel.getRawFileChangesInfo();
+			const files = rawChanges.map(change => ({
+				fileName: change.filename,
+				status: change.status,
+				additions: change.additions,
+				deletions: change.deletions,
+				previousFileName: change.previous_filename,
+				patch: change.patch,
+				// Per-file blob SHA at PR head. Drag/drop carries this into the hunk's
+				// `baseBlob` so the outdated-detection flow can compare against the
+				// file's current blob.
+				blobSha: change.sha,
+			}));
+			panel.webview.postMessage({
+				res: {
+					command: 'codeTourEditor.changesData',
+					data: {
+						title: prModel.title,
+						number: prModel.number,
+						owner: prOwner,
+						repo: prRepo,
+						baseRef: prModel.base.ref,
+						baseSha: prModel.base.sha,
+						headSha: prModel.head?.sha,
+						files
+					}
+				}
+			});
+		} catch (e) {
+			Logger.error(`Failed to fetch PR changes: ${formatError(e)}`, CodeTourEditorProvider.name);
 		}
 	}
 
@@ -668,7 +707,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	private async _runAssistantForWebview(
 		panel: vscode.WebviewPanel,
 		document: vscode.TextDocument,
-		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk',
+		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration',
 		requestId: string,
 		ctx: { hunkId?: string; groupId?: string },
 	): Promise<void> {
@@ -687,7 +726,11 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				? 'improve'
 				: mode === 'summarizeHunk'
 					? 'summarizeHunk'
-					: 'generate';
+					: mode === 'updateTour'
+						? 'update'
+						: mode === 'refreshHunkNarration'
+							? 'refreshNarration'
+							: 'generate';
 		const userPrompt = this._buildAssistantPromptForButton(mode, ctx);
 		const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri;
 
@@ -711,7 +754,7 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	}
 
 	private _buildAssistantPromptForButton(
-		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk',
+		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration',
 		ctx: { hunkId?: string; groupId?: string },
 	): string {
 		switch (mode) {
@@ -723,6 +766,10 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				return `Improve the section with id "${ctx.groupId}" - tighten the narration of its children, add highlights to large hunks where useful, and surface obvious gaps. Do not modify nodes outside this section.`;
 			case 'summarizeHunk':
 				return `Write a one-line natural-language summary for the hunk with id "${ctx.hunkId}" and save it on that hunk via the summary attribute. Do not insert or modify any other nodes.`;
+			case 'updateTour':
+				return 'Update this Change Tour to match the current PR. START by calling changeTour_getDriftReport - the three lists it returns are the ground truth for what needs to change. Process every entry in `drifted`, `missingInTour`, and `removedFromPR`. After the edits, call changeTour_getDriftReport again to verify all three lists are empty; if not, repeat. Don\'t stop until the verification call returns empty lists.';
+			case 'refreshHunkNarration':
+				return `The hunk with id "${ctx.hunkId}" was just auto-updated. Refresh the prose adjacent to that hunk - text nodes immediately before or after - so the narration reflects the hunk's new patch content. Do not modify the hunk itself or any other node in the tour.`;
 		}
 	}
 
