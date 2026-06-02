@@ -7,6 +7,7 @@ import * as marked from 'marked';
 import React, { useCallback, useMemo, useState } from 'react';
 import type { IComment, IReviewThread } from '../../src/common/comment';
 import { chevronDownIcon } from '../components/icon';
+import { Tooltip } from './tooltip';
 
 interface InlineCommentThreadProps {
 	thread: IReviewThread;
@@ -78,22 +79,23 @@ export function InlineCommentThread({ thread, onReply, replyDisabled, replyDisab
 	return (
 		<div className={`vc-thread${thread.isResolved ? ' vc-thread-resolved' : ''}${thread.isOutdated ? ' vc-thread-outdated' : ''}`}>
 			<div className="vc-thread-header">
-				<span
-					role="button"
-					tabIndex={0}
-					className={`expand-icon icon-button vc-thread-toggle${expanded ? '' : ' closed'}`}
-					title={expanded ? 'Collapse thread' : 'Expand thread'}
-					onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}
-					onKeyDown={e => {
-						if (e.key === 'Enter' || e.key === ' ') {
-							e.preventDefault();
-							e.stopPropagation();
-							setExpanded(v => !v);
-						}
-					}}
-				>
-					{chevronDownIcon}
-				</span>
+				<Tooltip text={expanded ? 'Collapse thread' : 'Expand thread'}>
+					<span
+						role="button"
+						tabIndex={0}
+						className={`expand-icon icon-button vc-thread-toggle${expanded ? '' : ' closed'}`}
+						onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}
+						onKeyDown={e => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								e.stopPropagation();
+								setExpanded(v => !v);
+							}
+						}}
+					>
+						{chevronDownIcon}
+					</span>
+				</Tooltip>
 				<span className="vc-thread-target">
 					{thread.path}:{thread.startLine === thread.endLine ? thread.endLine : `${thread.startLine}-${thread.endLine}`}
 				</span>
@@ -110,22 +112,23 @@ export function InlineCommentThread({ thread, onReply, replyDisabled, replyDisab
 					</div>
 					{!replyOpen ? (
 						<div className="vc-reply">
-							<div
-								role="button"
-								tabIndex={replyDisabled ? -1 : 0}
-								className={`vc-reply-trigger${replyDisabled ? ' is-disabled' : ''}`}
-								onClick={() => { if (!replyDisabled) setReplyOpen(true); }}
-								onKeyDown={e => {
-									if (replyDisabled) return;
-									if (e.key === 'Enter' || e.key === ' ') {
-										e.preventDefault();
-										setReplyOpen(true);
-									}
-								}}
-								title={replyDisabled ? replyDisabledReason ?? 'Reply unavailable' : 'Reply to this thread'}
-							>
-								Reply…
-							</div>
+							<Tooltip text={replyDisabled ? replyDisabledReason ?? 'Reply unavailable' : 'Reply to this thread'}>
+								<div
+									role="button"
+									tabIndex={replyDisabled ? -1 : 0}
+									className={`vc-reply-trigger${replyDisabled ? ' is-disabled' : ''}`}
+									onClick={() => { if (!replyDisabled) setReplyOpen(true); }}
+									onKeyDown={e => {
+										if (replyDisabled) return;
+										if (e.key === 'Enter' || e.key === ' ') {
+											e.preventDefault();
+											setReplyOpen(true);
+										}
+									}}
+								>
+									Reply…
+								</div>
+							</Tooltip>
 						</div>
 					) : (
 						<div className="vc-reply">

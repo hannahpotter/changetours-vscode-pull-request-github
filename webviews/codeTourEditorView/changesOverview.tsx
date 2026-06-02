@@ -10,6 +10,7 @@ import { ChangedFileInfo } from '../../src/github/views';
 import { DiffTable } from '../common/DiffTable';
 import { ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { addIcon, chevronDownIcon, listTree } from '../components/icon';
+import { Tooltip } from './tooltip';
 
 interface ChangedFilesOverviewProps {
 	title: string;
@@ -299,31 +300,36 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseSha, headSha, onHunkAd
 		<div className={`file-entry${searchActive && searchMatched ? ' file-entry-search-match' : ''}`}>
 			<div className={`file-header ${allCovered ? 'file-covered' : ''}`} onClick={() => onToggleExpanded(!expanded)}>
 				<div className="file-actions">
-					<span className={`expand-icon icon-button ${expanded ? '' : 'closed'}`} title={expanded ? 'Collapse file' : 'Expand file'}>{chevronDownIcon}</span>
-					<div className="checkbox-wrapper">
-						<input
-							type="checkbox"
-							title="Select file hunks"
-							checked={isAllSelected}
-							ref={r => { if (r) r.indeterminate = isIndeterminate; }}
-							onChange={(e) => onFileSelect(fileAllHunks, e.target.checked)}
-							onClick={(e) => e.stopPropagation()}
-						/>
-					</div>
-					<span
-						className="icon-button"
-						title={`Insert ${selectedFileHunks.length} selected hunks${activeNodeContext ? ` after: ${activeNodeContext}` : ''}`}
-						onClick={(e) => { e.stopPropagation(); onHunkAdd(selectedFileHunks, 'active'); onFileSelect(fileMissingHunks, false); }}
-					>
-						{addIcon}
-					</span>
-					<span
-						className="icon-button"
-						title={`Add ${selectedFileHunks.length} selected hunks to Section...`}
-						onClick={(e) => { e.stopPropagation(); onHunkAdd(selectedFileHunks, 'quickpick'); onFileSelect(fileMissingHunks, false); }}
-					>
-						{listTree}
-					</span>
+					<Tooltip text={expanded ? 'Collapse file' : 'Expand file'}>
+						<span className={`expand-icon icon-button ${expanded ? '' : 'closed'}`}>{chevronDownIcon}</span>
+					</Tooltip>
+					<Tooltip text="Select file hunks">
+						<div className="checkbox-wrapper">
+							<input
+								type="checkbox"
+								checked={isAllSelected}
+								ref={r => { if (r) r.indeterminate = isIndeterminate; }}
+								onChange={(e) => onFileSelect(fileAllHunks, e.target.checked)}
+								onClick={(e) => e.stopPropagation()}
+							/>
+						</div>
+					</Tooltip>
+					<Tooltip text={`Insert ${selectedFileHunks.length} selected hunks${activeNodeContext ? ` after: ${activeNodeContext}` : ''}`}>
+						<span
+							className="icon-button"
+							onClick={(e) => { e.stopPropagation(); onHunkAdd(selectedFileHunks, 'active'); onFileSelect(fileMissingHunks, false); }}
+						>
+							{addIcon}
+						</span>
+					</Tooltip>
+					<Tooltip text={`Add ${selectedFileHunks.length} selected hunks to Section...`}>
+						<span
+							className="icon-button"
+							onClick={(e) => { e.stopPropagation(); onHunkAdd(selectedFileHunks, 'quickpick'); onFileSelect(fileMissingHunks, false); }}
+						>
+							{listTree}
+						</span>
+					</Tooltip>
 				</div>
 				<span className={`file-status ${className}`}>{text}</span>
 				<span className="file-name">
@@ -606,16 +612,18 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseSha, head
 							</button>
 						)}
 					</div>
-					<label className="changes-toggle-covered" title="Hide hunks already covered by Change Tour nodes">
-						<div className="checkbox-wrapper">
-							<input
-								type="checkbox"
-								checked={hideCovered}
-								onChange={e => setHideCovered(e.target.checked)}
-							/>
-						</div>
-						<span>Hide covered</span>
-					</label>
+					<Tooltip text="Hide hunks already covered by Change Tour nodes">
+						<label className="changes-toggle-covered">
+							<div className="checkbox-wrapper">
+								<input
+									type="checkbox"
+									checked={hideCovered}
+									onChange={e => setHideCovered(e.target.checked)}
+								/>
+							</div>
+							<span>Hide covered</span>
+						</label>
+					</Tooltip>
 				</div>
 			</div>
 			<div className="changed-files-list">

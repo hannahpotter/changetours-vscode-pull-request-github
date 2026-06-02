@@ -2326,5 +2326,30 @@ button.viewer-filter-status-clear {
 	justify-content: flex-end;
 }
 
+/* - Custom tooltip ------------------------------
+ *
+ * Drawn by the <Tooltip> component (tooltip.tsx) via a portal into <body>,
+ * so the bubble escapes the editor's clipping containers (the scrolling
+ * tour-body and the various overflow:hidden hunk frames). `position: fixed`
+ * lets us place it relative to the viewport from a single set of
+ * left/top/transform values computed off the trigger's bounding rect.
+ */
+.vsc-tooltip {
+	position: fixed;
+	z-index: 9999;
+	pointer-events: none;
+	background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526));
+	color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editorWidget-foreground, var(--vscode-foreground)));
+	border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-widget-border, var(--vscode-contrastBorder, #454545)));
+	padding: 3px 8px;
+	border-radius: 3px;
+	font-family: var(--vscode-font-family);
+	font-size: 12px;
+	line-height: 1.45;
+	max-width: 320px;
+	white-space: normal;
+	overflow-wrap: break-word;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
 
 

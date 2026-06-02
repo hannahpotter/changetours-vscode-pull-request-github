@@ -16,6 +16,7 @@ import type {
 	TourTextNode,
 } from '../../src/github/codeTourMarkdown';
 import { chevronDownIcon } from '../components/icon';
+import { Tooltip } from './tooltip';
 
 marked.setOptions({ breaks: true });
 
@@ -101,50 +102,53 @@ function GroupBlock({
 	return (
 		<div className={`viewer-section viewer-section-level-${node.level}${selected ? ' viewer-section-selected' : ''}${fullyViewed ? ' viewer-section-viewed' : ''}`}>
 			<div className="viewer-section-header">
-				<span
-					className={`expand-icon icon-button ${collapsed ? 'closed' : ''}`}
-					title={collapsed ? 'Expand section' : 'Collapse section'}
-					onClick={e => { e.stopPropagation(); onToggleCollapse(node.id); }}
-				>
-					{chevronDownIcon}
-				</span>
-				<div
-					role="button"
-					tabIndex={0}
-					className="viewer-section-title"
-					onClick={() => onSelectSection(node.id)}
-					onKeyDown={e => {
-						if (e.key === 'Enter' || e.key === ' ') {
-							e.preventDefault();
-							onSelectSection(node.id);
-						}
-					}}
-					title={selected ? 'Clear section selection' : 'Show only this section\'s hunks'}
-				>
-					{node.title || 'Untitled Section'}
-				</div>
-				{hasDescendantHunks && (
-					<label
-						className={`viewer-viewed-checkbox${fullyViewed ? ' is-viewed' : ''}`}
-						title={
-							fullyViewed
-								? 'Unmark all hunks in this section'
-								: partiallyViewed
-									? 'Mark remaining hunks in this section as viewed'
-									: 'Mark all hunks in this section as viewed'
-						}
-						onClick={e => e.stopPropagation()}
+				<Tooltip text={collapsed ? 'Expand section' : 'Collapse section'}>
+					<span
+						className={`expand-icon icon-button ${collapsed ? 'closed' : ''}`}
+						onClick={e => { e.stopPropagation(); onToggleCollapse(node.id); }}
 					>
-						<span className="checkbox-wrapper">
-							<input
-								ref={checkboxRef}
-								type="checkbox"
-								checked={fullyViewed}
-								onChange={() => onToggleSectionViewed(node)}
-							/>
-						</span>
-						<span className="viewer-viewed-checkbox-label">Viewed</span>
-					</label>
+						{chevronDownIcon}
+					</span>
+				</Tooltip>
+				<Tooltip text={selected ? 'Clear section selection' : 'Show only this section\'s hunks'}>
+					<div
+						role="button"
+						tabIndex={0}
+						className="viewer-section-title"
+						onClick={() => onSelectSection(node.id)}
+						onKeyDown={e => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								onSelectSection(node.id);
+							}
+						}}
+					>
+						{node.title || 'Untitled Section'}
+					</div>
+				</Tooltip>
+				{hasDescendantHunks && (
+					<Tooltip text={
+						fullyViewed
+							? 'Unmark all hunks in this section'
+							: partiallyViewed
+								? 'Mark remaining hunks in this section as viewed'
+								: 'Mark all hunks in this section as viewed'
+					}>
+						<label
+							className={`viewer-viewed-checkbox${fullyViewed ? ' is-viewed' : ''}`}
+							onClick={e => e.stopPropagation()}
+						>
+							<span className="checkbox-wrapper">
+								<input
+									ref={checkboxRef}
+									type="checkbox"
+									checked={fullyViewed}
+									onChange={() => onToggleSectionViewed(node)}
+								/>
+							</span>
+							<span className="viewer-viewed-checkbox-label">Viewed</span>
+						</label>
+					</Tooltip>
 				)}
 			</div>
 			{!collapsed && (
@@ -214,15 +218,16 @@ function TextBlock({
 				title="Click to highlight associated diffs"
 				dangerouslySetInnerHTML={{ __html: rendered }}
 			/>
-			<button
-				type="button"
-				className={`viewer-text-comment-trigger${canStartComment ? '' : ' disabled'}`}
-				title={triggerTitle}
-				disabled={!canStartComment}
-				onClick={e => { e.stopPropagation(); if (canStartComment) setComposerOpen(true); }}
-			>
-				+
-			</button>
+			<Tooltip text={triggerTitle}>
+				<button
+					type="button"
+					className={`viewer-text-comment-trigger${canStartComment ? '' : ' disabled'}`}
+					disabled={!canStartComment}
+					onClick={e => { e.stopPropagation(); if (canStartComment) setComposerOpen(true); }}
+				>
+					+
+				</button>
+			</Tooltip>
 			{(threads.length > 0 || composerOpen) && (
 				<div className="viewer-text-threads" onClick={e => e.stopPropagation()}>
 					{threads.map(t => (

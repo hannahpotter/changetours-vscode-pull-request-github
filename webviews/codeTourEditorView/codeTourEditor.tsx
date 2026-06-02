@@ -12,6 +12,7 @@ import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import  { getHunkSummary, type ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { addIcon, checkIcon, chevronDownIcon, closeIcon, codeIcon, copilotIcon, diffSingleIcon, editIcon, eyeClosedIcon, eyeIcon, gripperIcon, newCollectionIcon, pinnedIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, syncIcon, terminalIcon, trashIcon, unpinIcon} from '../components/icon';
+import { Tooltip } from './tooltip';
 
 type InsertKind = 'text' | 'code' | 'group';
 
@@ -494,13 +495,14 @@ function DropZoneBlock({
 			>
 				<span>Drop a hunk here</span>
 			</div>
-			<button
-				className="tour-remove-btn tour-text-remove icon-button"
-				title="Remove drop zone"
-				onClick={() => onRemove(node.id)}
-			>
-				{trashIcon}
-			</button>
+			<Tooltip text="Remove drop zone">
+				<button
+					className="tour-remove-btn tour-text-remove icon-button"
+					onClick={() => onRemove(node.id)}
+				>
+					{trashIcon}
+				</button>
+			</Tooltip>
 		</div>
 	);
 }
@@ -806,24 +808,26 @@ function HunkBlock({
 									Auto-updated · pending
 								</span>
 								{isEditMode && onConfirmAutoUpdate && (
-									<button
-										type="button"
-										className="tour-hunk-pending-pill-btn tour-auto-update-confirm"
-										title="Apply this proposed update to the tour and save the file"
-										onClick={() => onConfirmAutoUpdate(realNode.id)}
-									>
-										{checkIcon}
-									</button>
+									<Tooltip text="Apply this proposed update to the tour and save the file">
+										<button
+											type="button"
+											className="tour-hunk-pending-pill-btn tour-auto-update-confirm"
+											onClick={() => onConfirmAutoUpdate(realNode.id)}
+										>
+											{checkIcon}
+										</button>
+									</Tooltip>
 								)}
 								{isEditMode && onDiscardAutoUpdate && (
-									<button
-										type="button"
-										className="tour-hunk-pending-pill-btn tour-auto-update-discard"
-										title="Discard this proposed update; the tour stays unchanged"
-										onClick={() => onDiscardAutoUpdate(realNode.id)}
-									>
-										{closeIcon}
-									</button>
+									<Tooltip text="Discard this proposed update; the tour stays unchanged">
+										<button
+											type="button"
+											className="tour-hunk-pending-pill-btn tour-auto-update-discard"
+											onClick={() => onDiscardAutoUpdate(realNode.id)}
+										>
+											{closeIcon}
+										</button>
+									</Tooltip>
 								)}
 							</span>
 						)}
@@ -840,78 +844,86 @@ function HunkBlock({
 					</div>
 					<div className="tour-hunk-actions">
 						{isEditMode && onRunAssistant && (
-							<button
-								type="button"
-								className="tour-action-btn icon-button tour-assistant-button"
-								title="Draft narration for this hunk with AI"
-								disabled={!!assistantRunning}
-								onClick={() => onRunAssistant('narrateHunk', { hunkId: node.id })}
-							>
-								{sparkleIcon}
-							</button>
+							<Tooltip text="Draft narration for this hunk with AI">
+								<button
+									type="button"
+									className="tour-action-btn icon-button tour-assistant-button"
+									disabled={!!assistantRunning}
+									onClick={() => onRunAssistant('narrateHunk', { hunkId: node.id })}
+								>
+									{sparkleIcon}
+								</button>
+							</Tooltip>
 						)}
 						{highlightEditingEnabled && (
-							<button
-								type="button"
-								className={`tour-action-btn icon-button tour-hunk-highlight-toggle${highlightMode ? ' active' : ''}`}
-								title={highlightMode ? 'Exit highlight mode' : 'Highlight lines (drag in the diff)'}
-								aria-pressed={highlightMode}
-								onClick={() => setHighlightMode(m => !m)}
-							>
-								{editIcon}
-							</button>
+							<Tooltip text={highlightMode ? 'Exit highlight mode' : 'Highlight lines (drag in the diff)'}>
+								<button
+									type="button"
+									className={`tour-action-btn icon-button tour-hunk-highlight-toggle${highlightMode ? ' active' : ''}`}
+									aria-pressed={highlightMode}
+									onClick={() => setHighlightMode(m => !m)}
+								>
+									{editIcon}
+								</button>
+							</Tooltip>
 						)}
 						{isEditMode && (
-							<button
-								type="button"
-								className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.hunk.defaultCollapsed ? ' active' : ''}`}
-								title={node.hunk.defaultCollapsed
-									? "Viewer won't see this hunk by default - click to make viewer see it by default"
-									: 'Viewer sees this hunk by default - click to make viewer not see it by default'}
-								aria-pressed={!!node.hunk.defaultCollapsed}
-								onClick={() => onToggleHunkDefaultCollapsed(node.id)}
-							>
-								{node.hunk.defaultCollapsed ? eyeClosedIcon : eyeIcon}
-							</button>
+							<Tooltip text={node.hunk.defaultCollapsed
+								? "Viewer won't see this hunk by default - click to make viewer see it by default"
+								: 'Viewer sees this hunk by default - click to make viewer not see it by default'}>
+								<button
+									type="button"
+									className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.hunk.defaultCollapsed ? ' active' : ''}`}
+									aria-pressed={!!node.hunk.defaultCollapsed}
+									onClick={() => onToggleHunkDefaultCollapsed(node.id)}
+								>
+									{node.hunk.defaultCollapsed ? eyeClosedIcon : eyeIcon}
+								</button>
+							</Tooltip>
 						)}
 						{isEditMode && isOutdated && !hasPendingUpdate && onTogglePinned && (
-							<button
-								type="button"
-								className={`tour-action-btn icon-button tour-pin-toggle${realNode.hunk.pinned ? ' active' : ''}`}
-								title={realNode.hunk.pinned
-									? 'Stop keeping this hunk as history (re-enable outdated detection for this hunk)'
-									: "Keep this hunk as history (don't flag the tour as outdated for this hunk)"}
-								aria-pressed={!!realNode.hunk.pinned}
-								onClick={() => onTogglePinned(realNode.id)}
-							>
-								{realNode.hunk.pinned ? unpinIcon : pinnedIcon}
-							</button>
+							<Tooltip text={realNode.hunk.pinned
+								? 'Stop keeping this hunk as history (re-enable outdated detection for this hunk)'
+								: "Keep this hunk as history (don't flag the tour as outdated for this hunk)"}>
+								<button
+									type="button"
+									className={`tour-action-btn icon-button tour-pin-toggle${realNode.hunk.pinned ? ' active' : ''}`}
+									aria-pressed={!!realNode.hunk.pinned}
+									onClick={() => onTogglePinned(realNode.id)}
+								>
+									{realNode.hunk.pinned ? unpinIcon : pinnedIcon}
+								</button>
+							</Tooltip>
 						)}
 						{isEditMode && canAutoUpdate && !hasPendingUpdate && onStageAutoUpdate && (
-							<button
-								type="button"
-								className="tour-action-btn icon-button tour-auto-update-stage"
-								title="Stage a proposed update to the current PR patch for this file. Review then Confirm to save, or Undo to discard."
-								onClick={() => onStageAutoUpdate(realNode.id)}
-							>
-								{syncIcon}
-							</button>
+							<Tooltip text="Stage a proposed update to the current PR patch for this file. Review then Confirm to save, or Undo to discard.">
+								<button
+									type="button"
+									className="tour-action-btn icon-button tour-auto-update-stage"
+									onClick={() => onStageAutoUpdate(realNode.id)}
+								>
+									{syncIcon}
+								</button>
+							</Tooltip>
 						)}
 						{/* The standalone "refresh narration" sparkle is gone - the decision is made inside the picker BEFORE staging (see the autoUpdateRefreshNarration toggle). Keeping the option in the picker means the AI only fires when the author explicitly asks for it, and it fires together with the patch stage instead of being a separate manual step after. */}
 						{onOpenDiff && (
-							<button
-								className="tour-action-btn icon-button"
-								disabled={isMismatch}
-								title={isMismatch ? 'Checkout the associated PR to open in file context' : 'Open in file context'}
-								onClick={() => onOpenDiff(node.hunk)}
-							>
-								{diffSingleIcon}
-							</button>
+							<Tooltip text={isMismatch ? 'Checkout the associated PR to open in file context' : 'Open in file context'}>
+								<button
+									className="tour-action-btn icon-button"
+									disabled={isMismatch}
+									onClick={() => onOpenDiff(node.hunk)}
+								>
+									{diffSingleIcon}
+								</button>
+							</Tooltip>
 						)}
 						{isEditMode && (
-							<button className="tour-remove-btn tour-action-btn icon-button" title="Remove hunk" onClick={() => onRemove(node.id)}>
-								{trashIcon}
-							</button>
+							<Tooltip text="Remove hunk">
+								<button className="tour-remove-btn tour-action-btn icon-button" onClick={() => onRemove(node.id)}>
+									{trashIcon}
+								</button>
+							</Tooltip>
 						)}
 					</div>
 				</div>
@@ -932,15 +944,16 @@ function HunkBlock({
 								title="One-line description of this hunk. Pre-filled with the first changed line by default - edit to customize. Leave empty on blur to fall back to the default."
 							/>
 							{onRunAssistant && (
-								<button
-									type="button"
-									className="tour-action-btn icon-button tour-assistant-button tour-hunk-summary-sparkle"
-									title="Draft a one-line summary for this hunk with AI"
-									disabled={!!assistantRunning}
-									onClick={() => onRunAssistant('summarizeHunk', { hunkId: node.id })}
-								>
-									{sparkleIcon}
-								</button>
+								<Tooltip text="Draft a one-line summary for this hunk with AI">
+									<button
+										type="button"
+										className="tour-action-btn icon-button tour-assistant-button tour-hunk-summary-sparkle"
+										disabled={!!assistantRunning}
+										onClick={() => onRunAssistant('summarizeHunk', { hunkId: node.id })}
+									>
+										{sparkleIcon}
+									</button>
+								</Tooltip>
 							)}
 						</div>
 					) : (
@@ -966,17 +979,18 @@ function HunkBlock({
 						</span>
 						<div className="tour-hunk-autoupdate-picker-options">
 							{autoUpdateCandidates.length === 1 ? (
-								<button
-									type="button"
-									className={`tour-action-btn${suggestedAutoUpdateIdx === 0 ? ' tour-action-btn-suggested' : ''}`}
-									title={autoUpdateCandidates[0].patch.split('\n').slice(0, 6).join('\n')}
-									onClick={() => onStageAutoUpdate(realNode.id, 0, autoUpdateRefreshNarration)}
-								>
-									Stage L{autoUpdateCandidates[0].startLine}&ndash;{autoUpdateCandidates[0].endLine}
-								</button>
+								<Tooltip text={autoUpdateCandidates[0].patch.split('\n').slice(0, 6).join('\n')}>
+									<button
+										type="button"
+										className={`tour-action-btn${suggestedAutoUpdateIdx === 0 ? ' tour-action-btn-suggested' : ''}`}
+										onClick={() => onStageAutoUpdate(realNode.id, 0, autoUpdateRefreshNarration)}
+									>
+										Stage L{autoUpdateCandidates[0].startLine}&ndash;{autoUpdateCandidates[0].endLine}
+									</button>
+								</Tooltip>
 							) : (
 								<>
-									{/* Dropdown scales to N candidates without spilling the picker row. The Suggested candidate is preselected so a quick Enter on the Stage button takes the heuristic recommendation. */}
+									{/* Dropdown scales to N candidates without spilling the picker row. The Suggested candidate is preselected so a quick Enter on the Stage button takes the heuristic recommendation. The select keeps its native title - <select> isn't a custom-tooltip use case (the native dropdown's interactions don't suffer the title-cache issue the way action buttons do). */}
 									<select
 										className="tour-hunk-autoupdate-picker-select"
 										value={pickerSelectedIdx}
@@ -989,25 +1003,27 @@ function HunkBlock({
 											</option>
 										))}
 									</select>
-									<button
-										type="button"
-										className="tour-action-btn"
-										title="Stage the selected hunk as the replacement"
-										onClick={() => onStageAutoUpdate(realNode.id, pickerSelectedIdx, autoUpdateRefreshNarration)}
-									>
-										Stage
-									</button>
+									<Tooltip text="Stage the selected hunk as the replacement">
+										<button
+											type="button"
+											className="tour-action-btn"
+											onClick={() => onStageAutoUpdate(realNode.id, pickerSelectedIdx, autoUpdateRefreshNarration)}
+										>
+											Stage
+										</button>
+									</Tooltip>
 								</>
 							)}
 							{onCancelAutoUpdatePick && (
-								<button
-									type="button"
-									className="tour-action-btn"
-									title="Close without picking"
-									onClick={onCancelAutoUpdatePick}
-								>
-									Cancel
-								</button>
+								<Tooltip text="Close without picking">
+									<button
+										type="button"
+										className="tour-action-btn"
+										onClick={onCancelAutoUpdatePick}
+									>
+										Cancel
+									</button>
+								</Tooltip>
 							)}
 						</div>
 						{onRunAssistant && (
@@ -1113,13 +1129,14 @@ function TextBlock({
 					placeholder="Type markdown text here…"
 					rows={1}
 				/>
-				<button
-					className="tour-remove-btn tour-action-btn icon-button"
-					title="Remove text block"
-					onMouseDown={e => { e.preventDefault(); onRemove(node.id); }}
-				>
-					{trashIcon}
-				</button>
+				<Tooltip text="Remove text block">
+					<button
+						className="tour-remove-btn tour-action-btn icon-button"
+						onMouseDown={e => { e.preventDefault(); onRemove(node.id); }}
+					>
+						{trashIcon}
+					</button>
+				</Tooltip>
 			</div>
 		);
 	}
@@ -1132,13 +1149,14 @@ function TextBlock({
 				dangerouslySetInnerHTML={{ __html: renderedHtml }}
 			/>
 			{isEditMode && (
-				<button
-					className="tour-remove-btn tour-action-btn icon-button"
-					title="Remove text block"
-					onClick={() => onRemove(node.id)}
-				>
-					{trashIcon}
-				</button>
+				<Tooltip text="Remove text block">
+					<button
+						className="tour-remove-btn tour-action-btn icon-button"
+						onClick={() => onRemove(node.id)}
+					>
+						{trashIcon}
+					</button>
+				</Tooltip>
 			)}
 		</div>
 	);
@@ -1331,33 +1349,37 @@ function GroupBlock({
 					<span className="tour-group-title-readonly">{node.title || 'Untitled Section'}</span>
 				)}
 				{isEditMode && (
-					<button
-						type="button"
-						className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.defaultCollapsed ? ' active' : ''}`}
-						title={node.defaultCollapsed
-							? "Viewer won't see this section by default - click to make viewer see it by default"
-							: 'Viewer sees this section by default - click to make viewer not see it by default'}
-						aria-pressed={!!node.defaultCollapsed}
-						onClick={() => onToggleDefaultCollapsed(node.id)}
-					>
-						{node.defaultCollapsed ? eyeClosedIcon : eyeIcon}
-					</button>
+					<Tooltip text={node.defaultCollapsed
+						? "Viewer won't see this section by default - click to make viewer see it by default"
+						: 'Viewer sees this section by default - click to make viewer not see it by default'}>
+						<button
+							type="button"
+							className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.defaultCollapsed ? ' active' : ''}`}
+							aria-pressed={!!node.defaultCollapsed}
+							onClick={() => onToggleDefaultCollapsed(node.id)}
+						>
+							{node.defaultCollapsed ? eyeClosedIcon : eyeIcon}
+						</button>
+					</Tooltip>
 				)}
 				{isEditMode && onRunAssistant && (
-					<button
-						type="button"
-						className="tour-action-btn icon-button tour-assistant-button"
-						title="Improve this section's narration with AI"
-						disabled={!!assistantRunning}
-						onClick={() => onRunAssistant('improveSection', { groupId: node.id })}
-					>
-						{sparkleIcon}
-					</button>
+					<Tooltip text="Improve this section's narration with AI">
+						<button
+							type="button"
+							className="tour-action-btn icon-button tour-assistant-button"
+							disabled={!!assistantRunning}
+							onClick={() => onRunAssistant('improveSection', { groupId: node.id })}
+						>
+							{sparkleIcon}
+						</button>
+					</Tooltip>
 				)}
 				{isEditMode && (
-					<button className="tour-remove-btn icon-button" title="Remove section" onClick={() => onRemove(node.id)}>
-						{trashIcon}
-					</button>
+					<Tooltip text="Remove section">
+						<button className="tour-remove-btn icon-button" onClick={() => onRemove(node.id)}>
+							{trashIcon}
+						</button>
+					</Tooltip>
 				)}
 			</div>
 			{!collapsed && (
@@ -1421,10 +1443,16 @@ function GroupBlock({
 					))}
 					{isEditMode && (
 						<div className="tour-group-actions">
-							<button className="tour-add-btn icon-button" title="Add text" onClick={() => onAddText(node.id)}>{symbolStringIcon}</button>
-							<button className="tour-add-btn icon-button" title="Add diff" onClick={() => onAddCode(node.id)}>{codeIcon}</button>
+							<Tooltip text="Add text">
+								<button className="tour-add-btn icon-button" onClick={() => onAddText(node.id)}>{symbolStringIcon}</button>
+							</Tooltip>
+							<Tooltip text="Add diff">
+								<button className="tour-add-btn icon-button" onClick={() => onAddCode(node.id)}>{codeIcon}</button>
+							</Tooltip>
 							{node.level < 6 && (
-								<button className="tour-add-btn icon-button" title="Add section" onClick={() => onAddGroup(node.id)}>{newCollectionIcon}</button>
+								<Tooltip text="Add section">
+									<button className="tour-add-btn icon-button" onClick={() => onAddGroup(node.id)}>{newCollectionIcon}</button>
+								</Tooltip>
 							)}
 						</div>
 					)}
@@ -1696,49 +1724,53 @@ function InsertGap({
 			className={`tour-insert-gap${open ? ' tour-insert-gap-open' : ''}`}
 			onClick={e => e.stopPropagation()}
 		>
-			<button
-				type="button"
-				className="tour-insert-gap-btn"
-				title="Insert element here"
-				aria-haspopup="menu"
-				aria-expanded={open}
-				onClick={e => {
-					e.stopPropagation();
-					setOpen(v => !v);
-				}}
-			>
-				{addIcon}
-			</button>
+			<Tooltip text="Insert element here">
+				<button
+					type="button"
+					className="tour-insert-gap-btn"
+					aria-haspopup="menu"
+					aria-expanded={open}
+					onClick={e => {
+						e.stopPropagation();
+						setOpen(v => !v);
+					}}
+				>
+					{addIcon}
+				</button>
+			</Tooltip>
 			{open && (
 				<div className="tour-insert-gap-menu" role="menu">
-					<button
-						type="button"
-						title="Add text"
-						className="tour-add-btn icon-button"
-						role="menuitem"
-						onClick={() => select('text')}
-					>
-						{symbolStringIcon}
-					</button>
-					<button
-						type="button"
-						title="Add diff"
-						className="tour-add-btn icon-button"
-						role="menuitem"
-						onClick={() => select('code')}
-					>
-						{codeIcon}
-					</button>
-					{parentLevel < 6 && (
+					<Tooltip text="Add text">
 						<button
 							type="button"
-							title="Add section"
 							className="tour-add-btn icon-button"
 							role="menuitem"
-							onClick={() => select('group')}
+							onClick={() => select('text')}
 						>
-							{newCollectionIcon}
+							{symbolStringIcon}
 						</button>
+					</Tooltip>
+					<Tooltip text="Add diff">
+						<button
+							type="button"
+							className="tour-add-btn icon-button"
+							role="menuitem"
+							onClick={() => select('code')}
+						>
+							{codeIcon}
+						</button>
+					</Tooltip>
+					{parentLevel < 6 && (
+						<Tooltip text="Add section">
+							<button
+								type="button"
+								className="tour-add-btn icon-button"
+								role="menuitem"
+								onClick={() => select('group')}
+							>
+								{newCollectionIcon}
+							</button>
+						</Tooltip>
 					)}
 				</div>
 			)}
@@ -3009,14 +3041,15 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					<span className="tour-assistant-streaming-icon">{sparkleIcon}</span>
 					<span className="tour-assistant-streaming-label">{assistantStatus.label ?? 'Working…'}</span>
 					{onCancelAssistant && (
-						<button
-							type="button"
-							className="tour-action-btn icon-button tour-assistant-stop-button"
-							title="Stop the AI assistant"
-							onClick={onCancelAssistant}
-						>
-							{stopCircleIcon}
-						</button>
+						<Tooltip text="Stop the AI assistant">
+							<button
+								type="button"
+								className="tour-action-btn icon-button tour-assistant-stop-button"
+								onClick={onCancelAssistant}
+							>
+								{stopCircleIcon}
+							</button>
+						</Tooltip>
 					)}
 				</div>
 			)}
@@ -3024,14 +3057,15 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				<div className="tour-assistant-error" role="alert">
 					<span>⚠️ {assistantStatus.error}</span>
 					{onDismissAssistantError && (
-						<button
-							type="button"
-							className="tour-action-btn icon-button"
-							title="Dismiss"
-							onClick={onDismissAssistantError}
-						>
-							×
-						</button>
+						<Tooltip text="Dismiss">
+							<button
+								type="button"
+								className="tour-action-btn icon-button"
+								onClick={onDismissAssistantError}
+							>
+								×
+							</button>
+						</Tooltip>
 					)}
 				</div>
 			)}
@@ -3059,30 +3093,33 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					</span>
 					<div className="tour-pr-warning-actions">
 						{aiAddedNodeIds.size > 0 && (
+							<Tooltip text="Scroll to the next AI-added node">
+								<button
+									className="tour-action-btn"
+									onClick={handleShowNextAiChange}
+								>
+									Next ({(aiNavIdx % Math.max(1, aiAddedNodeIdsInDocOrder.length)) + 1}/{aiAddedNodeIdsInDocOrder.length})
+								</button>
+							</Tooltip>
+						)}
+						<Tooltip text="Keep all AI changes; dismiss the highlight and review banner.">
 							<button
 								className="tour-action-btn"
-								onClick={handleShowNextAiChange}
-								title="Scroll to the next AI-added node"
+								onClick={handleAcceptAiChanges}
+								disabled={!!assistantStatus?.running}
 							>
-								Next ({(aiNavIdx % Math.max(1, aiAddedNodeIdsInDocOrder.length)) + 1}/{aiAddedNodeIdsInDocOrder.length})
+								Accept
 							</button>
-						)}
-						<button
-							className="tour-action-btn"
-							onClick={handleAcceptAiChanges}
-							title="Keep all AI changes; dismiss the highlight and review banner."
-							disabled={!!assistantStatus?.running}
-						>
-							Accept
-						</button>
-						<button
-							className="tour-action-btn"
-							onClick={handleRevertAiChanges}
-							title="Roll the doc back to the state it was in before the AI started. Any pending patch updates are dropped too."
-							disabled={!!assistantStatus?.running}
-						>
-							Revert all
-						</button>
+						</Tooltip>
+						<Tooltip text="Roll the doc back to the state it was in before the AI started. Any pending patch updates are dropped too.">
+							<button
+								className="tour-action-btn"
+								onClick={handleRevertAiChanges}
+								disabled={!!assistantStatus?.running}
+							>
+								Revert all
+							</button>
+						</Tooltip>
 					</div>
 				</div>
 			)}
@@ -3102,54 +3139,65 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					<div className="tour-pr-warning-actions">
 						{pendingUpdates.size > 0 && (
 							<>
-								<button className="tour-action-btn" onClick={handleConfirmAllUpdates} title="Apply all staged updates and save the file">
-									Confirm all
-								</button>
-								<button className="tour-action-btn" onClick={handleDiscardAllUpdates} title="Drop all staged updates (the doc is not modified)">
-									Discard all
-								</button>
+								<Tooltip text="Apply all staged updates and save the file">
+									<button className="tour-action-btn" onClick={handleConfirmAllUpdates}>
+										Confirm all
+									</button>
+								</Tooltip>
+								<Tooltip text="Drop all staged updates (the doc is not modified)">
+									<button className="tour-action-btn" onClick={handleDiscardAllUpdates}>
+										Discard all
+									</button>
+								</Tooltip>
 							</>
 						)}
 						{autoUpdateUnambiguousNodeIds.size > 0 && (
-							<button className="tour-action-btn" onClick={() => handleUpdateAllUnambiguous()} title="Stage proposed updates for every drifted hunk whose file has exactly one current PR hunk. Files with multiple hunks need the per-hunk picker. Narration is not refreshed - use Update with AI for that.">
-								Update {autoUpdateUnambiguousNodeIds.size === outdatedUnpinnedCount ? 'all' : autoUpdateUnambiguousNodeIds.size}
-							</button>
+							<Tooltip text="Stage proposed updates for every drifted hunk whose file has exactly one current PR hunk. Files with multiple hunks need the per-hunk picker. Narration is not refreshed - use Update with AI for that.">
+								<button className="tour-action-btn" onClick={() => handleUpdateAllUnambiguous()}>
+									Update {autoUpdateUnambiguousNodeIds.size === outdatedUnpinnedCount ? 'all' : autoUpdateUnambiguousNodeIds.size}
+								</button>
+							</Tooltip>
 						)}
 						{isTourOutdated && onRunAssistant && (
-							<button
-								className="tour-banner-assistant-button"
-								disabled={!!assistantStatus?.running}
-								onClick={handleUpdateWithAI}
-								title="Update with AI - stage every unambiguous patch swap (review them in the Pending pills) and run the assistant to refresh narration and handle ambiguous hunks. Patch swaps stay pending until you click the check button; narration applies directly."
-								aria-label="Update with AI"
-							>
-								{sparkleIcon}
-							</button>
+							<Tooltip text="Update with AI - stage every unambiguous patch swap (review them in the Pending pills) and run the assistant to refresh narration and handle ambiguous hunks. Patch swaps stay pending until you click the check button; narration applies directly.">
+								<button
+									className="tour-banner-assistant-button"
+									disabled={!!assistantStatus?.running}
+									onClick={handleUpdateWithAI}
+									aria-label="Update with AI"
+								>
+									{sparkleIcon}
+								</button>
+							</Tooltip>
 						)}
 						{isTourOutdated && onUpdateWithClaudeCode && (
-							<button
-								className="tour-banner-assistant-button"
-								onClick={onUpdateWithClaudeCode}
-								title="Update with Claude CLI - open a terminal seeded with an update-this-tour prompt. The change-tour skill is installed at .claude/skills/change-tour/ if it isn't already."
-								aria-label="Update with Claude CLI"
-							>
-								{terminalIcon}
-							</button>
+							<Tooltip text="Update with Claude CLI - open a terminal seeded with an update-this-tour prompt. The change-tour skill is installed at .claude/skills/change-tour/ if it isn't already.">
+								<button
+									className="tour-banner-assistant-button"
+									onClick={onUpdateWithClaudeCode}
+									aria-label="Update with Claude CLI"
+								>
+									{terminalIcon}
+								</button>
+							</Tooltip>
 						)}
 						{isTourOutdated && onUpdateWithCopilotChat && (
-							<button
-								className="tour-banner-assistant-button"
-								onClick={onUpdateWithCopilotChat}
-								title="Update with @change-tour - open Copilot Chat with `@change-tour /update` pre-loaded so you can review and submit the update request."
-								aria-label="Update with Copilot Chat"
-							>
-								{copilotIcon}
-							</button>
+							<Tooltip text="Update with @change-tour - open Copilot Chat with `@change-tour /update` pre-loaded so you can review and submit the update request.">
+								<button
+									className="tour-banner-assistant-button"
+									onClick={onUpdateWithCopilotChat}
+									aria-label="Update with Copilot Chat"
+								>
+									{copilotIcon}
+								</button>
+							</Tooltip>
 						)}
 						{onRefreshPrState && (
-							<button className="tour-action-btn" onClick={onRefreshPrState} title="Re-fetch the PR's current state">
-								Refresh
-							</button>
+							<Tooltip text="Re-fetch the PR's current state">
+								<button className="tour-action-btn" onClick={onRefreshPrState}>
+									Refresh
+								</button>
+							</Tooltip>
 						)}
 					</div>
 				</div>
@@ -3234,22 +3282,29 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				))}
 				{isEditMode && (
 					<div className="tour-root-actions">
-						<button className="tour-add-btn icon-button" title="Add text" onClick={() => handleAddText()}>{symbolStringIcon}</button>
-						<button className="tour-add-btn icon-button" title="Add diff" onClick={() => handleAddCode()}>{codeIcon}</button>
-						<button className="tour-add-btn icon-button" title="Add section" onClick={() => handleAddGroup()}>{newCollectionIcon}</button>
+						<Tooltip text="Add text">
+							<button className="tour-add-btn icon-button" onClick={() => handleAddText()}>{symbolStringIcon}</button>
+						</Tooltip>
+						<Tooltip text="Add diff">
+							<button className="tour-add-btn icon-button" onClick={() => handleAddCode()}>{codeIcon}</button>
+						</Tooltip>
+						<Tooltip text="Add section">
+							<button className="tour-add-btn icon-button" onClick={() => handleAddGroup()}>{newCollectionIcon}</button>
+						</Tooltip>
 						{onRunAssistant && (
-							<button
-								className="tour-add-btn icon-button tour-assistant-button"
-								title={
-									!doc.prNumber
-										? 'Bind the tour to a pull request (via "Pull Request: New Change Tour") to enable AI generation'
-										: 'Auto-generate the full Change Tour with AI'
-								}
-								disabled={!doc.prNumber || !!assistantStatus?.running}
-								onClick={() => onRunAssistant('autoGenerate')}
-							>
-								{sparkleIcon}
-							</button>
+							<Tooltip text={
+								!doc.prNumber
+									? 'Bind the tour to a pull request (via "Pull Request: New Change Tour") to enable AI generation'
+									: 'Auto-generate the full Change Tour with AI'
+							}>
+								<button
+									className="tour-add-btn icon-button tour-assistant-button"
+									disabled={!doc.prNumber || !!assistantStatus?.running}
+									onClick={() => onRunAssistant('autoGenerate')}
+								>
+									{sparkleIcon}
+								</button>
+							</Tooltip>
 						)}
 					</div>
 				)}

@@ -18,8 +18,10 @@ import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
  *     can also run the same command from any shell outside VS Code.
  *   - `pr.updateTourWithClaudeCode` - same setup, but seeds the terminal with
  *     an "update this tour to match the PR's current state" prompt instead of
- *     the open-ended edit prompt. Surfaced from the outdated-tour banner and
- *     the `.changetour.md` editor title menu.
+ *     the open-ended edit prompt. Surfaced from the outdated-tour banner (the
+ *     "Update with Claude CLI" button) and the Command Palette - intentionally
+ *     not in the editor title menu, since the banner is the right entry point
+ *     when the tour is actually outdated.
  *   - `pr.setAnthropicApiKey` - stores an Anthropic API key in SecretStorage
  *     for the AnthropicProvider fallback.
  */

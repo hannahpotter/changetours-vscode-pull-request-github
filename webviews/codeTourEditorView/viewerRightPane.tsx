@@ -13,6 +13,7 @@ import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import { getHunkSummary, ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { chevronDownIcon, diffSingleIcon } from '../components/icon';
+import { Tooltip } from './tooltip';
 
 export interface CommentTarget {
 	line: number;
@@ -193,14 +194,15 @@ function FilterStatusBar({ label, shownHunkCount, totalHunkCount, shownFileCount
 					{shownFileCount} of {totalFileCount} {pluralFiles(totalFileCount)}
 				</span>
 			</div>
-			<button
-				type="button"
-				className="viewer-filter-status-clear secondary"
-				onClick={onClearFilter}
-				title="Clear the section filter and show all hunks"
-			>
-				Show all
-			</button>
+			<Tooltip text="Clear the section filter and show all hunks">
+				<button
+					type="button"
+					className="viewer-filter-status-clear secondary"
+					onClick={onClearFilter}
+				>
+					Show all
+				</button>
+			</Tooltip>
 		</div>
 	);
 }
@@ -275,22 +277,23 @@ function FileGroupBlock({
 				title={isFileCollapsed ? `Click to expand ${file}` : file}
 				onClick={handleHeaderClick}
 			>
-				<span
-					role="button"
-					tabIndex={0}
-					className={`expand-icon icon-button viewer-file-collapse-toggle${isFileCollapsed ? ' closed' : ''}`}
-					title={isFileCollapsed ? 'Expand file' : 'Collapse file'}
-					onClick={e => { e.stopPropagation(); onToggleFileCollapsed(file); }}
-					onKeyDown={e => {
-						if (e.key === 'Enter' || e.key === ' ') {
-							e.preventDefault();
-							e.stopPropagation();
-							onToggleFileCollapsed(file);
-						}
-					}}
-				>
-					{chevronDownIcon}
-				</span>
+				<Tooltip text={isFileCollapsed ? 'Expand file' : 'Collapse file'}>
+					<span
+						role="button"
+						tabIndex={0}
+						className={`expand-icon icon-button viewer-file-collapse-toggle${isFileCollapsed ? ' closed' : ''}`}
+						onClick={e => { e.stopPropagation(); onToggleFileCollapsed(file); }}
+						onKeyDown={e => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								e.stopPropagation();
+								onToggleFileCollapsed(file);
+							}
+						}}
+					>
+						{chevronDownIcon}
+					</span>
+				</Tooltip>
 				<span className="viewer-file-group-name">{file}</span>
 				<span className="viewer-file-group-count">{countText}</span>
 			</div>
@@ -473,22 +476,23 @@ function HunkCard({ diffLayout, headSha, isOutdated, node, threads, associated, 
 				{/* Row 1: chevron, L#-# + ref (no file - the file is already in the
 					file group header in the left pane), actions. */}
 				<div className="viewer-hunk-header-row viewer-hunk-header-row-meta">
-					<span
-						role="button"
-						tabIndex={0}
-						className={`expand-icon icon-button viewer-hunk-collapse-toggle${bodyCollapsed ? ' closed' : ''}`}
-						title={bodyCollapsed ? 'Expand hunk' : 'Collapse hunk'}
-						onClick={e => { e.stopPropagation(); onToggleCollapsed(hunkKey); }}
-						onKeyDown={e => {
-							if (e.key === 'Enter' || e.key === ' ') {
-								e.preventDefault();
-								e.stopPropagation();
-								onToggleCollapsed(hunkKey);
-							}
-						}}
-					>
-						{chevronDownIcon}
-					</span>
+					<Tooltip text={bodyCollapsed ? 'Expand hunk' : 'Collapse hunk'}>
+						<span
+							role="button"
+							tabIndex={0}
+							className={`expand-icon icon-button viewer-hunk-collapse-toggle${bodyCollapsed ? ' closed' : ''}`}
+							onClick={e => { e.stopPropagation(); onToggleCollapsed(hunkKey); }}
+							onKeyDown={e => {
+								if (e.key === 'Enter' || e.key === ' ') {
+									e.preventDefault();
+									e.stopPropagation();
+									onToggleCollapsed(hunkKey);
+								}
+							}}
+						>
+							{chevronDownIcon}
+						</span>
+					</Tooltip>
 					<div className="viewer-hunk-info">
 						<span className="viewer-hunk-lines">L{startLine}&ndash;{endLine}</span>
 						{headShaShort && (
@@ -505,30 +509,32 @@ function HunkCard({ diffLayout, headSha, isOutdated, node, threads, associated, 
 						</span>
 					)}
 					</div>
-					<button
-						type="button"
-						className="viewer-hunk-action icon-button"
-						title={openDiffDisabled ? openDiffDisabledReason ?? 'Open in file context' : 'Open in file context'}
-						aria-label="Open in file context"
-						disabled={openDiffDisabled}
-						onClick={e => { e.stopPropagation(); onOpenDiff(node.hunk); }}
-					>
-						{diffSingleIcon}
-					</button>
-					<label
-						className={`viewer-viewed-checkbox${isViewed ? ' is-viewed' : ''}`}
-						title={isViewed ? 'Mark hunk as unviewed' : 'Mark hunk as viewed'}
-						onClick={e => e.stopPropagation()}
-					>
-						<span className="checkbox-wrapper">
-							<input
-								type="checkbox"
-								checked={isViewed}
-								onChange={() => onToggleViewed(hunkKey)}
-							/>
-						</span>
-						<span className="viewer-viewed-checkbox-label">Viewed</span>
-					</label>
+					<Tooltip text={openDiffDisabled ? openDiffDisabledReason ?? 'Open in file context' : 'Open in file context'}>
+						<button
+							type="button"
+							className="viewer-hunk-action icon-button"
+							aria-label="Open in file context"
+							disabled={openDiffDisabled}
+							onClick={e => { e.stopPropagation(); onOpenDiff(node.hunk); }}
+						>
+							{diffSingleIcon}
+						</button>
+					</Tooltip>
+					<Tooltip text={isViewed ? 'Mark hunk as unviewed' : 'Mark hunk as viewed'}>
+						<label
+							className={`viewer-viewed-checkbox${isViewed ? ' is-viewed' : ''}`}
+							onClick={e => e.stopPropagation()}
+						>
+							<span className="checkbox-wrapper">
+								<input
+									type="checkbox"
+									checked={isViewed}
+									onChange={() => onToggleViewed(hunkKey)}
+								/>
+							</span>
+							<span className="viewer-viewed-checkbox-label">Viewed</span>
+						</label>
+					</Tooltip>
 				</div>
 				{/* Row 2: read-only summary text. */}
 				<div className="viewer-hunk-header-row viewer-hunk-header-row-summary">

@@ -3161,11 +3161,6 @@
 					"when": "resourceFilename =~ /\\.changetour\\.md$/ && config.changeTour.assistant.enabled"
 				},
 				{
-					"command": "pr.updateTourWithClaudeCode",
-					"group": "navigation",
-					"when": "resourceFilename =~ /\\.changetour\\.md$/ && config.changeTour.assistant.enabled"
-				},
-				{
 					"command": "review.openFile",
 					"group": "navigation",
 					"when": "resourceScheme =~ /^review$/ && isInDiffEditor"

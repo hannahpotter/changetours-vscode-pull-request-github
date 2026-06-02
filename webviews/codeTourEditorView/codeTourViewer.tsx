@@ -20,6 +20,7 @@ import {
 	type PrState,
 } from './viewerModel';
 import { type CommentTarget, ViewerRightPane } from './viewerRightPane';
+import { Tooltip } from './tooltip';
 import { DiffSide, type IComment, type IReviewThread } from '../../src/common/comment';
 import type { CodeTourDocument, HunkReference, TourGroupNode, TourNode, TourTextNode } from '../../src/github/codeTourMarkdown';
 
@@ -685,9 +686,11 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 					<div className="tour-pr-warning-actions">
 						{/* View mode is read-only: the Outdated banner stays informational. The Claude CLI / @change-tour / "Update with AI" actions all mutate the tour file, so they only render in edit mode (CodeTourEditor). */}
 						{onRefreshPrState && (
-							<button className="tour-action-btn" onClick={onRefreshPrState} title="Re-fetch the PR's current state">
-								Refresh
-							</button>
+							<Tooltip text="Re-fetch the PR's current state">
+								<button className="tour-action-btn" onClick={onRefreshPrState}>
+									Refresh
+								</button>
+							</Tooltip>
 						)}
 					</div>
 				</div>
