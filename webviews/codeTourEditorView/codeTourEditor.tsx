@@ -1867,9 +1867,9 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		};
 
 		const handleDragOver = (e: DragEvent) => {
-			const rect = container
+			const rect: { top: number; bottom: number } = container
 				? container.getBoundingClientRect()
-				: { top: 0, bottom: window.innerHeight } as DOMRect;
+				: { top: 0, bottom: window.innerHeight };
 			const top = rect.top;
 			const bottom = rect.bottom;
 			const y = e.clientY;
@@ -2298,53 +2298,6 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 	}, [pendingUpdates]);
 
 	const handleDiscardAllUpdates = useCallback(() => setPendingUpdates(new Map()), []);
-
-	// Ordered list of pending-update node IDs in document order. Drives the
-	// banner's "Show next pending" navigation and lets the cycle move through
-	// updates in a predictable, top-to-bottom order regardless of the order
-	// the user staged them.
-	const pendingNodeIdsInDocOrder = useMemo(() => {
-		if (pendingUpdates.size === 0) {
-			return [] as string[];
-		}
-		const ids: string[] = [];
-		const walk = (nodes: EditorNode[]) => {
-			for (const node of nodes) {
-				if (node.type === 'hunk' && pendingUpdates.has(node.id)) {
-					ids.push(node.id);
-				} else if (node.type === 'group') {
-					walk(node.children);
-				}
-			}
-		};
-		walk(doc.children);
-		return ids;
-	}, [doc, pendingUpdates]);
-
-	// Cycle pointer for the "Show next pending" button. Resets when the set of
-	// pending IDs changes (e.g. after a Confirm all or a stage).
-	const pendingNavIdxRef = useRef(0);
-	const [pendingNavLabelIdx, setPendingNavLabelIdx] = useState(0);
-	useEffect(() => {
-		pendingNavIdxRef.current = 0;
-		setPendingNavLabelIdx(0);
-	}, [pendingUpdates]);
-
-	const handleShowNextPendingUpdate = useCallback(() => {
-		if (pendingNodeIdsInDocOrder.length === 0) {
-			return;
-		}
-		const idx = pendingNavIdxRef.current % pendingNodeIdsInDocOrder.length;
-		const targetId = pendingNodeIdsInDocOrder[idx];
-		pendingNavIdxRef.current = (idx + 1) % pendingNodeIdsInDocOrder.length;
-		setPendingNavLabelIdx(pendingNavIdxRef.current);
-		const el = document.getElementById(`node-${targetId}`);
-		if (el) {
-			el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-			el.classList.add('tour-node-flash');
-			setTimeout(() => el.classList.remove('tour-node-flash'), 1500);
-		}
-	}, [pendingNodeIdsInDocOrder]);
 
 	// Bulk stage every unambiguously updatable hunk in one shot. Skips hunks
 	// that are pinned, already pending, or whose file has multiple current PR

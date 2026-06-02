@@ -365,8 +365,8 @@ class GetDriftReportTool implements vscode.LanguageModelTool<GetDriftReportParam
 
 	async prepareInvocation(): Promise<vscode.PreparedToolInvocation> {
 		return {
-			invocationMessage: vscode.l10n.t('Checking which Change Tour hunks have drifted from the PR'),
-			pastTenseMessage: vscode.l10n.t('Checked Change Tour drift against the PR'),
+			invocationMessage: vscode.l10n.t('Checking which Change Tour hunks have drifted from the pull request'),
+			pastTenseMessage: vscode.l10n.t('Checked Change Tour drift against the pull request'),
 		};
 	}
 
