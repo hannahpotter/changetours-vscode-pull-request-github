@@ -5,6 +5,7 @@ The user wants you to improve the current tour. The user's prompt may include a 
 	• Add highlights to large hunks where a specific sub-range is the point
 	• Add a `summary` (via changeTour_setHunkSummary) to long hunks that don't have one, so readers see an informative one-liner in the hunk header instead of the generic auto-fallback (the first changed line)
 	• Collapse runs of one-narration-per-hunk into a single intro text node covering a group of related hunks
+	• Conversely, if a long section reads as one undifferentiated block of hunks but actually pivots between sub-themes, add a short mid-section text node at the pivot point so the section becomes intro-paragraph -> hunks -> pivot paragraph -> more hunks. Only do this when the pivot is real - don't add filler prose
 	• Add a missing wrap-up section
 	• Suggest (in chat, not via tools) which hunks could be removed or regrouped - propose, then call tools only with user confirmation
 

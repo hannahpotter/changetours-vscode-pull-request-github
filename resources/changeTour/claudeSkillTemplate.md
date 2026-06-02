@@ -124,7 +124,7 @@ Whether you bootstrapped the tour or are editing an existing one, **run the pref
 
 2. **Cover every hunk.** Read the PR diff with `gh pr diff <num>` (or, for an exact view, read the file directly). Group hunks into 2-5 logical sections that match the PR description. Mechanical hunks (whitespace, generated files, trivial reformats) go into a single trailing section titled **Miscellaneous** with one short text node explaining the section groups low-substance changes - do not narrate them individually.
 
-3. **Group narration.** A short text node + multiple hunks underneath it is the typical shape. Avoid writing a separate text node for every hunk in a tight group - long stretches of narration-hunk-narration-hunk are bad UX. Prefer one short text node per logical change, even if that change spans multiple hunks.
+3. **Group narration.** Prefer one short text node per logical change, even if that change spans multiple hunks. Avoid writing a separate text node for every individual hunk - long stretches of narration-hunk-narration-hunk are bad UX. Within a section, either shape is fine: (a) one intro text node followed by all the hunks underneath it (use this when the section is one coherent change); or (b) interleaved sub-groups - intro paragraph, a few related hunks, a second short paragraph that pivots to the next sub-theme, a few more hunks, and so on (use this when the section genuinely spans multiple sub-themes that read better with a pivot sentence between them than as one undifferentiated block). Each mid-section paragraph must mark a real shift; never add one just to gloss a single hunk.
 
 4. **Hunk body must include the full patch.** The body inside the ```diff fence is the raw patch text. It MUST begin with an `@@ -A,B +C,D @@` header. The validator (next section) cross-checks this against the live PR diff.
 
@@ -211,7 +211,7 @@ If that exits non-zero, address the reported uncovered hunks before declaring do
 
 - Open with a section that orients the reader on what the PR is about, drawing on the PR body.
 - Group related changes under descriptive headings ("Data model", "API surface", "Tests" - pick whatever matches the PR's structure).
-- One short text node per logical change, even if it spans multiple hunks.
+- One short text node per logical change, even if it spans multiple hunks. Within a section, default to one intro text node + all the hunks underneath; if the section genuinely pivots between sub-themes, interleave a second short paragraph at the pivot point.
 - Hunks that are mechanical go into a single trailing **Miscellaneous** section.
 - Narration explains WHY, not WHAT - the diff already shows what changed.
 - Run the validator after each significant edit.
