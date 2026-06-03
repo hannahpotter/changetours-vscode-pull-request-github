@@ -3119,7 +3119,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			)}
 			{isMismatch && (
 				<div className="tour-pr-warning">
-					<span>This Change Tour belongs to PR #{doc.prNumber}. "GoTo Diff" is unavailable until the PR is checked out.</span>
+					<span>This Change Tour belongs to PR #{doc.prNumber}. "Open in file context" is unavailable until the PR is checked out.</span>
 					{onCheckoutPR && (
 						<button className="tour-action-btn" onClick={onCheckoutPR}>
 							Checkout PR

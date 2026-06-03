@@ -7,6 +7,7 @@ import * as marked from 'marked';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { InlineCommentComposer } from './inlineCommentComposer';
 import { InlineCommentThread } from './inlineCommentThread';
+import { Tooltip } from './tooltip';
 import { descendantHunkKeys, isSectionFullyViewed, isSectionPartiallyViewed } from './viewerModel';
 import type { IReviewThread } from '../../src/common/comment';
 import type {
@@ -16,7 +17,6 @@ import type {
 	TourTextNode,
 } from '../../src/github/codeTourMarkdown';
 import { chevronDownIcon } from '../components/icon';
-import { Tooltip } from './tooltip';
 
 marked.setOptions({ breaks: true });
 

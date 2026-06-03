@@ -6,12 +6,10 @@ Every valid `.changetour.md` file has three parts.
 
 ```
 ---
-schemaVersion: 1 <used for schema mitgrations - currently must be 1>
-isPR: true
+schemaVersion: 1 <used for mitgrations - currently must be 1>
 prNumber: <integer>
 prOwner: <github owner>
 prRepo: <github repo>
-baseRef: <base branch name>
 baseSha: <PR base commit SHA at tour-author time>
 headSha: <PR head commit SHA at tour-author time>
 ---
@@ -27,9 +25,9 @@ headSha: <PR head commit SHA at tour-author time>
 
 ````
 <details open>
-<summary>One-line summary</summary>
+<summary><code>path</code> · One-line summary</summary> (with <code>old</code> → <code>new</code> for renames)
 
-<!-- changetour:hunk file="repo/relative/path" [previousFile="old/path"] [highlights="new:14-18,old:22-25"] [baseBlob="<git blob SHA>"] -->
+<!-- changetour:hunk file="repo/relative/path" [previousFile="old/path"] [highlights="new:14-18,old:22-25"] [summary="authored one-line summary to override auto-fallback"] [baseBlob="<git blob SHA>"] -->
 
 ```diff
 @@ -A,B +C,D @@
@@ -44,6 +42,6 @@ Notes on the format:
 - The `<!-- changetour:hunk … -->` comment is the canonical machine-readable metadata; it's invisible in every renderer.
 	- Only `file=` is required.
 	- `previousFile` is used to specify the old file path if the file was moved.
-	- `highlights` is used to bring attention to particular lines of code in the diff. `new` is used to refer to the modified line numbers and `old` is used to refere to the original line numbers of the diff.
-	- `baseBlob` is
-- Blank lines between `<details>` / `<summary>` / metadata comment / ```diff fence are required so GitHub renders the markdown body inside the HTML correctly.
+	- `highlights` is used to bring attention to particular lines of code in the diff. `new` is used to refer to the modified line numbers and `old` is used to refer to the original line numbers of the diff.
+	- `baseBlob` is used for drift detection.
+- Blank lines between `<details>` / `<summary>` / metadata comment / ```diff fence are required so GitHub renders the markdown body inside the HTML correctly. The <summary> is to improve default rendering of Change Tour markdown in GitHub.
