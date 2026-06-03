@@ -19,6 +19,7 @@ import {
 	TourTextNode,
 } from '../../github/codeTourMarkdown';
 import { appendNodeToGroupEnd, extractNodeById, insertNodeRelative } from '../../github/codeTourTreeHelpers';
+import { detectRateLimit, formatRateLimitMessage } from '../../github/rateLimitError';
 import { RepositoriesManager } from '../../github/repositoriesManager';
 
 /* ----- Shared types --------------------------------------- */
@@ -42,6 +43,28 @@ function getActiveTourDocument(): vscode.TextDocument {
 		throw new Error('No Change Tour editor is currently active. Open a .changetour.md file and focus its editor before using assistant tools.');
 	}
 	return document;
+}
+
+/**
+ * Run a GitHub-API call and rewrite recognized rate-limit failures into a
+ * human-readable error before re-throwing. The thrown message is what the
+ * chat tool-error UI renders verbatim - replacing the cryptic Octokit
+ * "Request failed with status code 403" with "GitHub API rate limit hit.
+ * Resets at 3:42 PM (in 12 min). Retry after the reset time."
+ *
+ * Non-rate-limit errors fall through untouched so existing UX paths
+ * (auth dialogs, "Could not resolve pull request", etc.) are preserved.
+ */
+async function withRateLimitGuard<T>(fn: () => Promise<T>): Promise<T> {
+	try {
+		return await fn();
+	} catch (e) {
+		const info = detectRateLimit(e);
+		if (info) {
+			throw new Error(`${formatRateLimitMessage(info)} Retry after the reset time.`);
+		}
+		throw e;
+	}
 }
 
 let _localIdCounter = 0;
@@ -79,11 +102,11 @@ async function resolveHunkInActivePR(
 	endLine: number,
 ): Promise<HunkReference> {
 	const { folderManager, prOwner, prRepo, prNumber } = await getTourPRContext(reposManager);
-	const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, prNumber);
+	const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber));
 	if (!prModel) {
 		throw new Error(`Could not resolve pull request #${prNumber} for ${prOwner}/${prRepo}.`);
 	}
-	const changes = await prModel.getFileChangesInfo();
+	const changes = await withRateLimitGuard(() => prModel.getFileChangesInfo());
 	const fileChange = changes.find(c => c.fileName === file);
 	if (!fileChange) {
 		const available = changes.map(c => c.fileName).slice(0, 12).join(', ');
@@ -257,11 +280,11 @@ class GetAvailablePRHunksTool implements vscode.LanguageModelTool<GetAvailablePR
 
 	async invoke(): Promise<vscode.LanguageModelToolResult> {
 		const { folderManager, prOwner, prRepo, prNumber } = await getTourPRContext(this.reposManager);
-		const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, prNumber);
+		const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber));
 		if (!prModel) {
 			throw new Error(`Could not resolve pull request #${prNumber}.`);
 		}
-		const changes = await prModel.getFileChangesInfo();
+		const changes = await withRateLimitGuard(() => prModel.getFileChangesInfo());
 
 		// The returned shape is what addHunkToTour expects - the LLM should pass
 		// `file`, `startLine`, `endLine` back verbatim from this output.
@@ -371,11 +394,11 @@ class GetDriftReportTool implements vscode.LanguageModelTool<GetDriftReportParam
 
 	async invoke(): Promise<vscode.LanguageModelToolResult> {
 		const { doc, folderManager, prOwner, prRepo, prNumber } = await getTourPRContext(this.reposManager);
-		const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, prNumber);
+		const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber));
 		if (!prModel) {
 			throw new Error(`Could not resolve pull request #${prNumber}.`);
 		}
-		const changes = await prModel.getFileChangesInfo();
+		const changes = await withRateLimitGuard(() => prModel.getFileChangesInfo());
 
 		// Build per-file maps from the current PR: fingerprint set + hunk list.
 		const prFingerprintsByFile = new Map<string, Set<string>>();

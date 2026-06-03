@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InlineCommentComposer } from './inlineCommentComposer';
 import { InlineCommentThread } from './inlineCommentThread';
+import { Tooltip } from './tooltip';
 import { type FileHunkGroup, hunkKeyFor } from './viewerModel';
 import { DiffSide, type IReviewThread } from '../../src/common/comment';
 import type { HunkReference, TourHunkNode } from '../../src/github/codeTourMarkdown';
@@ -13,7 +14,6 @@ import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import { getHunkSummary, ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { chevronDownIcon, diffSingleIcon } from '../components/icon';
-import { Tooltip } from './tooltip';
 
 export interface CommentTarget {
 	line: number;

@@ -633,20 +633,39 @@
 
 /* - LLM Assistant streaming indicator -------- */
 
+/* Sticky stack wrapping the assistant streaming indicator + AI-review banner.
+ * Both used to be `position: sticky; top: 0` on their own, which made them
+ * pin to the same coordinate and overlap during scroll (the streaming
+ * indicator's higher z-index hid the blue banner). Wrapping them in a single
+ * sticky parent makes them flow naturally as siblings inside one pinned box,
+ * so they stack vertically when both are present. Same pattern as
+ * `.changes-sticky-stack`. */
+.tour-assistant-sticky-stack {
+	position: sticky;
+	top: 0;
+	z-index: 20;
+	background: var(--vscode-editor-background);
+	margin-bottom: 12px;
+}
+
 .tour-assistant-streaming {
 	display: flex;
 	align-items: center;
 	gap: 8px;
 	padding: 6px 12px;
-	margin-bottom: 12px;
 	border-radius: 4px;
 	background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
 	border: 1px solid var(--vscode-focusBorder);
 	color: var(--vscode-editor-foreground);
 	font-size: 13px;
-	position: sticky;
-	top: 0;
-	z-index: 20;
+}
+
+/* When the AI-review banner follows the streaming indicator inside the
+ * sticky stack, give them a little breathing room. The banner already has
+ * its own bottom margin from `.tour-pr-warning`, which serves as the gap
+ * to the doc body below the stack. */
+.tour-assistant-sticky-stack > .tour-assistant-streaming + .tour-ai-review-banner {
+	margin-top: 8px;
 }
 
 .tour-assistant-streaming-icon {
@@ -739,6 +758,41 @@
  * distinguish the two without forking the base layout. */
 .tour-outdated-warning {
 	/* same look as .tour-pr-warning for now */
+}
+
+/* Rate-limit banner. Same chassis as .tour-pr-warning but slightly more
+ * urgent accents - the situation is transient (wait + retry) and we want it
+ * to read distinctly from the outdated-tour warning when both happen to be
+ * on screen at once. Owned by `rateLimitBanner.tsx` and rendered at the very
+ * top of the app (above the existing per-pane banners) by `app.tsx`. */
+.tour-rate-limit-warning {
+	border-color: var(--vscode-editorWarning-foreground, rgba(255, 140, 0, 0.6));
+	box-shadow: 0 0 0 1px var(--vscode-editorWarning-foreground, rgba(255, 140, 0, 0.45)) inset;
+}
+
+/* Countdown / "Try again now." suffix on the rate-limit banner. Slightly
+ * dimmer than the main message so it reads as auxiliary metadata, not as
+ * additional advice. */
+.tour-rate-limit-countdown {
+	opacity: 0.75;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Outer wrapper introduced by `app.tsx` so the rate-limit banner can sit
+ * above both the edit and view layouts without altering their flex children.
+ * The `display: flex; flex-direction: column` keeps the layouts taking the
+ * remaining height when the banner is present. */
+.code-tour-app-root {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	height: 100%;
+	min-height: 0;
+}
+
+.code-tour-app-root > .tour-pr-warning {
+	margin: 8px 12px 0 12px;
+	flex: 0 0 auto;
 }
 
 /* Per-hunk badge (GitHub conversation-style "Outdated" tag). Three variants:
@@ -904,16 +958,15 @@
 
 /* AI-review banner - same warning shape as the outdated banner but tinted
  * with the focus accent so users distinguish "the AI just touched the doc"
- * from "the file has drifted from the PR". Sticky so it stays visible as
- * the user scrolls through the highlighted nodes - otherwise the only way
- * to Accept/Revert/Next once you've scrolled down to review the changes
- * is to scroll back up. */
+ * from "the file has drifted from the PR". The wrapper `.tour-assistant-sticky-stack`
+ * owns the sticky pinning so this banner stacks cleanly with the streaming
+ * indicator (when both are present) instead of overlapping it. Zero the
+ * inherited `.tour-pr-warning` bottom margin - the wrapper's margin controls
+ * the gap to the doc body. */
 .tour-ai-review-banner {
 	background-color: var(--vscode-inputValidation-infoBackground, rgba(0, 120, 212, 0.18));
 	border-color: var(--vscode-inputValidation-infoBorder, rgba(0, 120, 212, 0.5));
-	position: sticky;
-	top: 0;
-	z-index: 5;
+	margin-bottom: 0;
 }
 
 /* Per-node highlight for nodes the AI just added. Subtle accent-colored

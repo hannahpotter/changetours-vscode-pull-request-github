@@ -8,6 +8,7 @@ import { render } from 'react-dom';
 import { ChangedFilesOverview } from './changesOverview';
 import { CodeTourEditor } from './codeTourEditor';
 import { CodeTourViewer, type ViewerInboxMessage } from './codeTourViewer';
+import { RateLimitBanner, type RateLimitNotice } from './rateLimitBanner';
 
 import { type PrState } from './viewerModel';
 import { type CodeTourDocument, type HunkReference, parseCodeTourMarkdown, type TourNode } from '../../src/github/codeTourMarkdown';
@@ -46,6 +47,11 @@ function Root() {
 	const [initialViewedKeys, setInitialViewedKeys] = useState<string[]>([]);
 	const [tourFilePath, setTourFilePath] = useState<string | undefined>(undefined);
 	const [diffLayout, setDiffLayout] = useState<'inline' | 'sideBySide'>('inline');
+	// Surfaced when the extension hits a GitHub API rate-limit while loading
+	// PR data for this tour. Cleared automatically when the matching retry
+	// succeeds (`changesData` for the changes fetch; `threadsLoaded` for the
+	// review-threads fetch - both messages only arrive on success now).
+	const [rateLimitNotice, setRateLimitNotice] = useState<RateLimitNotice | undefined>(undefined);
 
 	useEffect(() => {
 		if (!handler || !doc) {
@@ -94,6 +100,20 @@ function Root() {
 					return;
 				case 'codeTourEditor.changesData':
 					setChangesData(message.data);
+					// A successful changes fetch implicitly clears a "changes"
+					// rate-limit banner. If the banner was set for a different
+					// retry kind (threads), leave it - the threads load is
+					// still failing.
+					setRateLimitNotice(prev => prev?.retryKind === 'changes' ? undefined : prev);
+					return;
+				case 'codeTourEditor.rateLimitHit':
+					setRateLimitNotice({
+						resetAt: message.resetAt,
+						retryKind: message.retryKind,
+						message: message.message,
+						isSecondary: !!message.isSecondary,
+						resource: message.resource,
+					});
 					return;
 				case 'codeTourEditor.toggleChanges':
 					setIsChangesOpen(prev => {
@@ -111,6 +131,19 @@ function Root() {
 					setInsertHunkCommand({ ts: Date.now(), payload: message.hunk, mode: 'quickpick' });
 					return;
 				case 'codeTourViewer.threadsLoaded':
+					// Backend only emits this on a successful threads fetch
+					// (the rate-limit catch path deliberately skips the empty
+					// payload). Use it as the clear signal for a "threads"
+					// rate-limit banner.
+					setRateLimitNotice(prev => prev?.retryKind === 'threads' ? undefined : prev);
+					setViewerInbox({ ts: Date.now(), message });
+					return;
+				case 'codeTourViewer.retryLoadThreads':
+					// Forwarded from the extension after the user clicks Retry
+					// on a "threads" rate-limit banner. The viewer handles
+					// re-issuing the load since it owns the PR coordinates.
+					setViewerInbox({ ts: Date.now(), message });
+					return;
 				case 'codeTourViewer.commentPosted':
 				case 'codeTourViewer.replyPosted':
 				case 'codeTourViewer.commentError':
@@ -257,7 +290,7 @@ function Root() {
 	}, [handler]);
 
 	// Open the changes pane (no-op if already open). Used by the editor when
-	// the user clicks "Add diff" so the picker appears automatically instead
+	// the user clicks "Add hunk" so the picker appears automatically instead
 	// of forcing the user to toggle it separately.
 	const onRequestChangesOpen = useCallback(() => {
 		setIsChangesOpen(prev => {
@@ -363,35 +396,71 @@ function Root() {
 		handler?.postMessage({ command: 'codeTourEditor.openCopilotChatUpdate' });
 	}, [handler]);
 
+	// Rate-limit banner callbacks. Retry re-runs only the call that failed
+	// (the backend keyed it on `retryKind`); on success the matching response
+	// message clears the banner via the handler above. "View log" surfaces the
+	// "GitHub Pull Request" output channel where the underlying error landed.
+	const onRetryRateLimit = useCallback(() => {
+		if (!rateLimitNotice) {
+			return;
+		}
+		handler?.postMessage({
+			command: 'codeTourEditor.retryAfterRateLimit',
+			args: { retryKind: rateLimitNotice.retryKind },
+		});
+	}, [handler, rateLimitNotice]);
+	const onViewRateLimitLog = useCallback(() => {
+		handler?.postMessage({ command: 'codeTourEditor.showOutputChannel' });
+	}, [handler]);
+	const onDismissRateLimit = useCallback(() => setRateLimitNotice(undefined), []);
+
 	if (!doc) {
 		return <div className="loading-indicator">Loading...</div>;
 	}
 
+	// Rate-limit banner sits at the very top so it's visible regardless of
+	// edit/view mode and regardless of which pane is in focus. Rendered above
+	// the existing per-pane warning banners (outdated, AI-review) so multiple
+	// banners stack predictably.
+	const rateLimitBanner = rateLimitNotice ? (
+		<RateLimitBanner
+			notice={rateLimitNotice}
+			onRetry={onRetryRateLimit}
+			onViewLog={onViewRateLimitLog}
+			onDismiss={onDismissRateLimit}
+		/>
+	) : null;
+
 	if (!isEditMode) {
 		return (
-			<div style={{ display: 'flex', width: '100%', height: '100%' }}>
-				<CodeTourViewer
-					doc={doc}
-					activePR={activePR}
-					postMessage={msg => handler?.postMessage(msg) ?? Promise.resolve(undefined)}
-					inbox={viewerInbox}
-					onOpenDiff={onOpenDiff}
-					onCheckoutPR={onCheckoutPR}
-					initialViewedKeys={initialViewedKeys}
-					persistViewed={keys => { handler?.postMessage({ command: 'codeTourViewer.persistViewed', args: { keys } }); }}
-					tourFilePath={tourFilePath}
-					diffLayout={diffLayout}
-					prState={prState}
-					onRefreshPrState={onRefreshPrState}
-				/>
+			<div className="code-tour-app-root">
+				{rateLimitBanner}
+				<div style={{ display: 'flex', width: '100%', height: '100%' }}>
+					<CodeTourViewer
+						doc={doc}
+						activePR={activePR}
+						postMessage={msg => handler?.postMessage(msg) ?? Promise.resolve(undefined)}
+						inbox={viewerInbox}
+						onOpenDiff={onOpenDiff}
+						onCheckoutPR={onCheckoutPR}
+						initialViewedKeys={initialViewedKeys}
+						persistViewed={keys => { handler?.postMessage({ command: 'codeTourViewer.persistViewed', args: { keys } }); }}
+						tourFilePath={tourFilePath}
+						diffLayout={diffLayout}
+						prState={prState}
+						onRefreshPrState={onRefreshPrState}
+					/>
+				</div>
 			</div>
 		);
 	}
 
 	return (
-		<div style={{ display: 'flex', width: '100%', height: '100%' }}>
-			<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', borderRight: isChangesOpen ? '1px solid var(--vscode-panel-border)' : 'none' }}>
-				<CodeTourEditor
+		<div className="code-tour-app-root">
+			{rateLimitBanner}
+			<div style={{ display: 'flex', width: '100%', height: '100%' }}>
+				<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', borderRight: isChangesOpen ? '1px solid var(--vscode-panel-border)' : 'none' }}>
+					<CodeTourEditor
 					document={doc}
 					activePR={activePR}
 					isEditMode={isEditMode}
@@ -418,15 +487,16 @@ function Root() {
 					onUpdateWithCopilotChat={onUpdateWithCopilotChat}
 				/>
 			</div>
-			{isChangesOpen && (
-				<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', position: 'relative' }}>
-					{changesData ? (
-						<ChangedFilesOverview {...changesData} onHunkAdd={onHunkAdd} activeNodeContext={activeNodeContext} codeTourHunks={codeTourHunks} onAddAllMissing={onAddAllMissing} />
-					) : (
-						<div className="loading-indicator">Loading PR changes...</div>
-					)}
-				</div>
-			)}
+				{isChangesOpen && (
+					<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', position: 'relative' }}>
+						{changesData ? (
+							<ChangedFilesOverview {...changesData} onHunkAdd={onHunkAdd} activeNodeContext={activeNodeContext} codeTourHunks={codeTourHunks} onAddAllMissing={onAddAllMissing} diffLayout={diffLayout} />
+						) : (
+							<div className="loading-indicator">Loading PR changes...</div>
+						)}
+					</div>
+				)}
+			</div>
 		</div>
 	);
 }

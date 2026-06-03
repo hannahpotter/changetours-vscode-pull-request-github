@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Tooltip } from './tooltip';
 import { ViewerLeftPane } from './viewerLeftPane';
 import {
 	associatedHunkIds as computeAssociatedHunkIds,
@@ -20,7 +21,6 @@ import {
 	type PrState,
 } from './viewerModel';
 import { type CommentTarget, ViewerRightPane } from './viewerRightPane';
-import { Tooltip } from './tooltip';
 import { DiffSide, type IComment, type IReviewThread } from '../../src/common/comment';
 import type { CodeTourDocument, HunkReference, TourGroupNode, TourNode, TourTextNode } from '../../src/github/codeTourMarkdown';
 
@@ -48,7 +48,12 @@ interface ViewerCommentErrorMessage {
 	error?: string;
 }
 
-export type ViewerInboxPayload = ViewerLoadThreadsMessage | ViewerCommentPostedMessage | ViewerReplyPostedMessage | ViewerCommentErrorMessage;
+/** Forwarded by the extension after the user clicks Retry on a "threads"-kind rate-limit banner. Triggers the viewer to re-issue its `loadThreads` request. */
+interface ViewerRetryLoadThreadsMessage {
+	command: 'codeTourViewer.retryLoadThreads';
+}
+
+export type ViewerInboxPayload = ViewerLoadThreadsMessage | ViewerCommentPostedMessage | ViewerReplyPostedMessage | ViewerCommentErrorMessage | ViewerRetryLoadThreadsMessage;
 
 export interface ViewerInboxMessage {
 	ts: number;
@@ -259,6 +264,17 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		switch (m?.command) {
 			case 'codeTourViewer.threadsLoaded':
 				setThreads(Array.isArray(m.threads) ? m.threads : []);
+				return;
+			case 'codeTourViewer.retryLoadThreads':
+				// Banner-driven Retry routed back here. Re-issue the same load
+				// request we ran on mount. On success the next `threadsLoaded`
+				// fires and the rate-limit banner clears in app.tsx.
+				if (commentsEnabled) {
+					postMessage({
+						command: 'codeTourViewer.loadThreads',
+						args: { prNumber: doc.prNumber, prOwner: doc.prOwner, prRepo: doc.prRepo },
+					});
+				}
 				return;
 			case 'codeTourViewer.commentPosted': {
 				const pending = pendingCommentsRef.current.get(m.requestId);

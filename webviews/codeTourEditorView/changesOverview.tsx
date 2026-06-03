@@ -4,13 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import React, { useCallback, useMemo, useState } from 'react';
+import { Tooltip } from './tooltip';
 import { editContentFingerprint } from './viewerModel';
 import type { HunkReference } from '../../src/github/codeTourMarkdown';
 import { ChangedFileInfo } from '../../src/github/views';
 import { DiffTable } from '../common/DiffTable';
 import { ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { addIcon, chevronDownIcon, listTree } from '../components/icon';
-import { Tooltip } from './tooltip';
 
 interface ChangedFilesOverviewProps {
 	title: string;
@@ -26,6 +26,8 @@ interface ChangedFilesOverviewProps {
 	activeNodeContext?: string;
 	codeTourHunks?: HunkReference[];
 	onAddAllMissing?: (hunks: HunkReference[]) => void;
+	/** Inline vs. side-by-side rendering for the per-file diff tables. Comes from the same `diffLayout` state as the rest of the editor so the layout toggle covers the hunk selector too. */
+	diffLayout?: 'inline' | 'sideBySide';
 }
 
 function statusLabel(status: string): { text: string; className: string } {
@@ -109,7 +111,7 @@ function computeHunkRanges(lines: ParsedDiffLine[]): Map<number, { startLine: nu
 	return ranges;
 }
 
-function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, prRepo, baseSha, headSha, onHunkAdd, activeNodeContext, coveredHunksSet, selectedHunksSet, onHunkSelect, onClearHunksSelection, searchQuery, searchActive, hideCovered }: { patch: string; fileName: string; previousFile?: string; blobSha?: string; prNumber: number; prOwner: string; prRepo: string; baseSha?: string; headSha?: string; onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onClearHunksSelection: () => void, searchQuery: string, searchActive: boolean, hideCovered: boolean }) {
+function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, prRepo, baseSha, headSha, onHunkAdd, activeNodeContext, coveredHunksSet, selectedHunksSet, onHunkSelect, onClearHunksSelection, searchQuery, searchActive, hideCovered, diffLayout }: { patch: string; fileName: string; previousFile?: string; blobSha?: string; prNumber: number; prOwner: string; prRepo: string; baseSha?: string; headSha?: string; onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onClearHunksSelection: () => void, searchQuery: string, searchActive: boolean, hideCovered: boolean, diffLayout?: 'inline' | 'sideBySide' }) {
 	const lines = parsePatch(patch);
 	const rawLines = patch.split('\n');
 	const hunkRanges = computeHunkRanges(lines);
@@ -266,6 +268,7 @@ function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, p
 	return (
 		<DiffTable
 			lines={lines}
+			layout={diffLayout}
 			onHunkHeaderDragStart={handleHunkDragStart}
 			onHunkAddActive={(headerIdx: number) => addHunkToEditor(headerIdx, 'active')}
 			onHunkAddQuickPick={(headerIdx: number) => addHunkToEditor(headerIdx, 'quickpick')}
@@ -283,7 +286,7 @@ function DiffView({ patch, fileName, previousFile, blobSha, prNumber, prOwner, p
 }
 
 
-function FileEntry({ file, prNumber, prOwner, prRepo, baseSha, headSha, onHunkAdd, activeNodeContext, coveredHunksSet, fileMissingHunks, selectedHunksSet, onHunkSelect, onFileSelect, fileAllHunks, expanded, onToggleExpanded, searchActive, searchMatched, searchQuery, hideCovered }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseSha?: string, headSha?: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, fileMissingHunks: any[], selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onFileSelect: (hunks: any[], s: boolean) => void, fileAllHunks: any[], expanded: boolean, onToggleExpanded: (expanded: boolean) => void, searchActive: boolean, searchMatched: boolean, searchQuery: string, hideCovered: boolean }) {
+function FileEntry({ file, prNumber, prOwner, prRepo, baseSha, headSha, onHunkAdd, activeNodeContext, coveredHunksSet, fileMissingHunks, selectedHunksSet, onHunkSelect, onFileSelect, fileAllHunks, expanded, onToggleExpanded, searchActive, searchMatched, searchQuery, hideCovered, diffLayout }: { file: ChangedFileInfo, prNumber: number, prOwner: string, prRepo: string, baseSha?: string, headSha?: string, onHunkAdd: (hunks: HunkReference[], mode: 'active' | 'quickpick') => void, activeNodeContext?: string, coveredHunksSet?: Set<string>, fileMissingHunks: any[], selectedHunksSet: Set<string>, onHunkSelect: (k: string, s: boolean) => void, onFileSelect: (hunks: any[], s: boolean) => void, fileAllHunks: any[], expanded: boolean, onToggleExpanded: (expanded: boolean) => void, searchActive: boolean, searchMatched: boolean, searchQuery: string, hideCovered: boolean, diffLayout?: 'inline' | 'sideBySide' }) {
 	const allCovered = fileMissingHunks.length === 0;
 
 	const { text, className } = statusLabel(file.status);
@@ -368,6 +371,7 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseSha, headSha, onHunkAd
 						searchQuery={searchQuery}
 						searchActive={searchActive}
 						hideCovered={hideCovered}
+						diffLayout={diffLayout}
 					/>
 				</div>
 			)}
@@ -378,7 +382,7 @@ function FileEntry({ file, prNumber, prOwner, prRepo, baseSha, headSha, onHunkAd
 	);
 }
 
-export const ChangedFilesOverview = ({ title, number, owner, repo, baseSha, headSha, files, onHunkAdd, activeNodeContext, codeTourHunks = [], onAddAllMissing }: ChangedFilesOverviewProps) => {
+export const ChangedFilesOverview = ({ title, number, owner, repo, baseSha, headSha, files, onHunkAdd, activeNodeContext, codeTourHunks = [], onAddAllMissing, diffLayout }: ChangedFilesOverviewProps) => {
 	const totalAdditions = files.reduce((sum, f) => sum + (f.additions ?? 0), 0);
 	const totalDeletions = files.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
 	const [selectedHunksSet, setSelectedHunksSet] = useState<Set<string>>(new Set());
@@ -654,6 +658,7 @@ export const ChangedFilesOverview = ({ title, number, owner, repo, baseSha, head
 							searchMatched={fileSearchMatch}
 							searchQuery={searchQuery}
 							hideCovered={hideCovered}
+							diffLayout={diffLayout}
 						/>
 					);
 				}) : (

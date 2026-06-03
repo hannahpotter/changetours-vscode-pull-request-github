@@ -5,6 +5,7 @@
 
 import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Tooltip } from './tooltip';
 import { computeNewInPrCount, computeOutdatedHunks, findShiftOnlyMatches, indexPrState, type PrState, suggestUpdateCandidateIdx } from './viewerModel';
 import { type CodeTourDocument, type HighlightRange, type HunkReference, serializeCodeTourMarkdown, type TourNode, type TourTextNode } from '../../src/github/codeTourMarkdown';
 import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
@@ -12,7 +13,6 @@ import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import  { getHunkSummary, type ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { addIcon, checkIcon, chevronDownIcon, closeIcon, codeIcon, copilotIcon, diffSingleIcon, editIcon, eyeClosedIcon, eyeIcon, gripperIcon, newCollectionIcon, pinnedIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, syncIcon, terminalIcon, trashIcon, unpinIcon} from '../components/icon';
-import { Tooltip } from './tooltip';
 
 type InsertKind = 'text' | 'code' | 'group';
 
@@ -1363,7 +1363,7 @@ function GroupBlock({
 					</Tooltip>
 				)}
 				{isEditMode && onRunAssistant && (
-					<Tooltip text="Improve this section's narration with AI">
+					<Tooltip text="Improve this section with AI">
 						<button
 							type="button"
 							className="tour-action-btn icon-button tour-assistant-button"
@@ -1446,7 +1446,7 @@ function GroupBlock({
 							<Tooltip text="Add text">
 								<button className="tour-add-btn icon-button" onClick={() => onAddText(node.id)}>{symbolStringIcon}</button>
 							</Tooltip>
-							<Tooltip text="Add diff">
+							<Tooltip text="Add hunk">
 								<button className="tour-add-btn icon-button" onClick={() => onAddCode(node.id)}>{codeIcon}</button>
 							</Tooltip>
 							{node.level < 6 && (
@@ -1750,7 +1750,7 @@ function InsertGap({
 							{symbolStringIcon}
 						</button>
 					</Tooltip>
-					<Tooltip text="Add diff">
+					<Tooltip text="Add hunk">
 						<button
 							type="button"
 							className="tour-add-btn icon-button"
@@ -3036,20 +3036,68 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 
 	return (
 		<div ref={editorRootRef} className={`code-tour-editor${isEditMode ? ' is-edit-mode' : ''}`}>
-			{assistantStatus?.running && (
-				<div className="tour-assistant-streaming" role="status" aria-live="polite">
-					<span className="tour-assistant-streaming-icon">{sparkleIcon}</span>
-					<span className="tour-assistant-streaming-label">{assistantStatus.label ?? 'Working…'}</span>
-					{onCancelAssistant && (
-						<Tooltip text="Stop the AI assistant">
-							<button
-								type="button"
-								className="tour-action-btn icon-button tour-assistant-stop-button"
-								onClick={onCancelAssistant}
-							>
-								{stopCircleIcon}
-							</button>
-						</Tooltip>
+			{(assistantStatus?.running || aiSessionSnapshot) && (
+				<div className="tour-assistant-sticky-stack">
+					{assistantStatus?.running && (
+						<div className="tour-assistant-streaming" role="status" aria-live="polite">
+							<span className="tour-assistant-streaming-icon">{sparkleIcon}</span>
+							<span className="tour-assistant-streaming-label">{assistantStatus.label ?? 'Working…'}</span>
+							{onCancelAssistant && (
+								<Tooltip text="Stop the AI assistant">
+									<button
+										type="button"
+										className="tour-action-btn icon-button tour-assistant-stop-button"
+										onClick={onCancelAssistant}
+									>
+										{stopCircleIcon}
+									</button>
+								</Tooltip>
+							)}
+						</div>
+					)}
+					{aiSessionSnapshot && (
+						<div className="tour-pr-warning tour-ai-review-banner">
+							<span>
+								{assistantStatus?.running
+									? (aiAddedNodeIds.size === 0
+										? 'AI is updating the tour…'
+										: <>AI is updating the tour - <strong>{aiAddedNodeIds.size} new node{aiAddedNodeIds.size === 1 ? '' : 's'}</strong> so far. They are highlighted below.</>)
+									: (aiAddedNodeIds.size === 0
+										? 'AI finished without adding new nodes. Review and Accept or Revert.'
+										: <>AI made changes - <strong>{aiAddedNodeIds.size} new node{aiAddedNodeIds.size === 1 ? '' : 's'}</strong> highlighted below.</>)
+								}
+							</span>
+							<div className="tour-pr-warning-actions">
+								{aiAddedNodeIds.size > 0 && (
+									<Tooltip text="Scroll to the next AI-added node">
+										<button
+											className="tour-action-btn"
+											onClick={handleShowNextAiChange}
+										>
+											Next ({(aiNavIdx % Math.max(1, aiAddedNodeIdsInDocOrder.length)) + 1}/{aiAddedNodeIdsInDocOrder.length})
+										</button>
+									</Tooltip>
+								)}
+								<Tooltip text="Keep all AI changes; dismiss the highlight and review banner.">
+									<button
+										className="tour-action-btn"
+										onClick={handleAcceptAiChanges}
+										disabled={!!assistantStatus?.running}
+									>
+										Accept
+									</button>
+								</Tooltip>
+								<Tooltip text="Roll the doc back to the state it was in before the AI started. Any pending patch updates are dropped too.">
+									<button
+										className="tour-action-btn"
+										onClick={handleRevertAiChanges}
+										disabled={!!assistantStatus?.running}
+									>
+										Revert all
+									</button>
+								</Tooltip>
+							</div>
+						</div>
 					)}
 				</div>
 			)}
@@ -3077,50 +3125,6 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							Checkout PR
 						</button>
 					)}
-				</div>
-			)}
-			{aiSessionSnapshot && (
-				<div className="tour-pr-warning tour-ai-review-banner">
-					<span>
-						{assistantStatus?.running
-							? (aiAddedNodeIds.size === 0
-								? 'AI is updating the tour…'
-								: <>AI is updating the tour - <strong>{aiAddedNodeIds.size} new node{aiAddedNodeIds.size === 1 ? '' : 's'}</strong> so far. They are highlighted below.</>)
-							: (aiAddedNodeIds.size === 0
-								? 'AI finished without adding new nodes. Review and Accept or Revert.'
-								: <>AI made changes - <strong>{aiAddedNodeIds.size} new node{aiAddedNodeIds.size === 1 ? '' : 's'}</strong> highlighted below.</>)
-						}
-					</span>
-					<div className="tour-pr-warning-actions">
-						{aiAddedNodeIds.size > 0 && (
-							<Tooltip text="Scroll to the next AI-added node">
-								<button
-									className="tour-action-btn"
-									onClick={handleShowNextAiChange}
-								>
-									Next ({(aiNavIdx % Math.max(1, aiAddedNodeIdsInDocOrder.length)) + 1}/{aiAddedNodeIdsInDocOrder.length})
-								</button>
-							</Tooltip>
-						)}
-						<Tooltip text="Keep all AI changes; dismiss the highlight and review banner.">
-							<button
-								className="tour-action-btn"
-								onClick={handleAcceptAiChanges}
-								disabled={!!assistantStatus?.running}
-							>
-								Accept
-							</button>
-						</Tooltip>
-						<Tooltip text="Roll the doc back to the state it was in before the AI started. Any pending patch updates are dropped too.">
-							<button
-								className="tour-action-btn"
-								onClick={handleRevertAiChanges}
-								disabled={!!assistantStatus?.running}
-							>
-								Revert all
-							</button>
-						</Tooltip>
-					</div>
 				</div>
 			)}
 			{(isTourOutdated || newInPrCount > 0 || pendingUpdates.size > 0) && (
@@ -3285,7 +3289,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 						<Tooltip text="Add text">
 							<button className="tour-add-btn icon-button" onClick={() => handleAddText()}>{symbolStringIcon}</button>
 						</Tooltip>
-						<Tooltip text="Add diff">
+						<Tooltip text="Add hunk">
 							<button className="tour-add-btn icon-button" onClick={() => handleAddCode()}>{codeIcon}</button>
 						</Tooltip>
 						<Tooltip text="Add section">

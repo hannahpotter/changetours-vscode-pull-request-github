@@ -8,6 +8,7 @@ import * as vscode from 'vscode';
 import { AssistantMode, runAssistant } from './orchestrator';
 import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
 import { parseCodeTourMarkdown } from '../../github/codeTourMarkdown';
+import { detectRateLimit, formatRateLimitMessage } from '../../github/rateLimitError';
 import { RepositoriesManager } from '../../github/repositoriesManager';
 
 const PARTICIPANT_ID = 'changeTour.assistant';
@@ -24,13 +25,20 @@ export function registerChangeTourChatParticipant(
 ): vscode.Disposable {
 	const handler: vscode.ChatRequestHandler = async (request, _chatContext, response, token) => {
 		const mode = pickMode(request.command);
-		const userPrompt = await buildUserPrompt(mode, request.prompt, reposManager);
+		const built = await buildUserPrompt(mode, request.prompt, reposManager);
 
 		// Surface a friendly preface when no Change Tour editor is open - most
 		// modes need one. We don't block; the orchestrator's tools will report a
 		// clearer error if they actually need the document.
 		if (!CodeTourEditorProvider.activeDocumentTracker && mode !== 'freeform') {
 			response.markdown(vscode.l10n.t('_Tip: open a `.changetour.md` file in the Change Tour editor first - I need it as my target for changes._\n\n'));
+		}
+
+		// If the PR-description fetch tripped a rate limit, tell the user why
+		// their prompt is unaugmented. Used to fail silently; the assistant
+		// would just produce thinner output and the user would wonder.
+		if (built.rateLimitWarning) {
+			response.markdown(`> ⚠ PR description omitted: ${built.rateLimitWarning}\n\n`);
 		}
 
 		// Bridge chat-cancellation token → AbortSignal for the orchestrator.
@@ -44,7 +52,7 @@ export function registerChangeTourChatParticipant(
 		try {
 			for await (const event of runAssistant(context, {
 				mode,
-				userPrompt,
+				userPrompt: built.prompt,
 				workspaceRoot,
 				requestedModel: request.model,
 				signal: abortController.signal,
@@ -106,21 +114,30 @@ function pickMode(command: string | undefined): AssistantMode {
 	}
 }
 
+interface BuiltPrompt {
+	prompt: string;
+	/** Set when the PR description fetch was skipped because of a rate-limit hit. Surfaced as a one-line markdown warning in the chat response so the user knows their prompt is unaugmented. */
+	rateLimitWarning?: string;
+}
+
 async function buildUserPrompt(
 	mode: AssistantMode,
 	rawPrompt: string,
 	reposManager: RepositoriesManager,
-): Promise<string> {
+): Promise<BuiltPrompt> {
 	const trimmed = rawPrompt.trim();
 	const base = baseUserPrompt(mode, trimmed);
 	// PR description is useful framing for the modes that touch the whole tour
 	// or rewrite multiple hunks; the per-hunk modes (narrate, summarize, refresh)
 	// don't need it. `update` joins generate/improve in this set.
 	if (mode !== 'generate' && mode !== 'improve' && mode !== 'update') {
-		return base;
+		return { prompt: base };
 	}
-	const description = await tryGetPRDescriptionBlock(reposManager);
-	return description ? `${description}\n\n${base}` : base;
+	const result = await tryGetPRDescriptionBlock(reposManager);
+	return {
+		prompt: result.description ? `${result.description}\n\n${base}` : base,
+		rateLimitWarning: result.rateLimitWarning,
+	};
 }
 
 function baseUserPrompt(mode: AssistantMode, trimmed: string): string {
@@ -159,41 +176,51 @@ function baseUserPrompt(mode: AssistantMode, trimmed: string): string {
 	}
 }
 
+interface PrDescriptionResult {
+	/** The `<pr-description>` block, or undefined if not available (no active tour, no bound PR, empty body, or unrecognized fetch failure). */
+	description?: string;
+	/** Set when the fetch failed specifically due to a recognized rate-limit. The chat handler surfaces this as a one-line warning so the user knows why their assistant prompt lacks PR framing. */
+	rateLimitWarning?: string;
+}
+
 /**
  * Fetch the PR title + body for the active Change Tour's bound PR and wrap them
  * in a `<pr-description>` block the assistant can lean on for framing. Returns
- * `undefined` if there is no active tour, the PR can't be resolved, or the body
- * is empty - the prompt then falls through to the unaugmented base prompt.
+ * `description: undefined` if there is no active tour, the PR can't be resolved,
+ * or the body is empty - the prompt then falls through to the unaugmented base
+ * prompt. Recognized rate-limit failures produce a `rateLimitWarning` so the
+ * caller can surface a visible signal instead of silently dropping framing.
  */
-async function tryGetPRDescriptionBlock(reposManager: RepositoriesManager): Promise<string | undefined> {
+async function tryGetPRDescriptionBlock(reposManager: RepositoriesManager): Promise<PrDescriptionResult> {
 	const document = CodeTourEditorProvider.activeDocumentTracker;
 	if (!document) {
-		return undefined;
+		return {};
 	}
 	try {
 		const parsed = parseCodeTourMarkdown(document.getText());
 		if (!parsed.prOwner || !parsed.prRepo || parsed.prNumber === undefined) {
-			return undefined;
+			return {};
 		}
 		const folderManager = reposManager.getManagerForRepository(parsed.prOwner, parsed.prRepo);
 		if (!folderManager) {
-			return undefined;
+			return {};
 		}
 		const prModel = await folderManager.resolvePullRequest(parsed.prOwner, parsed.prRepo, parsed.prNumber);
 		if (!prModel) {
-			return undefined;
+			return {};
 		}
 		const title = (prModel.title ?? '').trim();
 		const body = (prModel.body ?? '').trim();
 		if (!title && !body) {
-			return undefined;
+			return {};
 		}
 		const inner = body
 			? `Title: ${title}\n\n${body}`.slice(0, PR_DESCRIPTION_CAP)
 			: `Title: ${title}`;
-		return `<pr-description>\n${inner}\n</pr-description>`;
-	} catch {
-		return undefined;
+		return { description: `<pr-description>\n${inner}\n</pr-description>` };
+	} catch (e) {
+		const info = detectRateLimit(e);
+		return info ? { rateLimitWarning: formatRateLimitMessage(info) } : {};
 	}
 }
 

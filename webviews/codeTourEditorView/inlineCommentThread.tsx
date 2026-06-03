@@ -5,9 +5,9 @@
 
 import * as marked from 'marked';
 import React, { useCallback, useMemo, useState } from 'react';
+import { Tooltip } from './tooltip';
 import type { IComment, IReviewThread } from '../../src/common/comment';
 import { chevronDownIcon } from '../components/icon';
-import { Tooltip } from './tooltip';
 
 interface InlineCommentThreadProps {
 	thread: IReviewThread;

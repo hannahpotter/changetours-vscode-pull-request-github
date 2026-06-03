@@ -8,6 +8,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { createHunkBlock, HunkReference, parseCodeTourMarkdown } from './codeTourMarkdown';
 import { PullRequestModel } from './pullRequestModel';
+import { detectRateLimit, formatRateLimitMessage } from './rateLimitError';
 import { RepositoriesManager } from './repositoriesManager';
 import { DiffSide } from '../common/comment';
 import Logger from '../common/logger';
@@ -53,6 +54,18 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 
 	private static _setEditModeContext(value: boolean): void {
 		vscode.commands.executeCommand('setContext', 'changeTourEditMode', value);
+	}
+
+	/**
+	 * Stringify an error for the viewer's inline comment-error toast. When the
+	 * underlying failure is a recognizable GitHub rate-limit case, prefix the
+	 * raw error with the human-readable "Resets at ..." sentence so the user
+	 * sees actionable text instead of "Request failed with status code 403".
+	 */
+	private static _formatUserFacingError(e: unknown): string {
+		const info = detectRateLimit(e);
+		const raw = formatError(e);
+		return info ? `${formatRateLimitMessage(info)} ${raw}` : raw;
 	}
 
 	/** Workspace-state key for the user's preferred diff layout. Shared across all tours. */
@@ -460,8 +473,18 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 					const threads = await pr.getReviewThreads();
 					panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads } });
 				} catch (e) {
-					Logger.error(`Failed to load review threads: ${formatError(e)}`, CodeTourEditorProvider.name);
-					panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
+					// Same rate-limit surfacing as _sendChangesData: route to the
+					// banner instead of disappearing into the log. We deliberately
+					// skip posting an empty `threadsLoaded` in the rate-limit
+					// case - the banner is now the user's signal, and skipping
+					// the empty payload gives the webview a clean "next
+					// successful threadsLoaded = clear the banner" trigger.
+					if (this._postRateLimitIfApplicable(panel, e, 'threads')) {
+						Logger.warn(`Review-threads fetch rate-limited: ${formatError(e)}`, CodeTourEditorProvider.name);
+					} else {
+						Logger.error(`Failed to load review threads: ${formatError(e)}`, CodeTourEditorProvider.name);
+						panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
+					}
 				}
 				return;
 			}
@@ -499,7 +522,11 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				} catch (e) {
 					Logger.error(`Failed to post review comment: ${formatError(e)}`, CodeTourEditorProvider.name);
 					panel.webview.postMessage({
-						res: { command: 'codeTourViewer.commentError', requestId, error: formatError(e) },
+						res: {
+							command: 'codeTourViewer.commentError',
+							requestId,
+							error: CodeTourEditorProvider._formatUserFacingError(e),
+						},
 					});
 				}
 				return;
@@ -534,7 +561,11 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				} catch (e) {
 					Logger.error(`Failed to post reply: ${formatError(e)}`, CodeTourEditorProvider.name);
 					panel.webview.postMessage({
-						res: { command: 'codeTourViewer.commentError', requestId, error: formatError(e) },
+						res: {
+							command: 'codeTourViewer.commentError',
+							requestId,
+							error: CodeTourEditorProvider._formatUserFacingError(e),
+						},
 					});
 				}
 				return;
@@ -542,6 +573,28 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 
 			case 'codeTourEditor.requestChanges':
 				await this._sendChangesData(document, panel);
+				return;
+
+			case 'codeTourEditor.retryAfterRateLimit': {
+				// Banner-driven retry: re-run only the call that hit the limit.
+				// Keeping retry scope tight keeps the budget cost of a retry
+				// click predictable (one fetch, not a full editor reload).
+				const { retryKind } = message.args as { retryKind: 'changes' | 'threads' };
+				if (retryKind === 'changes') {
+					await this._sendChangesData(document, panel);
+				} else if (retryKind === 'threads') {
+					// The threads load needs the PR coords, which the webview
+					// already has; ask it to re-issue the load on its side.
+					panel.webview.postMessage({ res: { command: 'codeTourViewer.retryLoadThreads' } });
+				}
+				return;
+			}
+
+			case 'codeTourEditor.showOutputChannel':
+				// "View log" link on the rate-limit banner. Surfaces the shared
+				// "GitHub Pull Request" output channel where the rate-limit
+				// failure (and any prior context) was logged.
+				Logger.show();
 				return;
 
 			case 'codeTourEditor.openClaudeCodeUpdate':
@@ -616,8 +669,47 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				}
 			});
 		} catch (e) {
+			// Rate-limit failures used to disappear into the log here, leaving
+			// the outdated-tour banner hidden and the user with no idea why
+			// their PR data is missing. Route them to the dedicated banner
+			// instead - other errors still flow through Logger.error so the
+			// "GitHub Pull Request" output channel keeps its diagnostic value.
+			if (this._postRateLimitIfApplicable(panel, e, 'changes')) {
+				Logger.warn(`PR changes fetch rate-limited: ${formatError(e)}`, CodeTourEditorProvider.name);
+				return;
+			}
 			Logger.error(`Failed to fetch PR changes: ${formatError(e)}`, CodeTourEditorProvider.name);
 		}
+	}
+
+	/**
+	 * If `e` is a recognizable GitHub rate-limit error, post a `rateLimitHit`
+	 * message to the webview so the in-editor banner can render with the reset
+	 * time + a Retry button. The `retryKind` discriminates which call the
+	 * webview's Retry button should re-trigger (see `retryAfterRateLimit`
+	 * handler). Returns `true` if a rate-limit was detected and posted so the
+	 * caller can decide whether to also log a duplicate error line.
+	 */
+	private _postRateLimitIfApplicable(
+		panel: vscode.WebviewPanel,
+		e: unknown,
+		retryKind: 'changes' | 'threads',
+	): boolean {
+		const info = detectRateLimit(e);
+		if (!info) {
+			return false;
+		}
+		panel.webview.postMessage({
+			res: {
+				command: 'codeTourEditor.rateLimitHit',
+				resetAt: info.resetAt.getTime(),
+				retryKind,
+				message: formatRateLimitMessage(info),
+				isSecondary: info.isSecondary,
+				resource: info.resource,
+			},
+		});
+		return true;
 	}
 
 	private _sendDocumentToWebview(webview: vscode.Webview, document: vscode.TextDocument): void {
