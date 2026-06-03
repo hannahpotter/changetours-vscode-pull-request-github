@@ -880,7 +880,11 @@
 				},
 				"changeTour.assistant.provider": {
 					"type": "string",
-					"enum": ["auto", "vscode-lm", "anthropic"],
+					"enum": [
+						"auto",
+						"vscode-lm",
+						"anthropic"
+					],
 					"enumDescriptions": [
 						"Prefer the VS Code language model API (Copilot or any registered provider); fall back to direct Anthropic API if a key is stored.",
 						"Always use the VS Code language model API. Requires GitHub Copilot or another chat-model provider extension to be installed.",
@@ -4046,20 +4050,41 @@
 				"inputSchema": {
 					"type": "object",
 					"properties": {
-						"title": { "type": "string", "description": "Section heading text." },
-						"level": { "type": "number", "description": "Heading level 2-6 (default 2). Use 3+ for sub-sections." },
+						"title": {
+							"type": "string",
+							"description": "Section heading text."
+						},
+						"level": {
+							"type": "number",
+							"description": "Heading level 2-6 (default 2). Use 3+ for sub-sections."
+						},
 						"anchor": {
 							"type": "object",
 							"description": "Where to insert. Provide exactly ONE of these fields.",
 							"properties": {
-								"after": { "type": "string", "description": "ID of the existing node to insert immediately after." },
-								"before": { "type": "string", "description": "ID of the existing node to insert immediately before." },
-								"endOfGroup": { "type": "string", "description": "ID of a group; the new node is appended as the last child of that group." },
-								"endOfDocument": { "type": "boolean", "description": "If true, append at the end of the document." }
+								"after": {
+									"type": "string",
+									"description": "ID of the existing node to insert immediately after."
+								},
+								"before": {
+									"type": "string",
+									"description": "ID of the existing node to insert immediately before."
+								},
+								"endOfGroup": {
+									"type": "string",
+									"description": "ID of a group; the new node is appended as the last child of that group."
+								},
+								"endOfDocument": {
+									"type": "boolean",
+									"description": "If true, append at the end of the document."
+								}
 							}
 						}
 					},
-					"required": ["title", "anchor"]
+					"required": [
+						"title",
+						"anchor"
+					]
 				},
 				"when": "config.changeTour.assistant.enabled"
 			},
@@ -4074,18 +4099,32 @@
 				"inputSchema": {
 					"type": "object",
 					"properties": {
-						"content": { "type": "string", "description": "Markdown content of the narration." },
+						"content": {
+							"type": "string",
+							"description": "Markdown content of the narration."
+						},
 						"anchor": {
 							"type": "object",
 							"properties": {
-								"after": { "type": "string" },
-								"before": { "type": "string" },
-								"endOfGroup": { "type": "string" },
-								"endOfDocument": { "type": "boolean" }
+								"after": {
+									"type": "string"
+								},
+								"before": {
+									"type": "string"
+								},
+								"endOfGroup": {
+									"type": "string"
+								},
+								"endOfDocument": {
+									"type": "boolean"
+								}
 							}
 						}
 					},
-					"required": ["content", "anchor"]
+					"required": [
+						"content",
+						"anchor"
+					]
 				},
 				"when": "config.changeTour.assistant.enabled"
 			},
@@ -4100,32 +4139,68 @@
 				"inputSchema": {
 					"type": "object",
 					"properties": {
-						"file": { "type": "string", "description": "Repo-relative file path. Must match a file changed by the bound pull request." },
-						"startLine": { "type": "number", "description": "First line on the new side (1-indexed). Must match `startLine` of a hunk in getAvailablePRHunks output." },
-						"endLine": { "type": "number", "description": "Last line on the new side (inclusive). Must match `endLine` of the same hunk." },
+						"file": {
+							"type": "string",
+							"description": "Repo-relative file path. Must match a file changed by the bound pull request."
+						},
+						"startLine": {
+							"type": "number",
+							"description": "First line on the new side (1-indexed). Must match `startLine` of a hunk in getAvailablePRHunks output."
+						},
+						"endLine": {
+							"type": "number",
+							"description": "Last line on the new side (inclusive). Must match `endLine` of the same hunk."
+						},
 						"highlights": {
 							"type": "array",
 							"items": {
 								"type": "object",
 								"properties": {
-									"side": { "type": "string", "enum": ["old", "new"] },
-									"start": { "type": "number" },
-									"end": { "type": "number" }
+									"side": {
+										"type": "string",
+										"enum": [
+											"old",
+											"new"
+										]
+									},
+									"start": {
+										"type": "number"
+									},
+									"end": {
+										"type": "number"
+									}
 								},
-								"required": ["side", "start", "end"]
+								"required": [
+									"side",
+									"start",
+									"end"
+								]
 							}
 						},
 						"anchor": {
 							"type": "object",
 							"properties": {
-								"after": { "type": "string" },
-								"before": { "type": "string" },
-								"endOfGroup": { "type": "string" },
-								"endOfDocument": { "type": "boolean" }
+								"after": {
+									"type": "string"
+								},
+								"before": {
+									"type": "string"
+								},
+								"endOfGroup": {
+									"type": "string"
+								},
+								"endOfDocument": {
+									"type": "boolean"
+								}
 							}
 						}
 					},
-					"required": ["file", "startLine", "endLine", "anchor"]
+					"required": [
+						"file",
+						"startLine",
+						"endLine",
+						"anchor"
+					]
 				},
 				"when": "config.changeTour.assistant.enabled"
 			},
@@ -4140,21 +4215,41 @@
 				"inputSchema": {
 					"type": "object",
 					"properties": {
-						"hunkId": { "type": "string", "description": "ID of the hunk node (from getCurrentTour)." },
+						"hunkId": {
+							"type": "string",
+							"description": "ID of the hunk node (from getCurrentTour)."
+						},
 						"highlights": {
 							"type": "array",
 							"items": {
 								"type": "object",
 								"properties": {
-									"side": { "type": "string", "enum": ["old", "new"] },
-									"start": { "type": "number" },
-									"end": { "type": "number" }
+									"side": {
+										"type": "string",
+										"enum": [
+											"old",
+											"new"
+										]
+									},
+									"start": {
+										"type": "number"
+									},
+									"end": {
+										"type": "number"
+									}
 								},
-								"required": ["side", "start", "end"]
+								"required": [
+									"side",
+									"start",
+									"end"
+								]
 							}
 						}
 					},
-					"required": ["hunkId", "highlights"]
+					"required": [
+						"hunkId",
+						"highlights"
+					]
 				},
 				"when": "config.changeTour.assistant.enabled"
 			},
@@ -4169,10 +4264,19 @@
 				"inputSchema": {
 					"type": "object",
 					"properties": {
-						"hunkId": { "type": "string", "description": "ID of the hunk node (from getCurrentTour)." },
-						"summary": { "type": "string", "description": "One-sentence description (120 chars or less). Empty string clears the summary." }
+						"hunkId": {
+							"type": "string",
+							"description": "ID of the hunk node (from getCurrentTour)."
+						},
+						"summary": {
+							"type": "string",
+							"description": "One-sentence description (120 chars or less). Empty string clears the summary."
+						}
 					},
-					"required": ["hunkId", "summary"]
+					"required": [
+						"hunkId",
+						"summary"
+					]
 				},
 				"when": "config.changeTour.assistant.enabled"
 			},
@@ -4187,9 +4291,14 @@
 				"inputSchema": {
 					"type": "object",
 					"properties": {
-						"nodeId": { "type": "string", "description": "ID of the node to remove (from getCurrentTour)." }
+						"nodeId": {
+							"type": "string",
+							"description": "ID of the node to remove (from getCurrentTour)."
+						}
 					},
-					"required": ["nodeId"]
+					"required": [
+						"nodeId"
+					]
 				},
 				"when": "config.changeTour.assistant.enabled"
 			}
@@ -4298,6 +4407,7 @@
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.99.0",
 		"@joaomoreno/unique-names-generator": "^5.2.0",
+		"@octokit/plugin-throttling": "11.0.3",
 		"@octokit/rest": "22.0.0",
 		"@octokit/types": "14.1.0",
 		"@vscode/codicons": "^0.0.36",

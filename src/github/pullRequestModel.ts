@@ -1493,9 +1493,22 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 		}
 	}
 
-	async getReviewThreads(): Promise<IReviewThread[]> {
+	async getReviewThreads(useCache: boolean = false): Promise<IReviewThread[]> {
+		// `useCache: true` skips the GraphQL fetch when the cache is already
+		// populated. Mirrors the same pattern as `GitHubRepository.getPullRequest`.
+		// The Change Tour viewer reloads threads on every mount, so this saves
+		// a query on every editor reopen for the same tour file.
+		if (useCache && this._reviewThreadsCacheInitialized && this._reviewThreadsCache) {
+			return this._reviewThreadsCache;
+		}
 		const raw = await this.getRawReviewComments();
-		return this.setReviewThreadCacheFromRaw(raw);
+		const threads = this.setReviewThreadCacheFromRaw(raw);
+		// Mark the cache as initialized so subsequent `useCache: true` calls
+		// can short-circuit. `setReviewThreadCacheFromRaw` populates
+		// `_reviewThreadsCache` but `initializeReviewThreadCache` is what
+		// historically set the `Initialized` flag - bring them in sync.
+		this._reviewThreadsCacheInitialized = true;
+		return threads;
 	}
 
 	/**

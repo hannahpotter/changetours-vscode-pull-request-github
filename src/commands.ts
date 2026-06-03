@@ -34,6 +34,7 @@ import { GHPRComment, GHPRCommentThread, TemporaryComment } from './github/prCom
 import { PullRequestModel } from './github/pullRequestModel';
 import { PullRequestOverviewPanel } from './github/pullRequestOverview';
 import { chooseItem } from './github/quickPicks';
+import { formatRateLimitMessage, getRecentRateLimit } from './github/rateLimitError';
 import { RepositoriesManager } from './github/repositoriesManager';
 import { codespacesPrLink, getIssuesUrl, getPullsUrl, isInCodespaces, ISSUE_OR_URL_EXPRESSION, parseIssueExpressionOutput, vscodeDevPrLink } from './github/utils';
 import { BaseContext, OverviewContext } from './github/views';
@@ -2152,6 +2153,18 @@ ${contents}
 				return vscode.commands.executeCommand('pr.pick', targetPR, { openChangesToTheSide: true });
 			}
 
+			// `resolvePullRequest` -> `getPullRequest` swallows all errors into
+			// `undefined`, so a rate-limit failure here looks identical to "the
+			// PR really doesn't exist." Consult the global rate-limit tracker
+			// (`rateLimitError.ts`) before falling back to the generic message
+			// - the user gets actionable text instead of a misleading "unable
+			// to resolve" error.
+			const rateLimit = getRecentRateLimit();
+			if (rateLimit) {
+				return vscode.window.showErrorMessage(
+					`${formatRateLimitMessage(rateLimit)} Try again after the reset.`,
+				);
+			}
 			return vscode.window.showErrorMessage(vscode.l10n.t('Unable to resolve pull request for Change Tour checkout.'));
 		})
 	);

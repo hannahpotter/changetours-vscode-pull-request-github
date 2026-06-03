@@ -8,7 +8,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { createHunkBlock, HunkReference, parseCodeTourMarkdown } from './codeTourMarkdown';
 import { PullRequestModel } from './pullRequestModel';
-import { detectRateLimit, formatRateLimitMessage } from './rateLimitError';
+import { detectRateLimit, formatRateLimitMessage, recordObservedRateLimit } from './rateLimitError';
 import { RepositoriesManager } from './repositoriesManager';
 import { DiffSide } from '../common/comment';
 import Logger from '../common/logger';
@@ -65,7 +65,11 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 	private static _formatUserFacingError(e: unknown): string {
 		const info = detectRateLimit(e);
 		const raw = formatError(e);
-		return info ? `${formatRateLimitMessage(info)} ${raw}` : raw;
+		if (info) {
+			recordObservedRateLimit(info);
+			return `${formatRateLimitMessage(info)} ${raw}`;
+		}
+		return raw;
 	}
 
 	/** Workspace-state key for the user's preferred diff layout. Shared across all tours. */
@@ -465,12 +469,18 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 						panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
 						return;
 					}
-					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+					// useCache: true - we'll likely reuse the same PR model for
+					// every interaction in this editor session.
+					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber), true);
 					if (!pr) {
 						panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
 						return;
 					}
-					const threads = await pr.getReviewThreads();
+					// useCache: true - the viewer reloads threads on every editor
+					// open/mount. The PullRequestModel keeps its review-thread
+					// cache up to date in response to comment events, so we can
+					// safely serve cached data without staleness risk.
+					const threads = await pr.getReviewThreads(true);
 					panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads } });
 				} catch (e) {
 					// Same rate-limit surfacing as _sendChangesData: route to the
@@ -506,7 +516,9 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 					if (!folderManager) {
 						throw new Error('No checked-out repository matches this pull request.');
 					}
-					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+					// useCache: true to avoid an extra GraphQL roundtrip when
+					// the user comments multiple times in one session.
+					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber), true);
 					if (!pr) {
 						throw new Error('Pull request not found.');
 					}
@@ -547,7 +559,9 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 					if (!folderManager) {
 						throw new Error('No checked-out repository matches this pull request.');
 					}
-					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+					// useCache: true to avoid an extra GraphQL roundtrip when
+					// the user comments multiple times in one session.
+					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber), true);
 					if (!pr) {
 						throw new Error('Pull request not found.');
 					}
@@ -637,7 +651,12 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			if (!folderManager) {
 				return;
 			}
-			const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+			// `useCache: true` skips the GraphQL PR-resolve query if we already
+			// have the model in memory. Without it, opening any .changetour.md
+			// file refetches the PR from scratch even when nothing changed -
+			// the single biggest source of redundant API traffic in change
+			// tour flows.
+			const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber), true);
 			if (!prModel) {
 				return;
 			}
@@ -699,6 +718,10 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		if (!info) {
 			return false;
 		}
+		// Stamp the global tracker so adjacent code paths that swallow rate-
+		// limit failures (e.g. `pr.checkoutFromCodeTour` -> getPullRequest
+		// returning undefined) can recover the reason when they fail next.
+		recordObservedRateLimit(info);
 		panel.webview.postMessage({
 			res: {
 				command: 'codeTourEditor.rateLimitHit',

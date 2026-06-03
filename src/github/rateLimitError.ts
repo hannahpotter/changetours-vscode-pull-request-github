@@ -153,6 +153,49 @@ export function detectRateLimit(e: unknown): RateLimitInfo | undefined {
 }
 
 /**
+ * Module-level "most recently observed rate-limit" tracker so code paths
+ * that swallow errors (e.g. `GitHubRepository.getPullRequest` returning
+ * `undefined` on any failure) can still surface a rate-limit reason to the
+ * user. The pattern: every catch site that calls `detectRateLimit` also
+ * calls `recordObservedRateLimit(info)` when it matches. UI surfaces that
+ * end up with a generic "couldn't resolve" failure can ask
+ * `getRecentRateLimit()` to substitute a rate-limit-aware message instead.
+ *
+ * Bounded by both the cached info's `resetAt` and a sliding window so we
+ * never tell the user about a stale rate-limit. Single in-memory slot is
+ * enough - there is exactly one user and one GitHub session per VS Code
+ * window, and rate-limits are global to the user's token.
+ */
+let _lastObserved: RateLimitInfo | undefined;
+let _lastObservedAt = 0;
+
+const RATE_LIMIT_OBSERVATION_WINDOW_MS = 5 * 60 * 1000;
+
+export function recordObservedRateLimit(info: RateLimitInfo): void {
+	_lastObserved = info;
+	_lastObservedAt = Date.now();
+}
+
+/**
+ * Return the most recently observed rate-limit if it's still plausibly the
+ * cause of failures the caller is seeing. "Plausibly" means: observed within
+ * the last `maxAgeMs` AND the reset time hasn't passed yet. Returns
+ * `undefined` once either condition lapses.
+ */
+export function getRecentRateLimit(maxAgeMs: number = RATE_LIMIT_OBSERVATION_WINDOW_MS): RateLimitInfo | undefined {
+	if (!_lastObserved) {
+		return undefined;
+	}
+	if (Date.now() - _lastObservedAt > maxAgeMs) {
+		return undefined;
+	}
+	if (_lastObserved.resetAt.getTime() <= Date.now()) {
+		return undefined;
+	}
+	return _lastObserved;
+}
+
+/**
  * Render a human-readable, one-sentence summary for an error message or a
  * chat surface. Locale-aware time formatting; relative "in N min" hint so
  * the user has both the wall-clock value (for context-switching) and the

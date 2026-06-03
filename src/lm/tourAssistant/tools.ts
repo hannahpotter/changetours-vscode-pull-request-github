@@ -19,7 +19,8 @@ import {
 	TourTextNode,
 } from '../../github/codeTourMarkdown';
 import { appendNodeToGroupEnd, extractNodeById, insertNodeRelative } from '../../github/codeTourTreeHelpers';
-import { detectRateLimit, formatRateLimitMessage } from '../../github/rateLimitError';
+import { PullRequestModel } from '../../github/pullRequestModel';
+import { detectRateLimit, formatRateLimitMessage, recordObservedRateLimit } from '../../github/rateLimitError';
 import { RepositoriesManager } from '../../github/repositoriesManager';
 
 /* ----- Shared types --------------------------------------- */
@@ -61,10 +62,53 @@ async function withRateLimitGuard<T>(fn: () => Promise<T>): Promise<T> {
 	} catch (e) {
 		const info = detectRateLimit(e);
 		if (info) {
+			recordObservedRateLimit(info);
 			throw new Error(`${formatRateLimitMessage(info)} Retry after the reset time.`);
 		}
 		throw e;
 	}
+}
+
+/**
+ * Cache `getFileChangesInfo()` results across LM tool invocations within a
+ * single chat turn. A typical `/generate` or `/improve` run calls
+ * `changeTour_getAvailablePRHunks`, `changeTour_getDriftReport`, and
+ * `changeTour_addHunkToTour` multiple times in quick succession - each one
+ * currently triggers a fresh `compareCommits` REST call, even though the PR
+ * diff hasn't changed in the seconds between invocations. The TTL cache here
+ * makes the second through Nth call free.
+ *
+ * Keyed by PR identity (`<owner>/<repo>#<number>`) so concurrent tours
+ * against different PRs don't collide. TTL is short on purpose: chat turns
+ * typically complete within a few tens of seconds, and we want the next
+ * turn (e.g. after the user manually adds a hunk and asks for another
+ * /improve) to see fresh data. The PullRequestModel layer additionally keeps
+ * its own per-instance cache, but that one is bypassed by
+ * `getFileChangesInfo()` which clears `_fileChanges` on every call.
+ */
+interface FileChangesCacheEntry {
+	at: number;
+	files: Awaited<ReturnType<PullRequestModel['getFileChangesInfo']>>;
+}
+const FILE_CHANGES_CACHE_TTL_MS = 30 * 1000;
+const _fileChangesCache = new Map<string, FileChangesCacheEntry>();
+function fileChangesCacheKey(prOwner: string, prRepo: string, prNumber: number): string {
+	return `${prOwner.toLowerCase()}/${prRepo.toLowerCase()}#${prNumber}`;
+}
+async function getCachedFileChangesInfo(
+	prModel: PullRequestModel,
+	prOwner: string,
+	prRepo: string,
+	prNumber: number,
+): Promise<FileChangesCacheEntry['files']> {
+	const key = fileChangesCacheKey(prOwner, prRepo, prNumber);
+	const cached = _fileChangesCache.get(key);
+	if (cached && Date.now() - cached.at < FILE_CHANGES_CACHE_TTL_MS) {
+		return cached.files;
+	}
+	const fresh = await withRateLimitGuard(() => prModel.getFileChangesInfo());
+	_fileChangesCache.set(key, { at: Date.now(), files: fresh });
+	return fresh;
 }
 
 let _localIdCounter = 0;
@@ -102,11 +146,14 @@ async function resolveHunkInActivePR(
 	endLine: number,
 ): Promise<HunkReference> {
 	const { folderManager, prOwner, prRepo, prNumber } = await getTourPRContext(reposManager);
-	const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber));
+	// useCache: true + getCachedFileChangesInfo: a /generate run typically
+	// calls this tool 5-10 times in a few seconds. Without caching we'd
+	// refetch the entire PR diff every time.
+	const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber, true));
 	if (!prModel) {
 		throw new Error(`Could not resolve pull request #${prNumber} for ${prOwner}/${prRepo}.`);
 	}
-	const changes = await withRateLimitGuard(() => prModel.getFileChangesInfo());
+	const changes = await getCachedFileChangesInfo(prModel, prOwner, prRepo, prNumber);
 	const fileChange = changes.find(c => c.fileName === file);
 	if (!fileChange) {
 		const available = changes.map(c => c.fileName).slice(0, 12).join(', ');
@@ -280,11 +327,11 @@ class GetAvailablePRHunksTool implements vscode.LanguageModelTool<GetAvailablePR
 
 	async invoke(): Promise<vscode.LanguageModelToolResult> {
 		const { folderManager, prOwner, prRepo, prNumber } = await getTourPRContext(this.reposManager);
-		const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber));
+		const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber, true));
 		if (!prModel) {
 			throw new Error(`Could not resolve pull request #${prNumber}.`);
 		}
-		const changes = await withRateLimitGuard(() => prModel.getFileChangesInfo());
+		const changes = await getCachedFileChangesInfo(prModel, prOwner, prRepo, prNumber);
 
 		// The returned shape is what addHunkToTour expects - the LLM should pass
 		// `file`, `startLine`, `endLine` back verbatim from this output.
@@ -394,11 +441,11 @@ class GetDriftReportTool implements vscode.LanguageModelTool<GetDriftReportParam
 
 	async invoke(): Promise<vscode.LanguageModelToolResult> {
 		const { doc, folderManager, prOwner, prRepo, prNumber } = await getTourPRContext(this.reposManager);
-		const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber));
+		const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber, true));
 		if (!prModel) {
 			throw new Error(`Could not resolve pull request #${prNumber}.`);
 		}
-		const changes = await withRateLimitGuard(() => prModel.getFileChangesInfo());
+		const changes = await getCachedFileChangesInfo(prModel, prOwner, prRepo, prNumber);
 
 		// Build per-file maps from the current PR: fingerprint set + hunk list.
 		const prFingerprintsByFile = new Map<string, Set<string>>();

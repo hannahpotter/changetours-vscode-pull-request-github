@@ -8,7 +8,7 @@ import * as vscode from 'vscode';
 import { AssistantMode, runAssistant } from './orchestrator';
 import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
 import { parseCodeTourMarkdown } from '../../github/codeTourMarkdown';
-import { detectRateLimit, formatRateLimitMessage } from '../../github/rateLimitError';
+import { detectRateLimit, formatRateLimitMessage, recordObservedRateLimit } from '../../github/rateLimitError';
 import { RepositoriesManager } from '../../github/repositoriesManager';
 
 const PARTICIPANT_ID = 'changeTour.assistant';
@@ -205,7 +205,10 @@ async function tryGetPRDescriptionBlock(reposManager: RepositoriesManager): Prom
 		if (!folderManager) {
 			return {};
 		}
-		const prModel = await folderManager.resolvePullRequest(parsed.prOwner, parsed.prRepo, parsed.prNumber);
+		// useCache: true - the description rarely matters enough to warrant
+		// a fresh GraphQL roundtrip on every chat turn, and a stale title/body
+		// is acceptable for prompt framing.
+		const prModel = await folderManager.resolvePullRequest(parsed.prOwner, parsed.prRepo, parsed.prNumber, true);
 		if (!prModel) {
 			return {};
 		}
@@ -220,7 +223,11 @@ async function tryGetPRDescriptionBlock(reposManager: RepositoriesManager): Prom
 		return { description: `<pr-description>\n${inner}\n</pr-description>` };
 	} catch (e) {
 		const info = detectRateLimit(e);
-		return info ? { rateLimitWarning: formatRateLimitMessage(info) } : {};
+		if (info) {
+			recordObservedRateLimit(info);
+			return { rateLimitWarning: formatRateLimitMessage(info) };
+		}
+		return {};
 	}
 }
 

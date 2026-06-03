@@ -61,6 +61,7 @@ import defaultSchema from './queries.gql';
 import * as extraSchema from './queriesExtra.gql';
 import * as limitedSchema from './queriesLimited.gql';
 import * as sharedSchema from './queriesShared.gql';
+import { detectRateLimit, recordObservedRateLimit } from './rateLimitError';
 import {
 	convertRESTPullRequestToRawPullRequest,
 	getAvatarWithEnterpriseFallback,
@@ -1162,6 +1163,18 @@ export class GitHubRepository extends Disposable {
 			await pr.getLastUpdateTime(new Date(pr.item.updatedAt));
 			return pr;
 		} catch (e) {
+			// `getPullRequest` is called from many surfaces, several of which
+			// react to a swallowed `undefined` with a generic "couldn't find
+			// PR" message. That's actively wrong when the underlying cause
+			// was a rate-limit hit. Detect the rate-limit case and stash it
+			// in the global tracker (`rateLimitError.ts`) so the caller can
+			// substitute a rate-limit-aware error message via
+			// `getRecentRateLimit()`. We still return undefined to keep the
+			// existing signature contract.
+			const info = detectRateLimit(e);
+			if (info) {
+				recordObservedRateLimit(info);
+			}
 			Logger.error(`Unable to fetch PR: ${e}`, this.id);
 			return;
 		}
