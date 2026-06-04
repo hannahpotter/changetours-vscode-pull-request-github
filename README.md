@@ -4,10 +4,28 @@ This extension allows you to create and review Change Tours of GitHub pull reque
 
 # How to use
 
-## Running extension locally
-See the VS Code Pull Request Extension wiki for [how to build and run](https://github.com/Microsoft/vscode-pull-request-github/wiki/Contributing#build-and-run)
-> [!NOTE]
-> This extension runs with regular VS Code (Insiders version not required)
+## Building and installing the extension
+**Prerequisites:** [Node.js](https://nodejs.org/) and [Yarn](https://classic.yarnpkg.com/).
+
+1. Clone this repository and install dependencies:
+	```sh
+	git clone https://github.com/hkpotter/vscode-pull-request-github.git
+	cd vscode-pull-request-github
+	yarn install
+	```
+2. Build a `.vsix` package:
+	```sh
+	yarn package
+	```
+	This produces `vscode-pull-request-github-<version>.vsix` in the repository root.
+3. Install the `.vsix` in VS Code, either from the command line:
+	```sh
+	code --install-extension vscode-pull-request-github-<version>.vsix
+	```
+	or from the VS Code UI: open the Extensions view, click the `...` menu in the top-right, choose **Install from VSIX...**, and select the file.
+4. Reload VS Code if prompted.
+
+See the VS Code Pull Request Extension wiki for [how to build and run for development/debugging](https://github.com/Microsoft/vscode-pull-request-github/wiki/Contributing#build-and-run)
 
 ## Opening/Creating a Change Tour
 
