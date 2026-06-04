@@ -19,10 +19,14 @@
  *      attributes, body presence + @@ header, balanced :::, highlight syntax.
  *   2. PR cross-check (optional) - if the tour has prNumber/prOwner/prRepo
  *      in frontmatter and `gh` is installed and authenticated, fetch the PR
- *      diff via `gh pr diff` and verify every hunk references a real
- *      file + line range in that diff. Skipped if --skip-pr-check is passed,
- *      if `gh` is missing, or if the fetch fails (in which case a warning is
- *      emitted instead of an error so offline workflows still pass).
+ *      files via `gh api /repos/<repo>/pulls/<n>/files` (the same REST
+ *      `patch` field the extension builds `change.diffHunks` from, NOT
+ *      `gh pr diff` - the two disagree on hunk grouping for adjacent
+ *      change-blocks separated by a one-line context gap) and verify every
+ *      hunk references a real file + line range in that diff. Skipped if
+ *      --skip-pr-check is passed, if `gh` is missing, or if the fetch fails
+ *      (in which case a warning is emitted instead of an error so offline
+ *      workflows still pass).
  *
  * This script is intentionally dependency-free so it runs anywhere Node does.
  * It is bundled with the GitHub Pull Request extension and referenced from
@@ -407,8 +411,51 @@ function tryRunGh(args) {
 }
 
 /**
+ * Parse the GitHub REST `/pulls/<n>/files` response into the same per-file
+ * hunk map shape `parsePrDiff` returns: `Map<newPath, { previousFile?, hunks:
+ * [{ startLine, endLine }] }>`. Used in place of `gh pr diff` so the cross-
+ * check sees the *same* @@-hunk grouping the extension sees - the REST
+ * `patch` field is what `change.diffHunks` is built from, and it merges
+ * adjacent change-blocks across a one-line context gap that `git diff -U3` /
+ * `gh pr diff` keep split.
+ */
+function parseApiFiles(filesArray) {
+	const files = new Map();
+	for (const f of filesArray) {
+		const entry = {
+			previousFile: f.previous_filename || undefined,
+			hunks: [],
+		};
+		files.set(f.filename, entry);
+		if (!f.patch) continue; // binary, too-large, or pure rename with no content change
+		for (const line of f.patch.split('\n')) {
+			const m = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/.exec(line);
+			if (!m) continue;
+			const newStart = parseInt(m[1], 10);
+			const newLen = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+			const endLine = newStart + Math.max(newLen, 1) - 1;
+			entry.hunks.push({ startLine: newStart, endLine });
+		}
+	}
+	return files;
+}
+
+/**
+ * `gh api --paginate` for an array response joins consecutive pages into a
+ * single JSON array. Older gh versions emit one array per page concatenated
+ * (`][`); we accept either form by collapsing `][` to `,`.
+ */
+function parsePaginatedJsonArray(out) {
+	const trimmed = out.trim();
+	if (!trimmed) return [];
+	return JSON.parse(trimmed.replace(/\]\s*\[/g, ','));
+}
+
+/**
  * Parse a unified diff and return a map from new-side file path to a list of
- * hunk ranges `{ startLine, endLine, previousFile? }`.
+ * hunk ranges `{ startLine, endLine, previousFile? }`. Kept for backward
+ * compatibility (other tools may import it); the CLI itself uses
+ * `parseApiFiles` so its hunk grouping matches the extension.
  *
  * Handles:
  *   - regular modifies/adds (uses `+++ b/path`)
@@ -622,12 +669,13 @@ function main(argv) {
 	if (!args.skipPrCheck && hasPRInfo && structResult.hunks.length > 0) {
 		const prNumber = args.pr || structResult.frontmatter.prNumber;
 		const repo = args.repo || `${structResult.frontmatter.prOwner}/${structResult.frontmatter.prRepo}`;
-		const ghResult = tryRunGh(['pr', 'diff', String(prNumber), '-R', repo]);
+		const ghResult = tryRunGh(['api', '--paginate', `/repos/${repo}/pulls/${prNumber}/files`]);
 		if (!ghResult.ok) {
 			allWarnings.push({ line: 1, message: ghResult.reason });
 		} else {
 			try {
-				const prFiles = parsePrDiff(ghResult.out);
+				const apiFiles = parsePaginatedJsonArray(ghResult.out);
+				const prFiles = parseApiFiles(apiFiles);
 				const crossIssues = crossCheckHunks(structResult.hunks, prFiles);
 				allErrors.push(...crossIssues);
 
@@ -652,7 +700,7 @@ function main(argv) {
 			} catch (err) {
 				allWarnings.push({
 					line: 1,
-					message: `Could not parse \`gh pr diff\` output: ${err.message}. PR cross-check skipped.`,
+					message: `Could not parse \`gh api /repos/${repo}/pulls/${prNumber}/files\` output: ${err.message}. PR cross-check skipped.`,
 				});
 			}
 		}

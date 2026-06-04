@@ -35,6 +35,13 @@
  * (the format the in-extension tool returns). Exit code is 0 when all three
  * lists are empty, 1 otherwise.
  *
+ * PR hunks are fetched from `gh api /repos/<repo>/pulls/<n>/files` (the same
+ * REST `patch` field the extension builds `change.diffHunks` from) rather
+ * than `gh pr diff`. The two sources disagree on hunk grouping - GitHub's
+ * API merges adjacent change-blocks separated by a one-line context gap
+ * that `git diff -U3` / `gh pr diff` keep split - so matching the extension
+ * exactly requires reading from the API field.
+ *
  * Dependency-free so it runs anywhere Node does.
  */
 
@@ -184,9 +191,69 @@ function tryRunGh(args) {
 }
 
 /**
+ * Parse the GitHub REST `/pulls/<n>/files` response into the same per-file
+ * hunk map shape `parsePrDiff` returns. Used in place of `gh pr diff` so the
+ * CLI sees the *same* @@-hunk grouping the in-extension detector sees: the
+ * REST `patch` field is what `change.diffHunks` is built from, and it merges
+ * adjacent change-blocks across a one-line context gap that `gh pr diff` /
+ * `git diff -U3` keep split. Sourcing from the same field is the only way
+ * the two reports agree on hunk boundaries.
+ */
+function parseApiFiles(filesArray) {
+	const files = new Map(); // newPath → { previousFile?, hunks: [{ startLine, endLine, patch }] }
+	for (const f of filesArray) {
+		const entry = {
+			previousFile: f.previous_filename || undefined,
+			hunks: [],
+		};
+		files.set(f.filename, entry);
+		if (!f.patch) continue; // binary, too-large, or pure rename with no content change
+		const lines = f.patch.split('\n');
+		let currentHunk = null;
+		let buf = [];
+		const closeHunk = () => {
+			if (currentHunk) {
+				entry.hunks.push({
+					startLine: currentHunk.startLine,
+					endLine: currentHunk.endLine,
+					patch: buf.join('\n'),
+				});
+			}
+			currentHunk = null;
+			buf = [];
+		};
+		for (const line of lines) {
+			const m = PATCH_HEADER_RE.exec(line);
+			if (m) {
+				closeHunk();
+				const newStart = parseInt(m[1], 10);
+				const newCount = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+				currentHunk = { startLine: newStart, endLine: newStart + Math.max(newCount, 1) - 1 };
+				buf = [line];
+				continue;
+			}
+			if (currentHunk) buf.push(line);
+		}
+		closeHunk();
+	}
+	return files;
+}
+
+/**
+ * `gh api --paginate` for an array response joins consecutive pages into a
+ * single JSON array. Older gh versions emit one array per page concatenated
+ * (`][`); we accept either form by collapsing `][` to `,`.
+ */
+function parsePaginatedJsonArray(out) {
+	const trimmed = out.trim();
+	if (!trimmed) return [];
+	return JSON.parse(trimmed.replace(/\]\s*\[/g, ','));
+}
+
+/**
  * Parse a unified diff into per-file hunk lists with full patch text per
- * hunk. The patch text per hunk is what we fingerprint against the tour's
- * stored patches.
+ * hunk. Kept for backward compatibility (other tools import this); the CLI
+ * itself uses `parseApiFiles` so its hunk grouping matches the extension.
  */
 function parsePrDiff(diffText) {
 	const files = new Map(); // newPath → { previousFile?, hunks: [{ startLine, endLine, patch }] }
@@ -391,11 +458,19 @@ function main(argv) {
 		process.exit(2);
 	}
 
-	const ghResult = tryRunGh(['pr', 'diff', String(prNumber), '-R', repo]);
+	const ghResult = tryRunGh(['api', '--paginate', `/repos/${repo}/pulls/${prNumber}/files`]);
 	if (!ghResult.ok) { console.error(ghResult.reason); process.exit(2); }
 
+	let apiFiles;
+	try {
+		apiFiles = parsePaginatedJsonArray(ghResult.out);
+	} catch (err) {
+		console.error(`Could not parse \`gh api\` response: ${err.message}`);
+		process.exit(2);
+	}
+
 	const tourHunks = parseTourHunks(text);
-	const prFiles = parsePrDiff(ghResult.out);
+	const prFiles = parseApiFiles(apiFiles);
 	const report = computeDriftReport(tourHunks, prFiles);
 
 	if (args.json) {
@@ -429,4 +504,4 @@ if (require.main === module) {
 	main(process.argv);
 }
 
-module.exports = { parseTourHunks, parsePrDiff, computeDriftReport, editContentFingerprint };
+module.exports = { parseTourHunks, parsePrDiff, parseApiFiles, parsePaginatedJsonArray, computeDriftReport, editContentFingerprint };
