@@ -13,7 +13,7 @@
 ![Editor Actions toolbar](images/editorActionsToolbar.png)
 While *editing* Change Tours, the Editor Actions toolbar contains the following actions:
 - **Edit Change Tour with Claude Code (Terminal)**: Opens the terminal with a prefilled Claude invocation (see [Using the Claude Code CLI below](#using-the-claude-code-cli) for details)
-- **Open Change Tour Hunk Selector**: Open the pull request diff to select hunks to add to the Change Tour
+- **Toggle Change Tour Hunk Selector**: Open/close the pull request diff for selecting hunks to add to the Change Tour
 - **Open Pull Request Overview**: Open the GitHub Pull Request overview
 - **Toggle Diff Layout (Inline / Side-by-Side)**: Switch the diff layout between inline (unified) and side-by-side
 - **Toggle Edit / Review Mode**: Switch the Change Tour view between edit and review modes

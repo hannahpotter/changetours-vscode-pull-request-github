@@ -11,6 +11,73 @@
 	margin: 0 auto;
 }
 
+/*
+ * Thin vertical gutter rendered at the seam between the editor and the
+ * Changes overview. Always visible in both states so collapse and expand
+ * have a single discoverable in-context affordance:
+ *   - `.changes-gutter-collapsed`: standalone strip after the editor; shows
+ *     `<<` and opens the panel on click.
+ *   - `.changes-gutter-open`: left edge of the open panel; shows `>>` and
+ *     hides the panel on click.
+ * Styling stays in the muted-grey range to match the rest of the editor
+ * chrome - no accent colors, no border, just a hover fill so the strip
+ * doesn't read as a load-bearing UI element.
+ */
+.changes-gutter {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	width: 22px;
+	height: 100%;
+	/* Matches `.tour-group-header` so the gutter reads as part of the same
+	 * neutral chrome surface as the collapsible section headers. */
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	color: var(--vscode-foreground);
+	border: none;
+	cursor: pointer;
+	padding: 12px 0;
+	font-family: var(--vscode-font-family);
+	user-select: none;
+	transition: background 0.15s ease, color 0.15s ease;
+	flex-shrink: 0;
+}
+
+.changes-gutter-open {
+	border-right: 1px solid var(--vscode-panel-border);
+}
+
+.changes-gutter:hover {
+	background: var(--vscode-list-hoverBackground);
+	color: var(--vscode-foreground);
+}
+
+.changes-gutter:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -2px;
+}
+
+.changes-gutter-chevrons {
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: -1px;
+	line-height: 1;
+}
+
+/*
+ * Rotated label so a ~22px vertical strip can still announce what it opens
+ * without forcing every user to hover for the tooltip. Same muted color as
+ * the chevrons - the gutter as a whole reads as chrome, not as an action.
+ */
+.changes-gutter-label {
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	writing-mode: vertical-rl;
+	transform: rotate(180deg);
+}
+
 .tour-title {
 	margin-bottom: 20px;
 	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));

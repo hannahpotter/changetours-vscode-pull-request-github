@@ -37,7 +37,12 @@ function Root() {
 	const [isEditMode, setIsEditMode] = useState(false);
 	const [handler, setHandler] = useState<MessageHandler | undefined>(undefined);
 	const [scrollToNode, setScrollToNode] = useState<{ id: string; ts: number } | undefined>(undefined);
-	const [isChangesOpen, setIsChangesOpen] = useState(false);
+	// The diff picker defaults to open: most authoring sessions immediately
+	// need to drag hunks in. When the user collapses it (via the command or
+	// the in-editor gutter button), we render a thin `<<` gutter on the right
+	// edge so the panel is rediscoverable - VS Code's own command palette
+	// works too but the gutter is a one-click in-context affordance.
+	const [isChangesOpen, setIsChangesOpen] = useState(true);
 	const [changesData, setChangesData] = useState<any>(undefined);
 	const [activeNodeId, setActiveNodeId] = useState<string | undefined>(undefined);
 	const [insertHunkCommand, setInsertHunkCommand] = useState<{ ts: number, payload: HunkReference[], mode: 'active' | 'quickpick' | 'requestGroupsForQuickPick', targetId?: string } | undefined>(undefined);
@@ -500,7 +505,7 @@ function Root() {
 		<div className="code-tour-app-root">
 			{rateLimitBanner}
 			<div style={{ display: 'flex', width: '100%', height: '100%' }}>
-				<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', borderRight: isChangesOpen ? '1px solid var(--vscode-panel-border)' : 'none' }}>
+				<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', borderRight: '1px solid var(--vscode-panel-border)' }}>
 					<CodeTourEditor
 					document={doc}
 					activePR={activePR}
@@ -531,13 +536,58 @@ function Root() {
 					onOpenExcludedDiff={onOpenExcludedDiff}
 				/>
 			</div>
-				{isChangesOpen && (
-					<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', position: 'relative' }}>
-						{changesData ? (
-							<ChangedFilesOverview {...changesData} onHunkAdd={onHunkAdd} onHunkExclude={onHunkExclude} onFileExclude={onFileExclude} activeNodeContext={activeNodeContext} codeTourHunks={codeTourHunks} exclusions={doc?.exclusions ?? []} onAddAllMissing={onAddAllMissing} diffLayout={diffLayout} />
-						) : (
-							<div className="loading-indicator">Loading PR changes...</div>
-						)}
+				{isChangesOpen ? (
+					<div style={{ display: 'flex', flex: 1, minWidth: 0, height: '100%' }}>
+						<div
+							role="button"
+							tabIndex={0}
+							className="changes-gutter changes-gutter-open"
+							title="Hide PR change list"
+							aria-label="Hide PR change list"
+							onClick={() => setIsChangesOpen(false)}
+							onKeyDown={e => {
+								if (e.key === 'Enter' || e.key === ' ') {
+									e.preventDefault();
+									setIsChangesOpen(false);
+								}
+							}}
+						>
+							<span className="changes-gutter-chevrons" aria-hidden="true">{'>>'}</span>
+							<span className="changes-gutter-label" aria-hidden="true">Change List</span>
+						</div>
+						<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', position: 'relative' }}>
+							{changesData ? (
+								<ChangedFilesOverview {...changesData} onHunkAdd={onHunkAdd} onHunkExclude={onHunkExclude} onFileExclude={onFileExclude} activeNodeContext={activeNodeContext} codeTourHunks={codeTourHunks} exclusions={doc?.exclusions ?? []} onAddAllMissing={onAddAllMissing} diffLayout={diffLayout} />
+							) : (
+								<div className="loading-indicator">Loading PR changes...</div>
+							)}
+						</div>
+					</div>
+				) : (
+					<div
+						role="button"
+						tabIndex={0}
+						className="changes-gutter changes-gutter-collapsed"
+						title="Show PR change list"
+						aria-label="Show PR change list"
+						onClick={() => {
+							setIsChangesOpen(true);
+							if (!changesData) {
+								handler?.postMessage({ command: 'codeTourEditor.requestChanges' });
+							}
+						}}
+						onKeyDown={e => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								setIsChangesOpen(true);
+								if (!changesData) {
+									handler?.postMessage({ command: 'codeTourEditor.requestChanges' });
+								}
+							}
+						}}
+					>
+						<span className="changes-gutter-chevrons" aria-hidden="true">{'<<'}</span>
+						<span className="changes-gutter-label" aria-hidden="true">Change List</span>
 					</div>
 				)}
 			</div>
