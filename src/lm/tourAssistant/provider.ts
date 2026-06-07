@@ -99,7 +99,7 @@ export async function resolveProvider(ctx: ProviderResolutionContext): Promise<T
 		}
 		// Dynamic import keeps the SDK out of the load path for vscode-lm-only users.
 		const { AnthropicProvider } = await import('./anthropicProvider');
-		const model = cfg.get<string>('anthropicModel', 'claude-3-5-sonnet-latest');
+		const model = cfg.get<string>('anthropicModel', 'claude-sonnet-4-5');
 		return new AnthropicProvider(key, model);
 	};
 

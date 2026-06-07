@@ -31,7 +31,10 @@ export const editIcon = <Icon src={require('../../resources/icons/codicons/edit.
 export const errorIcon = <Icon src={require('../../resources/icons/codicons/error.svg')} />;
 export const eyeIcon = <Icon src={require('../../resources/icons/codicons/eye.svg')} />;
 export const eyeClosedIcon = <Icon src={require('../../resources/icons/codicons/eye-closed.svg')} />;
+export const ellipsisIcon = <Icon src={require('../../resources/icons/codicons/ellipsis.svg')} />;
 export const feedbackIcon = <Icon src={require('../../resources/icons/codicons/feedback.svg')} />;
+export const foldIcon = <Icon src={require('../../resources/icons/codicons/fold.svg')} />;
+export const unfoldIcon = <Icon src={require('../../resources/icons/codicons/unfold.svg')} />;
 export const gitCommitIcon = <Icon src={require('../../resources/icons/codicons/git-commit.svg')} />;
 export const gitCompareIcon = <Icon src={require('../../resources/icons/codicons/git-compare.svg')} />;
 export const gitMergeIcon = <Icon src={require('../../resources/icons/codicons/git-merge.svg')} />;

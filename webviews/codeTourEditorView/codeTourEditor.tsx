@@ -5,14 +5,15 @@
 
 import * as marked from 'marked';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Tooltip } from './tooltip';
-import { computeNewInPrCount, computeOutdatedHunks, findShiftOnlyMatches, indexPrState, type PrState, suggestUpdateCandidateIdx } from './viewerModel';
-import { type CodeTourDocument, type HighlightRange, type HunkReference, serializeCodeTourMarkdown, type TourNode, type TourTextNode } from '../../src/github/codeTourMarkdown';
+import { computeNewInPrCount, computeOutdatedHunks, editContentFingerprint, findShiftOnlyMatches, indexPrState, type PrState, suggestUpdateCandidateIdx } from './viewerModel';
+import { type CodeTourDocument, type ExcludedHunkMarker, findMarkersMatchingHunk, type HighlightRange, type HunkReference, isExactRangeMarker, isGlob, matchesGlob, serializeCodeTourMarkdown, type TourNode, type TourTextNode } from '../../src/github/codeTourMarkdown';
 import { appendNodeToGroupEnd, DropPosition, insertNodeRelative, moveNodeRelative, moveNodeToGroupEnd, normalizeGroupLevels } from '../../src/github/codeTourTreeHelpers';
+import type { ChangeTourChangesData } from '../../src/github/views';
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import  { getHunkSummary, type ParsedDiffLine, parsePatch } from '../common/diffUtils';
-import { addIcon, checkIcon, chevronDownIcon, closeIcon, codeIcon, copilotIcon, diffSingleIcon, editIcon, eyeClosedIcon, eyeIcon, gripperIcon, newCollectionIcon, pinnedIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, syncIcon, terminalIcon, trashIcon, unpinIcon} from '../components/icon';
+import { Tooltip } from '../common/tooltip';
+import { addIcon, checkIcon, chevronDownIcon, closeIcon, codeIcon, copilotIcon, diffSingleIcon, editIcon, eyeClosedIcon, foldIcon, gripperIcon, newCollectionIcon, pinnedIcon, sparkleIcon, stopCircleIcon, symbolStringIcon, syncIcon, terminalIcon, trashIcon, unfoldIcon, unpinIcon} from '../components/icon';
 
 type InsertKind = 'text' | 'code' | 'group';
 
@@ -57,6 +58,13 @@ interface EditorDocument {
 	baseSha?: string;
 	headSha?: string;
 	children: EditorNode[];
+	/**
+	 * Parsed `<!-- changetour:exclude ... -->` markers. Carried through the
+	 * editor state so the Excluded outline section stays in sync with edits
+	 * that add or remove markers (the editor reads from `doc.exclusions`
+	 * rather than re-scanning the serialized markdown).
+	 */
+	exclusions?: ExcludedHunkMarker[];
 }
 
 export interface AssistantStatus {
@@ -95,6 +103,26 @@ interface CodeTourEditorProps {
 	onUpdateWithClaudeCode?: () => void;
 	/** Open Copilot Chat pre-populated with `@change-tour /update`. */
 	onUpdateWithCopilotChat?: () => void;
+	/**
+	 * Snapshot of the bound PR's file changes (the same `changesData` the
+	 * Changes overview consumes). Used by the editor's Excluded outline
+	 * section to resolve `<!-- changetour:exclude ... -->` markers into real
+	 * PR hunks so the "Open diff" button can open the right file/range.
+	 */
+	changesData?: ChangeTourChangesData;
+	/**
+	 * Remove a `<!-- changetour:exclude ... -->` marker. Exact-range markers
+	 * pass both bounds; whole-file or glob markers pass undefined for both.
+	 * Provider matches against the on-disk attribute shape.
+	 */
+	onRemoveExclusion?: (file: string, startLine?: number, endLine?: number) => void;
+	/**
+	 * Open the diff for an excluded marker. The webview pre-resolves the list
+	 * of candidate `HunkReference`s from `changesData`; the provider shows a
+	 * quickpick when there's more than one (whole-file / glob markers can
+	 * match many hunks).
+	 */
+	onOpenExcludedDiff?: (hunks: HunkReference[], target: string) => void;
 }
 
 const HUNK_MIME_TYPE = 'application/vnd.codetour.hunk+json';
@@ -258,6 +286,11 @@ function serializeDoc(doc: EditorDocument): string {
 		baseSha: doc.baseSha,
 		headSha: doc.headSha,
 		children: editorNodesToTourNodes(doc.children),
+		// Carry exclusions through the round-trip. The serializer re-emits the
+		// `## Excluded Changes` appendix from this field (the parser stripped
+		// it from `children`), so without forwarding it here every local edit
+		// in the webview would silently drop every marker on save.
+		exclusions: doc.exclusions,
 	};
 	return serializeCodeTourMarkdown(tourDoc);
 }
@@ -869,15 +902,15 @@ function HunkBlock({
 						)}
 						{isEditMode && (
 							<Tooltip text={node.hunk.defaultCollapsed
-								? "Viewer won't see this hunk by default - click to make viewer see it by default"
-								: 'Viewer sees this hunk by default - click to make viewer not see it by default'}>
+								? "Viewer won't see this hunk expanded by default - click to make viewer see it by default"
+								: 'Viewer sees this hunk expanded by default - click to make viewer not see it by default'}>
 								<button
 									type="button"
 									className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.hunk.defaultCollapsed ? ' active' : ''}`}
 									aria-pressed={!!node.hunk.defaultCollapsed}
 									onClick={() => onToggleHunkDefaultCollapsed(node.id)}
 								>
-									{node.hunk.defaultCollapsed ? eyeClosedIcon : eyeIcon}
+									{node.hunk.defaultCollapsed ? unfoldIcon : foldIcon}
 								</button>
 							</Tooltip>
 						)}
@@ -1350,15 +1383,15 @@ function GroupBlock({
 				)}
 				{isEditMode && (
 					<Tooltip text={node.defaultCollapsed
-						? "Viewer won't see this section by default - click to make viewer see it by default"
-						: 'Viewer sees this section by default - click to make viewer not see it by default'}>
+						? "Viewer won't see this section expanded by default - click to make viewer see it by default"
+						: 'Viewer sees this section expanded by default - click to make viewer not see it by default'}>
 						<button
 							type="button"
 							className={`tour-action-btn icon-button tour-default-collapsed-toggle${node.defaultCollapsed ? ' active' : ''}`}
 							aria-pressed={!!node.defaultCollapsed}
 							onClick={() => onToggleDefaultCollapsed(node.id)}
 						>
-							{node.defaultCollapsed ? eyeClosedIcon : eyeIcon}
+							{node.defaultCollapsed ? unfoldIcon : foldIcon}
 						</button>
 					</Tooltip>
 				)}
@@ -1780,7 +1813,7 @@ function InsertGap({
 
 /* - Main editor component ---------------------- */
 
-export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, onRequestChangesOpen, activePR, isEditMode = true, diffLayout = 'inline', scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError, assistantStatus, onRunAssistant, onCancelAssistant, onDismissAssistantError, prState, onRefreshPrState, onUpdateWithClaudeCode, onUpdateWithCopilotChat }: CodeTourEditorProps) {
+export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeTourHunksChange, onOpenDiff, onCheckoutPR, onRequestChangesOpen, activePR, isEditMode = true, diffLayout = 'inline', scrollToNode, insertHunkCommand, insertMultipleHunksCommand, onProvideGroupsForQuickPick, onActiveNodeChanged, onError, assistantStatus, onRunAssistant, onCancelAssistant, onDismissAssistantError, prState, onRefreshPrState, onUpdateWithClaudeCode, onUpdateWithCopilotChat, changesData, onRemoveExclusion, onOpenExcludedDiff }: CodeTourEditorProps) {
 	const [doc, setDoc] = useState<EditorDocument>(() => cloneDoc(initialDoc));
 	const [titleDraft, setTitleDraft] = useState(initialDoc.title);
 	const [dragState, setDragState] = useState<ReorderDragState | null>(null);
@@ -1939,6 +1972,49 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		}
 	}, [scrollToNode]);
 
+	// Partition a list of hunk payloads against the current exclusion list so
+	// the insert paths below honor the "tour and excluded list don't overlap"
+	// invariant. Returns:
+	//   - accepted: payloads safe to insert.
+	//   - blocked:  payloads that would conflict with a whole-file / glob
+	//     marker; the user is shown a single error explaining why, since
+	//     silently dropping a broad marker would un-exclude every other hunk
+	//     it covers.
+	//   - exactRangeMarkersToDrop: exact-range markers we'll remove from
+	//     prev.exclusions because the payloads they used to cover are now
+	//     in the tour.
+	const partitionAgainstExclusions = useCallback((
+		payloads: ReadonlyArray<HunkReference>,
+		exclusions: ReadonlyArray<ExcludedHunkMarker>,
+	): { accepted: HunkReference[]; blocked: Array<{ payload: HunkReference; markers: ExcludedHunkMarker[] }>; exactRangeMarkersToDrop: ExcludedHunkMarker[] } => {
+		const accepted: HunkReference[] = [];
+		const blocked: Array<{ payload: HunkReference; markers: ExcludedHunkMarker[] }> = [];
+		const exactRangeMarkersToDrop = new Set<ExcludedHunkMarker>();
+		for (const p of payloads) {
+			const matches = findMarkersMatchingHunk(exclusions, p.file, p.startLine, p.endLine, editContentFingerprint(p.patch));
+			const broad = matches.filter(m => !isExactRangeMarker(m));
+			if (broad.length > 0) {
+				blocked.push({ payload: p, markers: broad });
+				continue;
+			}
+			for (const m of matches) {
+				if (isExactRangeMarker(m)) exactRangeMarkersToDrop.add(m);
+			}
+			accepted.push(p);
+		}
+		return { accepted, blocked, exactRangeMarkersToDrop: Array.from(exactRangeMarkersToDrop) };
+	}, []);
+
+	const reportBlockedInsertions = useCallback((blocked: Array<{ payload: HunkReference; markers: ExcludedHunkMarker[] }>) => {
+		if (blocked.length === 0 || !onError) return;
+		const sample = blocked.slice(0, 3).map(b => `${b.payload.file}:${b.payload.startLine}-${b.payload.endLine} (covered by file="${b.markers[0].file}")`).join('; ');
+		const more = blocked.length > 3 ? `, +${blocked.length - 3} more` : '';
+		onError(
+			`Skipped ${blocked.length} hunk(s) that are covered by a whole-file / glob exclusion marker (${sample}${more}). ` +
+			`Remove the marker from the Excluded outline first if you want to add the hunk to the tour.`,
+		);
+	}, [onError]);
+
 	// Handle insert hunk command
 	useEffect(() => {
 		if (!insertHunkCommand) {
@@ -1947,7 +2023,12 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 
 		if (insertHunkCommand.mode === 'active' || insertHunkCommand.mode === 'requestGroupsForQuickPick') {
 			applyLocal(prev => {
-					const payloads = insertHunkCommand.payload;
+					const rawPayloads = insertHunkCommand.payload;
+					const { accepted: payloads, blocked, exactRangeMarkersToDrop } = partitionAgainstExclusions(rawPayloads, prev.exclusions ?? []);
+					reportBlockedInsertions(blocked);
+					if (payloads.length === 0) {
+						return prev;
+					}
 				let newChildren = prev.children;
 				let lastInsertedId: string | undefined;
 				let currentActiveId = activeNodeId;
@@ -1984,12 +2065,20 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				}
 
 				if (lastInsertedId) setJustInsertedId(lastInsertedId);
-				return { ...prev, children: newChildren };
+				const newExclusions = exactRangeMarkersToDrop.length > 0
+					? (prev.exclusions ?? []).filter(m => !exactRangeMarkersToDrop.includes(m))
+					: prev.exclusions;
+				return { ...prev, children: newChildren, exclusions: newExclusions };
 			});
 		} else if (insertHunkCommand.mode === 'quickpick') {
 			if (insertHunkCommand.targetId) {
 				applyLocal(prev => {
-						const payloads = insertHunkCommand.payload;
+						const rawPayloads = insertHunkCommand.payload;
+						const { accepted: payloads, blocked, exactRangeMarkersToDrop } = partitionAgainstExclusions(rawPayloads, prev.exclusions ?? []);
+						reportBlockedInsertions(blocked);
+						if (payloads.length === 0) {
+							return prev;
+						}
 					let newChildren = prev.children;
 					let lastInsertedId: string | undefined;
 
@@ -2019,7 +2108,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					}
 
 					if (lastInsertedId) setJustInsertedId(lastInsertedId);
-					return { ...prev, children: newChildren };
+					const newExclusions = exactRangeMarkersToDrop.length > 0
+						? (prev.exclusions ?? []).filter(m => !exactRangeMarkersToDrop.includes(m))
+						: prev.exclusions;
+					return { ...prev, children: newChildren, exclusions: newExclusions };
 				});
 			} else if (onProvideGroupsForQuickPick) {
 				const groups: { id: string; title: string }[] = [];
@@ -2044,13 +2136,18 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		}
 
 		applyLocal(prev => {
+			const { accepted: payloads, blocked, exactRangeMarkersToDrop } = partitionAgainstExclusions(insertMultipleHunksCommand.payloads, prev.exclusions ?? []);
+			reportBlockedInsertions(blocked);
+			if (payloads.length === 0) {
+				return prev;
+			}
 			const groupId = localId();
 			const newGroup: EditorGroupNode = {
 				type: 'group',
 				id: groupId,
 				title: 'Remaining Changes',
 				level: 1, // Will be normalized
-				children: insertMultipleHunksCommand.payloads.map(payload => ({
+				children: payloads.map(payload => ({
 					type: 'hunk',
 					id: localId(),
 					hunk: {
@@ -2065,7 +2162,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			};
 
 			setJustInsertedId(groupId);
-			return { ...prev, children: appendToList(prev.children, newGroup) };
+			const newExclusions = exactRangeMarkersToDrop.length > 0
+				? (prev.exclusions ?? []).filter(m => !exactRangeMarkersToDrop.includes(m))
+				: prev.exclusions;
+			return { ...prev, children: appendToList(prev.children, newGroup), exclusions: newExclusions };
 		});
 	}, [insertMultipleHunksCommand]);
 
@@ -2785,6 +2885,24 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		[applyLocal],
 	);
 
+	// Edit an exclusion marker's reason in place. Matches the marker by its
+	// (file, startLine, endLine) identity; an empty reason clears the
+	// attribute. Deferred like the summary editor so each keystroke persists
+	// without forcing an immediate document flush.
+	const handleExclusionReasonChange = useCallback(
+		(file: string, startLine: number | undefined, endLine: number | undefined, reason: string) => {
+			applyLocal(prev => ({
+				...prev,
+				exclusions: (prev.exclusions ?? []).map(e =>
+					e.file === file && e.startLine === startLine && e.endLine === endLine
+						? { ...e, reason: reason.trim().length > 0 ? reason : undefined }
+						: e,
+				),
+			}), { defer: true });
+		},
+		[applyLocal],
+	);
+
 	/* - Remove node ------------------------- */
 
 	const handleRemove = useCallback((id: string) => {
@@ -2836,7 +2954,12 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 
 	const handleDropZoneDrop = useCallback((dropZoneId: string, payload: HunkPayload) => {
 		applyLocal(prev => {
-			const updated = {
+			const { accepted, blocked, exactRangeMarkersToDrop } = partitionAgainstExclusions([payload], prev.exclusions ?? []);
+			reportBlockedInsertions(blocked);
+			if (accepted.length === 0) {
+				return prev;
+			}
+			const updated: EditorDocument = {
 				...prev,
 				children: updateNodeInList(prev.children, dropZoneId, () => ({
 					type: 'hunk' as const,
@@ -2866,9 +2989,12 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 				}
 			}
 
+			if (exactRangeMarkersToDrop.length > 0) {
+				updated.exclusions = (prev.exclusions ?? []).filter(m => !exactRangeMarkersToDrop.includes(m));
+			}
 			return updated;
 		});
-	}, [applyLocal]);
+	}, [applyLocal, partitionAgainstExclusions, reportBlockedInsertions]);
 
 	// Validate that a dropped hunk payload comes from the same PR the tour is
 	// bound to. Returns true on success, surfaces an error on mismatch.
@@ -2900,6 +3026,11 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			return;
 		}
 		applyLocal(prev => {
+			const { accepted, blocked, exactRangeMarkersToDrop } = partitionAgainstExclusions([payload], prev.exclusions ?? []);
+			reportBlockedInsertions(blocked);
+			if (accepted.length === 0) {
+				return prev;
+			}
 			const newId = localId();
 			const hunkNode: EditorHunkNode = {
 				type: 'hunk',
@@ -2928,16 +3059,24 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 					updated.schemaVersion = 1;
 				}
 			}
+			if (exactRangeMarkersToDrop.length > 0) {
+				updated.exclusions = (prev.exclusions ?? []).filter(m => !exactRangeMarkersToDrop.includes(m));
+			}
 			setJustInsertedId(newId);
 			return updated;
 		});
-	}, [applyLocal, validateHunkPayloadPR]);
+	}, [applyLocal, validateHunkPayloadPR, partitionAgainstExclusions, reportBlockedInsertions]);
 
 	// Append a hunk payload as a new hunk node at the end of the tour root.
 	// Used when the user drags from the diff picker without first creating a
 	// dropzone - they shouldn't have to set up a landing zone first.
 	const handleAppendHunkPayload = useCallback((payload: HunkPayload) => {
 		applyLocal(prev => {
+			const { accepted, blocked, exactRangeMarkersToDrop } = partitionAgainstExclusions([payload], prev.exclusions ?? []);
+			reportBlockedInsertions(blocked);
+			if (accepted.length === 0) {
+				return prev;
+			}
 			const newId = localId();
 			const hunkNode: EditorHunkNode = {
 				type: 'hunk',
@@ -2954,6 +3093,9 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			const updated: EditorDocument = {
 				...prev,
 				children: appendToList(prev.children, hunkNode),
+				exclusions: exactRangeMarkersToDrop.length > 0
+					? (prev.exclusions ?? []).filter(m => !exactRangeMarkersToDrop.includes(m))
+					: prev.exclusions,
 			};
 			if (updated.prNumber === undefined && payload.prNumber !== undefined) {
 				updated.prNumber = payload.prNumber;
@@ -2968,7 +3110,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 			setJustInsertedId(newId);
 			return updated;
 		});
-	}, [applyLocal]);
+	}, [applyLocal, partitionAgainstExclusions, reportBlockedInsertions]);
 
 	// Drop target on the tour body itself: lets the user drag a hunk from the
 	// changes picker and drop it anywhere in the empty tour area, not just on
@@ -3134,7 +3276,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							<>This Change Tour is outdated. <strong>{outdatedUnpinnedCount} hunk{outdatedUnpinnedCount === 1 ? '' : 's'}</strong> drifted from the pull request.{(newInPrCount > 0 || pendingUpdates.size > 0) ? ' ' : ''}</>
 						)}
 						{newInPrCount > 0 && (
-							<>The PR has <strong>{newInPrCount} new hunk{newInPrCount === 1 ? '' : 's'}</strong> not covered by this tour.{pendingUpdates.size > 0 ? ' ' : ''}</>
+							<>The PR has <strong>{newInPrCount} hunk{newInPrCount === 1 ? '' : 's'}</strong> not covered by this tour.{pendingUpdates.size > 0 ? ' ' : ''}</>
 						)}
 						{pendingUpdates.size > 0 && (
 							<><strong>{pendingUpdates.size} pending update{pendingUpdates.size === 1 ? '' : 's'}</strong> ready to confirm.</>
@@ -3312,7 +3454,215 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 						)}
 					</div>
 				)}
+				{(doc.exclusions?.length ?? 0) > 0 && (
+					<ExcludedOutlineSection
+						exclusions={doc.exclusions ?? []}
+						changesData={changesData}
+						isEditMode={isEditMode}
+						onOpenExcludedDiff={onOpenExcludedDiff}
+						onRemoveExclusion={onRemoveExclusion}
+						onReasonChange={handleExclusionReasonChange}
+					/>
+				)}
 			</div>
+		</div>
+	);
+}
+
+/**
+ * Outline section rendered at the tail of the editor's left pane, listing
+ * every `<!-- changetour:exclude ... -->` marker in the tour. In edit mode
+ * each row exposes:
+ *   - **Open diff** -> resolves the marker against `changesData` and fires
+ *     `onOpenDiff` with a synthesized `HunkReference`. For exact-range
+ *     markers there's one matching hunk; for whole-file or glob markers we
+ *     open the first matching hunk (the section is still useful as a
+ *     navigation jump, even when there are multiple).
+ *   - **x remove** -> fires `onRemoveExclusion` so the provider drops the
+ *     matching `<!-- changetour:exclude ... -->` line from the markdown.
+ *
+ * In view mode the rows are read-only (no buttons), matching how the
+ * synthetic Excluded outline in the viewer behaves.
+ */
+/**
+ * Single-line reason field for an exclusion marker. In edit mode it shows the
+ * reason as plain (truncated) text at rest, and reveals an editable input box
+ * only when the row is hovered or the input is focused (CSS-driven, keyed off
+ * `.excluded-outline-item:hover` / `:focus-within`) - so the edit affordance
+ * isn't always present. Mirrors the hunk summary editor: a local draft holds
+ * the in-progress value so the field doesn't snap back while typing, and each
+ * keystroke persists via `onChange`. In read-only mode it just renders the
+ * (truncated) reason text, or nothing when there's no reason.
+ */
+function ExcludedReasonField({
+	reason,
+	editable,
+	onChange,
+}: {
+	reason?: string;
+	editable: boolean;
+	onChange?: (value: string) => void;
+}) {
+	const [draft, setDraft] = useState<string | null>(null);
+
+	if (!editable) {
+		return reason
+			? <span className="excluded-outline-reason" title={reason}>{reason}</span>
+			: null;
+	}
+
+	const value = draft !== null ? draft : (reason ?? '');
+	return (
+		<span className="excluded-outline-reason-edit">
+			<span className="excluded-outline-reason-display" title={reason}>
+				{reason
+					? reason
+					: <span className="excluded-outline-reason-empty">Add a reason…</span>}
+			</span>
+			<input
+				type="text"
+				className="excluded-outline-reason-input"
+				value={value}
+				placeholder="Add a reason…"
+				title={reason || 'Reason this change is excluded from the tour'}
+				onFocus={() => setDraft(reason ?? '')}
+				onChange={e => { setDraft(e.target.value); onChange?.(e.target.value); }}
+				onBlur={() => setDraft(null)}
+				onClick={e => e.stopPropagation()}
+			/>
+		</span>
+	);
+}
+
+function ExcludedOutlineSection({
+	exclusions,
+	changesData,
+	isEditMode,
+	onOpenExcludedDiff,
+	onRemoveExclusion,
+	onReasonChange,
+}: {
+	exclusions: ReadonlyArray<ExcludedHunkMarker>;
+	changesData: ChangeTourChangesData | undefined;
+	isEditMode: boolean;
+	onOpenExcludedDiff?: (hunks: HunkReference[], target: string) => void;
+	onRemoveExclusion?: (file: string, startLine?: number, endLine?: number) => void;
+	onReasonChange?: (file: string, startLine: number | undefined, endLine: number | undefined, reason: string) => void;
+}) {
+	// Resolve every PR hunk that this marker covers (not just the first), so
+	// the Open-diff button can surface a quickpick when a glob or whole-file
+	// marker matches multiple hunks.
+	const resolveAllHunks = (e: ExcludedHunkMarker): HunkReference[] => {
+		const files: Array<{ fileName: string; previousFileName?: string; patch?: string; blobSha?: string }> = changesData?.files ?? [];
+		const matchedFiles = isGlob(e.file) ? files.filter(f => matchesGlob(e.file, f.fileName)) : files.filter(f => f.fileName === e.file);
+		const out: HunkReference[] = [];
+		for (const f of matchedFiles) {
+			if (!f.patch) continue;
+			const lines = f.patch.split('\n');
+			let cur: { startLine: number; endLine: number; buf: string[] } | undefined;
+			const all: Array<{ startLine: number; endLine: number; patch: string }> = [];
+			const flush = () => { if (cur) all.push({ startLine: cur.startLine, endLine: cur.endLine, patch: cur.buf.join('\n') }); cur = undefined; };
+			for (const line of lines) {
+				const m = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/.exec(line);
+				if (m) {
+					flush();
+					const start = parseInt(m[1], 10);
+					const len = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+					cur = { startLine: start, endLine: start + Math.max(len, 1) - 1, buf: [line] };
+					continue;
+				}
+				if (cur) cur.buf.push(line);
+			}
+			flush();
+			const targets = (e.startLine !== undefined && e.endLine !== undefined)
+				? all.filter(h => h.startLine === e.startLine && h.endLine === e.endLine)
+				: all;
+			for (const t of targets) {
+				out.push({
+					file: f.fileName,
+					startLine: t.startLine,
+					endLine: t.endLine,
+					patch: t.patch,
+					previousFile: f.previousFileName,
+					baseBlob: f.blobSha,
+					summary: e.reason,
+				});
+			}
+		}
+		return out;
+	};
+
+	const markerTarget = (e: ExcludedHunkMarker): string => {
+		if (e.startLine !== undefined && e.endLine !== undefined) return `${e.file}:${e.startLine}-${e.endLine}`;
+		return e.file;
+	};
+
+	const renderTarget = (e: ExcludedHunkMarker) => {
+		const hasRange = e.startLine !== undefined && e.endLine !== undefined;
+		return (
+			<>
+				<span className="excluded-outline-file">{e.file}</span>
+				{hasRange
+					? <span className="excluded-outline-range">{`:${e.startLine}-${e.endLine}`}</span>
+					: <span className="excluded-outline-kind"> {isGlob(e.file) ? '(pattern)' : '(whole file)'}</span>}
+			</>
+		);
+	};
+
+	return (
+		<div className="excluded-outline">
+			<div className="excluded-outline-header">
+				<span className="excluded-outline-header-icon">{eyeClosedIcon}</span>
+				<span className="excluded-outline-header-title">Excluded</span>
+				<span className="excluded-outline-header-count">({exclusions.length})</span>
+			</div>
+			<ul className="excluded-outline-list">
+				{exclusions.map((e, i) => {
+					const matchingHunks = resolveAllHunks(e);
+					const canOpen = matchingHunks.length > 0 && !!onOpenExcludedDiff;
+					const target = markerTarget(e);
+					const openTooltip = canOpen
+						? (matchingHunks.length === 1
+							? 'Open in file context'
+							: `Pick which of ${matchingHunks.length} matching hunks to open in file context`)
+						: (changesData ? 'No matching PR hunks found for this marker.' : 'PR file changes are still loading…');
+					return (
+						<li key={`${e.file}:${e.startLine ?? '*'}-${e.endLine ?? '*'}:${i}`} className="excluded-outline-item">
+							<span className="excluded-outline-target">{renderTarget(e)}</span>
+							<ExcludedReasonField
+								reason={e.reason}
+								editable={isEditMode}
+								onChange={onReasonChange ? value => onReasonChange(e.file, e.startLine, e.endLine, value) : undefined}
+							/>
+							{isEditMode && (
+								<span className="excluded-outline-actions">
+									<Tooltip text={openTooltip}>
+										<button
+											type="button"
+											className="icon-button excluded-outline-action-btn"
+											disabled={!canOpen}
+											onClick={() => { if (canOpen && onOpenExcludedDiff) onOpenExcludedDiff(matchingHunks, target); }}
+										>
+											{diffSingleIcon}
+										</button>
+									</Tooltip>
+									{onRemoveExclusion && (
+										<Tooltip text="Remove this exclusion marker">
+											<button
+												type="button"
+												className="icon-button excluded-outline-action-btn"
+												onClick={() => onRemoveExclusion(e.file, e.startLine, e.endLine)}
+											>
+												{trashIcon}
+											</button>
+										</Tooltip>
+									)}
+								</span>
+							)}
+						</li>
+					);
+				})}
+			</ul>
 		</div>
 	);
 }

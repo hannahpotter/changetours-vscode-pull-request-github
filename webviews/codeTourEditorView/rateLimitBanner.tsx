@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import React, { useEffect, useState } from 'react';
-import { Tooltip } from './tooltip';
+import { Tooltip } from '../common/tooltip';
 
 /**
  * Top-of-webview banner that surfaces GitHub API rate-limit failures the

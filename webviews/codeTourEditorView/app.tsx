@@ -222,6 +222,25 @@ function Root() {
 		});
 	}, [handler, doc]);
 
+	const onOpenExcludedDiff = useCallback((hunks: any[], target: string) => {
+		// Attach PR coords to every candidate so codetour.openDiff gets the
+		// same context the single-hunk path provides. The provider shows a
+		// quickpick when there's more than one candidate.
+		const payloads = hunks.map(h => {
+			const p = { ...h };
+			if (doc && doc.prNumber !== undefined) {
+				p.prNumber = doc.prNumber;
+				p.prOwner = doc.prOwner;
+				p.prRepo = doc.prRepo;
+			}
+			return p;
+		});
+		handler?.postMessage({
+			command: 'codeTourEditor.openExcludedDiff',
+			args: { hunks: payloads, target },
+		});
+	}, [handler, doc]);
+
 	const onCheckoutPR = useCallback(() => {
 		if (doc && doc.prNumber) {
 			handler?.postMessage({
@@ -286,6 +305,27 @@ function Root() {
 		handler?.postMessage({
 			command: 'codeTourEditor.addHunk',
 			args: { hunk: hunks, mode }
+		});
+	}, [handler]);
+
+	const onHunkExclude = useCallback((file: string, startLine: number, endLine: number, fp: string | undefined) => {
+		handler?.postMessage({
+			command: 'codeTourEditor.excludeHunk',
+			args: { file, startLine, endLine, fp }
+		});
+	}, [handler]);
+
+	const onFileExclude = useCallback((file: string) => {
+		handler?.postMessage({
+			command: 'codeTourEditor.excludeFile',
+			args: { file }
+		});
+	}, [handler]);
+
+	const onRemoveExclusion = useCallback((file: string, startLine?: number, endLine?: number) => {
+		handler?.postMessage({
+			command: 'codeTourEditor.removeExclusion',
+			args: { file, startLine, endLine }
 		});
 	}, [handler]);
 
@@ -449,6 +489,7 @@ function Root() {
 						diffLayout={diffLayout}
 						prState={prState}
 						onRefreshPrState={onRefreshPrState}
+						changesData={changesData}
 					/>
 				</div>
 			</div>
@@ -485,12 +526,15 @@ function Root() {
 					onRefreshPrState={onRefreshPrState}
 					onUpdateWithClaudeCode={onUpdateWithClaudeCode}
 					onUpdateWithCopilotChat={onUpdateWithCopilotChat}
+					changesData={changesData}
+					onRemoveExclusion={onRemoveExclusion}
+					onOpenExcludedDiff={onOpenExcludedDiff}
 				/>
 			</div>
 				{isChangesOpen && (
 					<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', position: 'relative' }}>
 						{changesData ? (
-							<ChangedFilesOverview {...changesData} onHunkAdd={onHunkAdd} activeNodeContext={activeNodeContext} codeTourHunks={codeTourHunks} onAddAllMissing={onAddAllMissing} diffLayout={diffLayout} />
+							<ChangedFilesOverview {...changesData} onHunkAdd={onHunkAdd} onHunkExclude={onHunkExclude} onFileExclude={onFileExclude} activeNodeContext={activeNodeContext} codeTourHunks={codeTourHunks} exclusions={doc?.exclusions ?? []} onAddAllMissing={onAddAllMissing} diffLayout={diffLayout} />
 						) : (
 							<div className="loading-indicator">Loading PR changes...</div>
 						)}

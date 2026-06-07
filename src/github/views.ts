@@ -128,6 +128,23 @@ export interface ChangedFileInfo {
 	blobSha?: string;
 }
 
+/**
+ * Snapshot of the bound PR's file changes that the extension posts to the
+ * change-tour editor webview as `codeTourEditor.changesData`. Carries the
+ * outer PR metadata plus the per-file diff entries; consumed by both the
+ * Changes overview (which spreads the whole object as props) and the
+ * editor's Excluded outline section (which only reads `files`).
+ */
+export interface ChangeTourChangesData {
+	title: string;
+	number: number;
+	owner: string;
+	repo: string;
+	baseSha?: string;
+	headSha?: string;
+	files: ChangedFileInfo[];
+}
+
 export interface ProjectItemsReply {
 	projectItems: IProjectItem[] | undefined;
 }

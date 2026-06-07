@@ -34,6 +34,7 @@ See the VS Code Pull Request Extension wiki for [how to build and run for develo
 Open a pull request overview and choose to open an existing Change Tour file or create a new one for the pull request. Tours are created/opened at `<repoRoot>/.changetours/<prNumber>-<sanitized-title>.changetour.md`. See the [schema documentation](/documentation/CHANGETOURSCHEMA.md) for details on how Change Tours are stored.
 
 ![Edit/Review Toggle](documentation/images/editReviewToggle.png)
+
 Use the `Toggle Edit/Review Mode` button in the Editor Actions toolbar to switch between edit mode and review mode.
 
 ## Editing a Change Tour (Edit Mode)
@@ -42,9 +43,11 @@ Use the `Toggle Edit/Review Mode` button in the Editor Actions toolbar to switch
 The Change Tour editor offers 2 primary ways to edit:
 - Manual editing
 - AI assistant editing (both interactive and fully automated modes)
-	- ✨ buttons in the editor (uses whichever LLM provider is configured - see instructions on [how to set the LLM provider](documentation/AUTHORING.md#llm-provider))
+	- ✨ buttons in the editor
 	- Copilot Chat participant `@change-tour`
 	- Claude Code CLI
+
+The ✨ buttons and Copilot Chat participant use whichever LLM provider is configured and can be set to use an Anthropic API key - see instructions on [how to set the LLM provider](documentation/AUTHORING.md#llm-provider).
 
 For a more detailed overview of the editing features, including information about the AI assistants and how to customize the AI prompts, see the [authoring documentation](documentation/AUTHORING.md).
 

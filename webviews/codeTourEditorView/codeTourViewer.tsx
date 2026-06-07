@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Tooltip } from './tooltip';
 import { ViewerLeftPane } from './viewerLeftPane';
 import {
 	associatedHunkIds as computeAssociatedHunkIds,
@@ -12,6 +11,7 @@ import {
 	computeOutdatedHunks,
 	dedupAndGroupByFile,
 	descendantHunkKeys,
+	EXCLUDED_SECTION_ID,
 	findNode,
 	findParentGroup,
 	flattenHunks,
@@ -22,7 +22,9 @@ import {
 } from './viewerModel';
 import { type CommentTarget, ViewerRightPane } from './viewerRightPane';
 import { DiffSide, type IComment, type IReviewThread } from '../../src/common/comment';
-import type { CodeTourDocument, HunkReference, TourGroupNode, TourNode, TourTextNode } from '../../src/github/codeTourMarkdown';
+import { type CodeTourDocument, type ExcludedHunkMarker, type HunkReference, isGlob, matchesGlob, type TourGroupNode, type TourHunkNode, type TourNode, type TourTextNode } from '../../src/github/codeTourMarkdown';
+import type { ChangeTourChangesData } from '../../src/github/views';
+import { Tooltip } from '../common/tooltip';
 
 interface ViewerLoadThreadsMessage {
 	command: 'codeTourViewer.threadsLoaded';
@@ -63,7 +65,8 @@ export interface ViewerInboxMessage {
 type ViewerOutboundMessage =
 	| { command: 'codeTourViewer.loadThreads'; args: { prNumber: number | undefined; prOwner: string | undefined; prRepo: string | undefined } }
 	| { command: 'codeTourViewer.addComment'; args: { requestId: string; prNumber: number | undefined; prOwner: string | undefined; prRepo: string | undefined; file: string; startLine?: number; endLine: number; side: CommentTarget['side']; body: string } }
-	| { command: 'codeTourViewer.replyToThread'; args: { requestId: string; prNumber: number | undefined; prOwner: string | undefined; prRepo: string | undefined; threadId: string; inReplyToCommentNodeId: string; body: string } };
+	| { command: 'codeTourViewer.replyToThread'; args: { requestId: string; prNumber: number | undefined; prOwner: string | undefined; prRepo: string | undefined; threadId: string; inReplyToCommentNodeId: string; body: string } }
+	| { command: 'codeTourEditor.requestChanges' };
 
 interface CodeTourViewerProps {
 	doc: CodeTourDocument;
@@ -88,6 +91,13 @@ interface CodeTourViewerProps {
 	prState?: PrState;
 	/** Re-fetch PR state from the extension (Refresh button in the banner). */
 	onRefreshPrState?: () => void;
+	/**
+	 * Snapshot of the bound PR's file changes, the same object the editor
+	 * receives via `codeTourEditor.changesData`. Used to render real diff
+	 * bodies for excluded entries when the synthetic Excluded outline header
+	 * is selected. When undefined, the viewer posts `requestChanges` on mount.
+	 */
+	changesData?: ChangeTourChangesData;
 }
 
 interface PendingComment {
@@ -113,6 +123,108 @@ function threadOverlapsHunk(thread: IReviewThread, hunk: HunkReference): boolean
 	return rangesOverlap(thread.startLine, thread.endLine, hunk.startLine, hunk.endLine);
 }
 
+/**
+ * Slice a file's full unified-diff patch into per-hunk entries, each carrying
+ * its new-side range plus the raw text starting at the `@@` header. Mirrors
+ * the per-hunk parse the CLI scripts and `ChangedFilesOverview` already do.
+ */
+function splitFilePatch(patch: string): Array<{ startLine: number; endLine: number; patch: string }> {
+	const out: Array<{ startLine: number; endLine: number; patch: string }> = [];
+	const lines = patch.split('\n');
+	let cur: { startLine: number; endLine: number; buf: string[] } | undefined;
+	const flush = () => {
+		if (cur) out.push({ startLine: cur.startLine, endLine: cur.endLine, patch: cur.buf.join('\n') });
+		cur = undefined;
+	};
+	for (const line of lines) {
+		const m = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/.exec(line);
+		if (m) {
+			flush();
+			const start = parseInt(m[1], 10);
+			const len = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+			cur = { startLine: start, endLine: start + Math.max(len, 1) - 1, buf: [line] };
+			continue;
+		}
+		if (cur) cur.buf.push(line);
+	}
+	flush();
+	return out;
+}
+
+/**
+ * Build synthetic `TourHunkNode`s for the right pane to render when the user
+ * selects the synthetic Excluded outline header. Each exclusion marker is
+ * resolved against the PR's file changes:
+ *
+ *   - exact-range marker -> the one PR hunk whose new-side `(startLine,
+ *     endLine)` matches.
+ *   - whole-file marker (literal) -> every hunk in that file.
+ *   - glob marker (`file` contains `*?[`) -> every hunk in every file
+ *     matching the glob.
+ *
+ * The marker's `reason` is mapped onto each synthetic hunk's `summary` so
+ * the existing `HunkCard` renders it inline in the hunk header the same way
+ * it renders author-written summaries today.
+ */
+function buildExcludedHunkGroups(
+	exclusions: ReadonlyArray<ExcludedHunkMarker>,
+	files: Array<{ fileName: string; previousFileName?: string; blobSha?: string; patch?: string }> | undefined,
+): Array<{ file: string; hunks: TourHunkNode[] }> {
+	if (!files || exclusions.length === 0) return [];
+	const groupsByFile = new Map<string, TourHunkNode[]>();
+	let idCounter = 0;
+	const addHunk = (file: string, reason: string | undefined, h: { startLine: number; endLine: number; patch: string }, previousFile?: string, blobSha?: string) => {
+		const node: TourHunkNode = {
+			type: 'hunk',
+			id: `__excluded_synthetic_${idCounter++}`,
+			hunk: {
+				file,
+				startLine: h.startLine,
+				endLine: h.endLine,
+				patch: h.patch,
+				previousFile,
+				baseBlob: blobSha,
+				summary: reason,
+			},
+		};
+		const list = groupsByFile.get(file) ?? [];
+		list.push(node);
+		groupsByFile.set(file, list);
+	};
+	for (const e of exclusions) {
+		const fileMatches = isGlob(e.file)
+			? files.filter(f => matchesGlob(e.file, f.fileName))
+			: files.filter(f => f.fileName === e.file);
+		for (const f of fileMatches) {
+			if (!f.patch) continue;
+			const hunks = splitFilePatch(f.patch);
+			if (e.startLine !== undefined && e.endLine !== undefined) {
+				const match = hunks.find(h => h.startLine === e.startLine && h.endLine === e.endLine);
+				if (match) addHunk(f.fileName, e.reason, match, f.previousFileName, f.blobSha);
+			} else {
+				for (const h of hunks) addHunk(f.fileName, e.reason, h, f.previousFileName, f.blobSha);
+			}
+		}
+	}
+	// Dedupe by (file, startLine, endLine) - a hunk caught by both a glob and
+	// an exact-range marker should appear once. First synthetic node wins so
+	// its summary (and thus the rendered reason) is stable.
+	const dedupedByFile = new Map<string, TourHunkNode[]>();
+	for (const [file, nodes] of groupsByFile) {
+		const seen = new Set<string>();
+		const kept: TourHunkNode[] = [];
+		for (const n of nodes) {
+			const k = `${n.hunk.startLine}-${n.hunk.endLine}`;
+			if (seen.has(k)) continue;
+			seen.add(k);
+			kept.push(n);
+		}
+		kept.sort((a, b) => a.hunk.startLine - b.hunk.startLine);
+		dedupedByFile.set(file, kept);
+	}
+	return Array.from(dedupedByFile.entries()).map(([file, hunks]) => ({ file, hunks }));
+}
+
 function collectTextNodes(doc: CodeTourDocument): TourTextNode[] {
 	const out: TourTextNode[] = [];
 	const walk = (nodes: TourNode[]) => {
@@ -128,7 +240,7 @@ function collectTextNodes(doc: CodeTourDocument): TourTextNode[] {
 	return out;
 }
 
-export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, onCheckoutPR, initialViewedKeys, persistViewed, tourFilePath, diffLayout, prState, onRefreshPrState }: CodeTourViewerProps) {
+export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, onCheckoutPR, initialViewedKeys, persistViewed, tourFilePath, diffLayout, prState, onRefreshPrState, changesData }: CodeTourViewerProps) {
 	const [selectedSectionId, setSelectedSectionId] = useState<string | undefined>(undefined);
 	const [selectedTextNodeId, setSelectedTextNodeId] = useState<string | undefined>(undefined);
 	// Seed from groups marked `defaultCollapsed` in the doc (the tour creator's
@@ -494,20 +606,44 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 	}, [doc, outdatedHunkIds]);
 	const isTourOutdated = outdatedUnpinnedCount > 0;
 
+	const exclusions = doc.exclusions ?? [];
+	const isExcludedFilter = selectedSectionId === EXCLUDED_SECTION_ID;
+
 	const selectedSection = useMemo(() => {
-		if (!selectedSectionId) {
+		if (!selectedSectionId || isExcludedFilter) {
 			return undefined;
 		}
 		const node = findNode(doc, selectedSectionId);
 		return node && node.type === 'group' ? node : undefined;
-	}, [doc, selectedSectionId]);
+	}, [doc, selectedSectionId, isExcludedFilter]);
+
+	const excludedFileGroups = useMemo(
+		() => buildExcludedHunkGroups(exclusions, changesData?.files),
+		[exclusions, changesData],
+	);
 
 	const fileGroups = useMemo(() => {
+		if (isExcludedFilter) {
+			// Show real diff bodies for the excluded entries via the existing
+			// FileGroupBlock/HunkCard machinery. The summary on each synthetic
+			// hunk carries the author's exclusion reason so it renders inline
+			// in the header.
+			return excludedFileGroups;
+		}
 		if (selectedSectionId) {
 			return dedupAndGroupByFile(selectedSection ? hunksForSection(selectedSection) : []);
 		}
 		return allFileGroups;
-	}, [allFileGroups, selectedSection, selectedSectionId]);
+	}, [allFileGroups, selectedSection, selectedSectionId, isExcludedFilter, excludedFileGroups]);
+
+	// Pull PR file changes the first time the user opens the Excluded filter
+	// (the editor side requests them eagerly when its Changes pane opens, but
+	// a viewer-only session may never have triggered that fetch).
+	useEffect(() => {
+		if (isExcludedFilter && !changesData) {
+			postMessage({ command: 'codeTourEditor.requestChanges' });
+		}
+	}, [isExcludedFilter, changesData, postMessage]);
 
 	useEffect(() => {
 		fileGroupsRef.current = fileGroups.map(fg => ({
@@ -529,7 +665,9 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 	const shownHunkCount = useMemo(() => fileGroups.reduce((n, fg) => n + fg.hunks.length, 0), [fileGroups]);
 	const shownFileCount = fileGroups.length;
 	const isFiltering = !!selectedSectionId;
-	const filterLabel = isFiltering ? (selectedSection?.title || 'Selected section') : undefined;
+	const filterLabel = isExcludedFilter
+		? 'Excluded'
+		: (isFiltering ? (selectedSection?.title || 'Selected section') : undefined);
 
 	const handleClearFilter = useCallback(() => {
 		setSelectedSectionId(undefined);
@@ -696,7 +834,7 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 							<>This Change Tour is outdated. <strong>{outdatedUnpinnedCount} hunk{outdatedUnpinnedCount === 1 ? '' : 's'}</strong> drifted from the pull request.{newInPrCount > 0 ? ' ' : ''}</>
 						)}
 						{newInPrCount > 0 && (
-							<>The PR has <strong>{newInPrCount} new hunk{newInPrCount === 1 ? '' : 's'}</strong> not covered by this tour.</>
+							<>The PR has <strong>{newInPrCount} hunk{newInPrCount === 1 ? '' : 's'}</strong> not covered by this tour.</>
 						)}
 					</span>
 					<div className="tour-pr-warning-actions">
@@ -753,7 +891,9 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				shownFileCount={shownFileCount}
 				totalFileCount={totalFileCount}
 				onClearFilter={handleClearFilter}
-				emptyMessage={selectedSectionId ? 'This section has no hunks.' : 'No hunks in this tour yet.'}
+				emptyMessage={isExcludedFilter
+					? (changesData ? 'No PR hunks are excluded.' : 'Loading PR file changes…')
+					: (selectedSectionId ? 'This section has no hunks.' : 'No hunks in this tour yet.')}
 				viewedHunks={viewedHunks}
 				collapsedHunks={collapsedHunks}
 				collapsedFiles={collapsedFiles}

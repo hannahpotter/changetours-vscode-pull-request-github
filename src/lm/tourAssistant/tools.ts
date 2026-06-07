@@ -9,9 +9,17 @@ import { GitChangeType, InMemFileChange } from '../../common/file';
 import { CodeTourEditorProvider } from '../../github/codeTourEditorProvider';
 import {
 	CodeTourDocument,
+	editContentFingerprint,
+	ExcludedHunkMarker,
+	findMarkersMatchingHunk,
+	findTourHunksMatchingMarker,
 	HighlightRange,
 	HunkReference,
+	isExactRangeMarker,
+	isExcluded,
+	isGlob,
 	parseCodeTourMarkdown,
+	parseTourExclusions,
 	serializeCodeTourMarkdown,
 	TourGroupNode,
 	TourHunkNode,
@@ -121,9 +129,10 @@ function newLocalId(): string {
  * frontmatter (prNumber/prOwner/prRepo). The assistant tools rely on this
  * to look up real hunk content rather than trusting the LLM to invent it.
  */
-async function getTourPRContext(reposManager: RepositoriesManager): Promise<{ doc: CodeTourDocument; prOwner: string; prRepo: string; prNumber: number; folderManager: NonNullable<ReturnType<RepositoriesManager['getManagerForRepository']>> }> {
+async function getTourPRContext(reposManager: RepositoriesManager): Promise<{ doc: CodeTourDocument; rawText: string; prOwner: string; prRepo: string; prNumber: number; folderManager: NonNullable<ReturnType<RepositoriesManager['getManagerForRepository']>> }> {
 	const document = getActiveTourDocument();
-	const doc = parseCodeTourMarkdown(document.getText());
+	const rawText = document.getText();
+	const doc = parseCodeTourMarkdown(rawText);
 	if (!doc.prOwner || !doc.prRepo || doc.prNumber === undefined) {
 		throw new Error('The active Change Tour is not bound to a pull request. Create the tour via the "Pull Request: New Change Tour" command so it includes the required frontmatter (prNumber, prOwner, prRepo).');
 	}
@@ -131,7 +140,7 @@ async function getTourPRContext(reposManager: RepositoriesManager): Promise<{ do
 	if (!folderManager) {
 		throw new Error(`No folder manager found for ${doc.prOwner}/${doc.prRepo}. Make sure the repository is open in the workspace.`);
 	}
-	return { doc, prOwner: doc.prOwner, prRepo: doc.prRepo, prNumber: doc.prNumber, folderManager };
+	return { doc, rawText, prOwner: doc.prOwner, prRepo: doc.prRepo, prNumber: doc.prNumber, folderManager };
 }
 
 /**
@@ -311,6 +320,30 @@ function slimNodes(nodes: TourNode[]): unknown[] {
 	});
 }
 
+// Render the current node ids with a brief content hint so a "not found" error
+// is self-recoverable: the LLM can pick the right id from the listing without
+// an extra getCurrentTour roundtrip. Node ids are positional and get reassigned
+// on every parse, so any id from a previous tool call may already be stale.
+function summarizeNodeIds(nodes: TourNode[], indent = ''): string {
+	const lines: string[] = [];
+	for (const n of nodes) {
+		if (n.type === 'group') {
+			lines.push(`${indent}${n.id}  group "${n.title}"`);
+			if (n.children.length > 0) {
+				lines.push(summarizeNodeIds(n.children, indent + '  '));
+			}
+		} else if (n.type === 'text') {
+			const preview = n.content.length > 60 ? n.content.slice(0, 57) + '…' : n.content;
+			lines.push(`${indent}${n.id}  text "${preview.replace(/\n/g, ' ')}"`);
+		} else {
+			lines.push(`${indent}${n.id}  hunk ${n.hunk.file}:${n.hunk.startLine}-${n.hunk.endLine}`);
+		}
+	}
+	return lines.join('\n');
+}
+
+const STALE_ID_HINT = 'Node IDs are content-derived and normally stable across edits, but two nodes with identical content (e.g. two text paragraphs with the same wording, two hunks at the same file:lines) share a base ID with a -{N} suffix - removing the first renumbers the rest. Pick the right ID from the listing below (or call changeTour_getCurrentTour to refresh).';
+
 type GetAvailablePRHunksParams = Record<string, never>;
 
 class GetAvailablePRHunksTool implements vscode.LanguageModelTool<GetAvailablePRHunksParams> {
@@ -388,36 +421,9 @@ function statusToString(status: GitChangeType): string {
 }
 
 /**
- * Reduce a patch to its add/remove content (no `@@` headers, no context).
- * Two patches with byte-identical `+`/`-` lines describe the same edit even
- * if the surrounding file has shifted. Mirrors `editContentFingerprint` in
- * webviews/codeTourEditorView/viewerModel.ts so the LLM's drift report uses
- * the same definition of "same edit" as the editor's banner / per-hunk
- * Outdated badge. Strips trailing CR so CRLF-encoded files match LF-encoded
- * stored patches.
- */
-function editContentFingerprint(patch: string | undefined): string | undefined {
-	if (!patch) {
-		return undefined;
-	}
-	const out: string[] = [];
-	for (const rawLine of patch.split('\n')) {
-		const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-		if (line.length === 0 || line.startsWith('@@')) {
-			continue;
-		}
-		const marker = line[0];
-		if (marker === '+' || marker === '-') {
-			out.push(line);
-		}
-	}
-	return out.join('\n');
-}
-
-/**
  * Deterministic drift + coverage report. Computes EXACTLY the same lists the
  * editor's UI surfaces in the outdated banner ("N hunks drifted from the PR",
- * "M new hunks not covered"), so the LLM can act on them without having to
+ * "M hunks not covered"), so the LLM can act on them without having to
  * re-derive drift from raw patches.
  *
  * Without this tool the LLM saw only `(file, lines)` per tour hunk and a
@@ -440,7 +446,8 @@ class GetDriftReportTool implements vscode.LanguageModelTool<GetDriftReportParam
 	}
 
 	async invoke(): Promise<vscode.LanguageModelToolResult> {
-		const { doc, folderManager, prOwner, prRepo, prNumber } = await getTourPRContext(this.reposManager);
+		const { doc, rawText, folderManager, prOwner, prRepo, prNumber } = await getTourPRContext(this.reposManager);
+		const exclusions = parseTourExclusions(rawText);
 		const prModel = await withRateLimitGuard(() => folderManager.resolvePullRequest(prOwner, prRepo, prNumber, true));
 		if (!prModel) {
 			throw new Error(`Could not resolve pull request #${prNumber}.`);
@@ -521,12 +528,18 @@ class GetDriftReportTool implements vscode.LanguageModelTool<GetDriftReportParam
 		};
 		walk(doc.children);
 
-		// Missing-in-tour: PR hunks no tour hunk covers (by content).
+		// Missing-in-tour: PR hunks no tour hunk covers (by content). Hunks the
+		// author has opted out of with a `<!-- changetour:exclude … -->` marker
+		// are dropped - the marker is the author's curation signal that those
+		// hunks belong out of the tour entirely (autogenerated noise,
+		// mechanical changes, etc), so the LLM shouldn't keep proposing to add
+		// them.
 		const missingInTour: Array<{ file: string; startLine: number; endLine: number }> = [];
 		for (const [file, hunks] of prHunksByFile) {
 			const covered = coveredFps.get(file);
 			for (const h of hunks) {
 				if (h.fp && covered && covered.has(h.fp)) continue;
+				if (isExcluded(exclusions, file, h.startLine, h.endLine, h.fp)) continue;
 				missingInTour.push({ file, startLine: h.startLine, endLine: h.endLine });
 			}
 		}
@@ -538,6 +551,9 @@ class GetDriftReportTool implements vscode.LanguageModelTool<GetDriftReportParam
 				'Missing in tour: add via changeTour_addHunkToTour, placed into the most appropriate section.',
 				'Removed from PR: remove via changeTour_removeTourNode plus any narration that was specific to it.',
 				'Pinned hunks are intentional history and are never reported here.',
+				exclusions.length > 0
+					? `${exclusions.length} PR hunk(s) are filtered out by author-curated exclusion markers and are intentionally omitted from missingInTour - do NOT add them to the tour. Use changeTour_removeExclusion if a marker is now wrong.`
+					: 'For hunks that belong out of the tour entirely (autogenerated noise under `dist/**` / `src/generated/**`), call changeTour_addExclusion (exact-range, whole-file, or glob form) instead of inserting them into the tour. Prefer the glob form for autogenerated directories so the marker survives regen. Deleted files (new-side 0-0) can be added to the tour normally and usually belong in Miscellaneous - reach for exclusion only when the deletion is itself mechanical noise.',
 			],
 			drifted,
 			missingInTour,
@@ -653,14 +669,45 @@ class AddHunkTool implements vscode.LanguageModelTool<AddHunkParams> {
 			resolved.highlights = highlights;
 		}
 		const newId = newLocalId();
+		let droppedMarkerCount = 0;
 		await applyMutation(({ doc }) => {
+			// Enforce no-overlap between the tour and the excluded list. If a
+			// marker matches the hunk being added:
+			//   - Exact-range markers are truly redundant once the hunk is in
+			//     the tour; silently drop them.
+			//   - Whole-file / glob markers cover MANY hunks; silently dropping
+			//     one would un-exclude every other hunk in that file/pattern.
+			//     Refuse the add and tell the caller to remove the marker
+			//     deliberately via changeTour_removeExclusion if they want to
+			//     proceed.
+			const existing = doc.exclusions ?? [];
+			const matchingMarkers = findMarkersMatchingHunk(existing, file, startLine, endLine, editContentFingerprint(resolved.patch));
+			const broad = matchingMarkers.filter(m => !isExactRangeMarker(m));
+			if (broad.length > 0) {
+				const summary = broad
+					.map(m => `file="${m.file}"${m.reason ? ` (reason: ${m.reason})` : ''}`)
+					.join('; ');
+				throw new Error(
+					`Cannot add ${file}:${startLine}-${endLine} to the tour: it is covered by ${broad.length} whole-file / glob exclusion marker(s) -- ${summary}. ` +
+					`Removing them silently would un-exclude every other hunk they match, so this call refuses. ` +
+					`Call changeTour_removeExclusion on the marker first if you want to add this hunk to the tour.`,
+				);
+			}
+			const exactMatches = matchingMarkers.filter(m => isExactRangeMarker(m));
+			if (exactMatches.length > 0) {
+				doc.exclusions = existing.filter(m => !exactMatches.includes(m));
+				droppedMarkerCount = exactMatches.length;
+			}
 			const node: TourHunkNode = { type: 'hunk', id: newId, hunk: resolved };
 			if (!insertAt(doc, anchor, node)) {
 				throw new Error(`Could not insert hunk - the anchor target was not found.`);
 			}
 		});
+		const suffix = droppedMarkerCount > 0
+			? ` Also dropped ${droppedMarkerCount} redundant exact-range exclusion marker(s) that matched this hunk.`
+			: '';
 		return new vscode.LanguageModelToolResult([
-			new vscode.LanguageModelTextPart(`Added hunk ${file}:${startLine}-${endLine}. Re-fetch the tour to see updated node ids.`),
+			new vscode.LanguageModelTextPart(`Added hunk ${file}:${startLine}-${endLine}.${suffix} Re-fetch the tour to see updated node ids.`),
 		]);
 	}
 }
@@ -683,14 +730,20 @@ class SetHunkHighlightsTool implements vscode.LanguageModelTool<SetHunkHighlight
 	async invoke(options: vscode.LanguageModelToolInvocationOptions<SetHunkHighlightsParams>): Promise<vscode.LanguageModelToolResult> {
 		const { hunkId, highlights } = options.input;
 		let found = false;
+		let summary = '';
 		await applyMutation(({ doc }) => {
 			updateHunk(doc.children, hunkId, h => {
 				h.highlights = highlights.length > 0 ? highlights : undefined;
 				found = true;
 			});
+			if (!found) {
+				summary = summarizeNodeIds(doc.children);
+			}
 		});
 		if (!found) {
-			throw new Error(`Hunk with id "${hunkId}" was not found in the tour.`);
+			throw new Error(
+				`Hunk with id "${hunkId}" was not found in the tour. ${STALE_ID_HINT}\n\nCurrent nodes:\n${summary || '(tour is empty)'}`,
+			);
 		}
 		return new vscode.LanguageModelToolResult([
 			new vscode.LanguageModelTextPart('Highlights updated.'),
@@ -717,14 +770,20 @@ class SetHunkSummaryTool implements vscode.LanguageModelTool<SetHunkSummaryParam
 		const { hunkId, summary } = options.input;
 		const trimmed = typeof summary === 'string' ? summary.trim() : '';
 		let found = false;
+		let nodeSummary = '';
 		await applyMutation(({ doc }) => {
 			updateHunk(doc.children, hunkId, h => {
 				h.summary = trimmed.length > 0 ? trimmed : undefined;
 				found = true;
 			});
+			if (!found) {
+				nodeSummary = summarizeNodeIds(doc.children);
+			}
 		});
 		if (!found) {
-			throw new Error(`Hunk with id "${hunkId}" was not found in the tour.`);
+			throw new Error(
+				`Hunk with id "${hunkId}" was not found in the tour. ${STALE_ID_HINT}\n\nCurrent nodes:\n${nodeSummary || '(tour is empty)'}`,
+			);
 		}
 		return new vscode.LanguageModelToolResult([
 			new vscode.LanguageModelTextPart(trimmed.length > 0 ? 'Summary updated.' : 'Summary cleared.'),
@@ -761,15 +820,20 @@ class RemoveNodeTool implements vscode.LanguageModelTool<RemoveNodeParams> {
 	async invoke(options: vscode.LanguageModelToolInvocationOptions<RemoveNodeParams>): Promise<vscode.LanguageModelToolResult> {
 		const { nodeId } = options.input;
 		let removed = false;
+		let summary = '';
 		await applyMutation(({ doc }) => {
 			const res = extractNodeById<TourNode>(doc.children, nodeId);
 			if (res.extracted) {
 				doc.children = res.nodes;
 				removed = true;
+			} else {
+				summary = summarizeNodeIds(doc.children);
 			}
 		});
 		if (!removed) {
-			throw new Error(`Node with id "${nodeId}" was not found.`);
+			throw new Error(
+				`Node with id "${nodeId}" was not found. ${STALE_ID_HINT}\n\nCurrent nodes:\n${summary || '(tour is empty)'}`,
+			);
 		}
 		return new vscode.LanguageModelToolResult([
 			new vscode.LanguageModelTextPart(`Removed node ${nodeId}.`),
@@ -782,18 +846,207 @@ function clampLevel(level: number): number {
 	return Math.max(2, Math.min(6, Math.floor(level)));
 }
 
+/* ----- Exclusion mutations -------------------------------- */
+
+interface AddExclusionParams {
+	/** Literal repo-relative path OR a glob pattern (`*`/`**`). */
+	file: string;
+	/** Optional new-side start line. Required when `endLine` is set; omit both for whole-file/glob. */
+	startLine?: number;
+	/** Optional new-side end line. Required when `startLine` is set; omit both for whole-file/glob. */
+	endLine?: number;
+	/** Optional free-form rationale shown to reviewers. Strongly recommended. */
+	reason?: string;
+}
+
+class AddExclusionTool implements vscode.LanguageModelTool<AddExclusionParams> {
+	static readonly toolId = 'changeTour_addExclusion';
+
+	constructor(private readonly reposManager: RepositoriesManager) { }
+
+	async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<AddExclusionParams>): Promise<vscode.PreparedToolInvocation> {
+		const { file, startLine, endLine } = options.input;
+		const target = startLine !== undefined && endLine !== undefined
+			? `${file}:${startLine}-${endLine}`
+			: file;
+		return {
+			invocationMessage: vscode.l10n.t('Excluding {0} from the Change Tour', target),
+			pastTenseMessage: vscode.l10n.t('Excluded {0} from the Change Tour', target),
+		};
+	}
+
+	async invoke(options: vscode.LanguageModelToolInvocationOptions<AddExclusionParams>): Promise<vscode.LanguageModelToolResult> {
+		const { file, startLine, endLine, reason } = options.input;
+		if (!file || typeof file !== 'string') {
+			throw new Error('`file` is required (repo-relative path or glob pattern).');
+		}
+		const hasStart = startLine !== undefined;
+		const hasEnd = endLine !== undefined;
+		if (hasStart !== hasEnd) {
+			throw new Error('`startLine` and `endLine` must be provided together (or both omitted for a whole-file / glob marker).');
+		}
+		if (hasStart && hasEnd) {
+			// Deletions are represented as `startLine: 0, endLine: 0` (their
+			// new-side range is empty) - that's a valid hunk identity in the
+			// rest of the data model, so it must be a valid exclusion target too.
+			// Reject only ranges that are inverted or negative.
+			if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine! < 0 || endLine! < startLine!) {
+				throw new Error(`Invalid line range ${startLine}-${endLine}. Both bounds must be non-negative integers with startLine <= endLine.`);
+			}
+			if (isGlob(file)) {
+				throw new Error('Glob patterns cannot carry a line range. Drop `startLine`/`endLine` (the marker will match every hunk in every matching file) or pass a literal `file` path.');
+			}
+		}
+		// Best-effort fingerprint: for exact-range markers, look up the PR
+		// hunk's patch and fingerprint it so the marker matches the same edit
+		// even after a rebase shifts the line numbers. Glob and whole-file
+		// markers don't target a single hunk, so we leave fp unset for those.
+		let fp: string | undefined;
+		if (hasStart && hasEnd && !isGlob(file)) {
+			try {
+				const resolved = await resolveHunkInActivePR(this.reposManager, file, startLine!, endLine!);
+				fp = editContentFingerprint(resolved.patch);
+			} catch {
+				// File or range not found in PR - tolerate this and write a
+				// line-only marker. The drift report will still match by line.
+			}
+		}
+		const marker: ExcludedHunkMarker = {
+			file,
+			startLine: hasStart ? startLine : undefined,
+			endLine: hasEnd ? endLine : undefined,
+			fp,
+			reason: reason?.trim() || undefined,
+		};
+		let alreadyExisted = false;
+		await applyMutation(({ doc }) => {
+			const existing = doc.exclusions ?? [];
+			for (const e of existing) {
+				if (e.file === marker.file && e.startLine === marker.startLine && e.endLine === marker.endLine) {
+					alreadyExisted = true;
+					return;
+				}
+			}
+			// Enforce no-overlap between the tour and the excluded list. If
+			// this marker would match any tour hunk currently in the tour,
+			// refuse the add so the curated narrative wins. The caller has to
+			// decide whether to remove the tour hunk(s) first or skip the
+			// exclusion.
+			const conflicting = findTourHunksMatchingMarker(doc.children, marker, h => editContentFingerprint(h.patch));
+			if (conflicting.length > 0) {
+				const sample = conflicting
+					.slice(0, 5)
+					.map(n => `${n.hunk.file}:${n.hunk.startLine}-${n.hunk.endLine} (nodeId=${n.id})`)
+					.join('; ');
+				const more = conflicting.length > 5 ? `, +${conflicting.length - 5} more` : '';
+				throw new Error(
+					`Cannot exclude ${marker.startLine !== undefined ? `${marker.file}:${marker.startLine}-${marker.endLine}` : marker.file}: ` +
+					`${conflicting.length} tour hunk(s) are already covered by this marker -- ${sample}${more}. ` +
+					`Remove those tour nodes via changeTour_removeTourNode first if you want to exclude them, or pick a more specific marker that doesn't overlap.`,
+				);
+			}
+			doc.exclusions = [...existing, marker];
+		});
+		const target = marker.startLine !== undefined && marker.endLine !== undefined
+			? `${marker.file}:${marker.startLine}-${marker.endLine}`
+			: marker.file;
+		const verb = alreadyExisted ? 'already excluded' : 'Excluded';
+		return new vscode.LanguageModelToolResult([
+			new vscode.LanguageModelTextPart(`${verb} ${target}. The marker now lives in the tour's appendix and the drift report will skip it on the next changeTour_getDriftReport call.`),
+		]);
+	}
+}
+
+interface RemoveExclusionParams {
+	/** Literal path or glob pattern matching the marker's `file=` attribute exactly. */
+	file: string;
+	/** Optional new-side range matching the marker's `lines=` attribute. Omit when the marker has no `lines=`. */
+	startLine?: number;
+	endLine?: number;
+}
+
+class RemoveExclusionTool implements vscode.LanguageModelTool<RemoveExclusionParams> {
+	static readonly toolId = 'changeTour_removeExclusion';
+
+	async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<RemoveExclusionParams>): Promise<vscode.PreparedToolInvocation> {
+		const { file, startLine, endLine } = options.input;
+		const target = startLine !== undefined && endLine !== undefined
+			? `${file}:${startLine}-${endLine}`
+			: file;
+		return {
+			invocationMessage: vscode.l10n.t('Removing exclusion {0}', target),
+			pastTenseMessage: vscode.l10n.t('Removed exclusion {0}', target),
+		};
+	}
+
+	async invoke(options: vscode.LanguageModelToolInvocationOptions<RemoveExclusionParams>): Promise<vscode.LanguageModelToolResult> {
+		const { file, startLine, endLine } = options.input;
+		const hasStart = startLine !== undefined;
+		const hasEnd = endLine !== undefined;
+		if (hasStart !== hasEnd) {
+			throw new Error('`startLine` and `endLine` must be provided together (or both omitted to match a whole-file / glob marker).');
+		}
+		let removed = false;
+		await applyMutation(({ doc }) => {
+			const before = doc.exclusions ?? [];
+			const after = before.filter(e => !(
+				e.file === file
+				&& e.startLine === (hasStart ? startLine : undefined)
+				&& e.endLine === (hasEnd ? endLine : undefined)
+			));
+			if (after.length !== before.length) {
+				removed = true;
+				doc.exclusions = after;
+			}
+		});
+		if (!removed) {
+			throw new Error(`No exclusion marker matched (file=${file}, lines=${hasStart ? `${startLine}-${endLine}` : '<none>'}). Run changeTour_getDriftReport or read the appendix to confirm the exact attributes.`);
+		}
+		const target = hasStart ? `${file}:${startLine}-${endLine}` : file;
+		return new vscode.LanguageModelToolResult([
+			new vscode.LanguageModelTextPart(`Removed exclusion for ${target}. The hunk(s) it filtered will reappear in the next changeTour_getDriftReport's missingInTour list if still uncovered.`),
+		]);
+	}
+}
+
 /* ----- Registration --------------------------------------- */
 
 export function registerTourAssistantTools(context: vscode.ExtensionContext, reposManager: RepositoriesManager): void {
-	context.subscriptions.push(vscode.lm.registerTool(GetCurrentTourTool.toolId, new GetCurrentTourTool()));
-	context.subscriptions.push(vscode.lm.registerTool(GetAvailablePRHunksTool.toolId, new GetAvailablePRHunksTool(reposManager)));
-	context.subscriptions.push(vscode.lm.registerTool(GetDriftReportTool.toolId, new GetDriftReportTool(reposManager)));
-	context.subscriptions.push(vscode.lm.registerTool(AddSectionTool.toolId, new AddSectionTool()));
-	context.subscriptions.push(vscode.lm.registerTool(AddTextNodeTool.toolId, new AddTextNodeTool()));
-	context.subscriptions.push(vscode.lm.registerTool(AddHunkTool.toolId, new AddHunkTool(reposManager)));
-	context.subscriptions.push(vscode.lm.registerTool(SetHunkHighlightsTool.toolId, new SetHunkHighlightsTool()));
-	context.subscriptions.push(vscode.lm.registerTool(SetHunkSummaryTool.toolId, new SetHunkSummaryTool()));
-	context.subscriptions.push(vscode.lm.registerTool(RemoveNodeTool.toolId, new RemoveNodeTool()));
+	const registered = new Set<string>();
+	const register = (toolId: string, tool: vscode.LanguageModelTool<any>): void => {
+		registered.add(toolId);
+		context.subscriptions.push(vscode.lm.registerTool(toolId, tool));
+	};
+	register(GetCurrentTourTool.toolId, new GetCurrentTourTool());
+	register(GetAvailablePRHunksTool.toolId, new GetAvailablePRHunksTool(reposManager));
+	register(GetDriftReportTool.toolId, new GetDriftReportTool(reposManager));
+	register(AddSectionTool.toolId, new AddSectionTool());
+	register(AddTextNodeTool.toolId, new AddTextNodeTool());
+	register(AddHunkTool.toolId, new AddHunkTool(reposManager));
+	register(SetHunkHighlightsTool.toolId, new SetHunkHighlightsTool());
+	register(SetHunkSummaryTool.toolId, new SetHunkSummaryTool());
+	register(RemoveNodeTool.toolId, new RemoveNodeTool());
+	register(AddExclusionTool.toolId, new AddExclusionTool(reposManager));
+	register(RemoveExclusionTool.toolId, new RemoveExclusionTool());
+
+	// Guard against drift between the VS Code LM registry and the
+	// provider-agnostic spec list. The Anthropic backend only sees tools that
+	// appear in getTourAssistantToolSpecs(); silently dropping one means the
+	// model is told to use it (via prompts / error messages) but has no way
+	// to call it. Throw at activation so the divergence is impossible to ship.
+	const specIds = new Set(getTourAssistantToolSpecs().map(s => s.name));
+	const missingFromSpecs = [...registered].filter(id => !specIds.has(id));
+	const missingFromRegistry = [...specIds].filter(id => !registered.has(id));
+	if (missingFromSpecs.length > 0 || missingFromRegistry.length > 0) {
+		const parts: string[] = [];
+		if (missingFromSpecs.length > 0) {
+			parts.push(`registered with VS Code LM but missing from getTourAssistantToolSpecs() (Anthropic backend can't call them): ${missingFromSpecs.join(', ')}`);
+		}
+		if (missingFromRegistry.length > 0) {
+			parts.push(`declared in getTourAssistantToolSpecs() but not registered with VS Code LM: ${missingFromRegistry.join(', ')}`);
+		}
+		throw new Error(`Change Tour assistant tool registry is out of sync. ${parts.join('; ')}.`);
+	}
 }
 
 /**
@@ -913,6 +1166,33 @@ export function getTourAssistantToolSpecs(): { name: string; description: string
 					nodeId: { type: 'string', description: 'ID of the node to remove (from getCurrentTour).' },
 				},
 				required: ['nodeId'],
+			},
+		},
+		{
+			name: AddExclusionTool.toolId,
+			description: 'Add an exclusion marker so the drift report stops nagging about a hunk / file / glob that the author has intentionally left out of the tour. Three forms: (1) exact range -- pass `file` + `startLine` + `endLine`; (2) whole file -- pass just `file` (literal path); (3) glob -- pass a `file` pattern using `*`/`**` (e.g. `dist/**`, `src/generated/**`). Prefer the glob form for autogenerated directories so the marker survives regen. Fails if any hunk currently in the tour is already covered by the marker - remove those nodes first if you really want to exclude them.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					file: { type: 'string', description: 'Repo-relative file path OR glob pattern (`*`/`**`). For globs, omit startLine/endLine.' },
+					startLine: { type: 'number', description: 'Optional first line on the new side. Use 1-indexed lines for additions/modifications, or `0` (paired with `endLine: 0`) for a whole-file deletion - whatever `getAvailablePRHunks` reports. Required together with endLine; omit both for whole-file / glob exclusions.' },
+					endLine: { type: 'number', description: 'Optional last line on the new side (inclusive). Required together with startLine. Pass `0` for a whole-file deletion (paired with `startLine: 0`).' },
+					reason: { type: 'string', description: 'Free-form rationale shown to reviewers (strongly recommended).' },
+				},
+				required: ['file'],
+			},
+		},
+		{
+			name: RemoveExclusionTool.toolId,
+			description: 'Remove an existing exclusion marker so its hunks are back in scope for the drift report. Match the marker exactly: pass the same `file` (literal path or glob) and the same `startLine`/`endLine` it was created with (omit both if the marker had no line range). Inspect getDriftReport output or the tour appendix to see the live markers.',
+			inputSchema: {
+				type: 'object',
+				properties: {
+					file: { type: 'string', description: 'Literal path or glob pattern matching the marker\'s `file=` attribute exactly.' },
+					startLine: { type: 'number', description: 'Optional new-side first line matching the marker\'s `lines=` attribute. Required together with endLine; omit both when the marker has no line range.' },
+					endLine: { type: 'number', description: 'Optional new-side last line matching the marker\'s `lines=` attribute. Required together with startLine.' },
+				},
+				required: ['file'],
 			},
 		},
 	];

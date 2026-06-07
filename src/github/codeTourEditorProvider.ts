@@ -6,7 +6,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { createHunkBlock, HunkReference, parseCodeTourMarkdown } from './codeTourMarkdown';
+import { appendExclusionMarker, appendWholeFileExclusionMarker, createHunkBlock, dropTourHunkNodes, editContentFingerprint, ExcludedHunkMarker, findTourHunksMatchingMarker, HunkReference, parseCodeTourMarkdown, removeExclusionMarker, removeWholeFileExclusionMarker, serializeCodeTourMarkdown, TourHunkNode } from './codeTourMarkdown';
 import { PullRequestModel } from './pullRequestModel';
 import { detectRateLimit, formatRateLimitMessage, recordObservedRateLimit } from './rateLimitError';
 import { RepositoriesManager } from './repositoriesManager';
@@ -20,6 +20,106 @@ import { AssistantMode, runAssistant } from '../lm/tourAssistant/orchestrator';
 
 
 export const CODE_TOUR_EDITOR_VIEW_TYPE = 'codeTourEditor';
+
+/**
+ * Enforce the "tour and excluded list don't overlap" invariant when the
+ * user clicks an Exclude affordance. Returns:
+ *   - `{ proceed: true, conflictsToDrop: [] }` when there's no conflict --
+ *     the caller follows the normal append-marker path.
+ *   - `{ proceed: true, conflictsToDrop: [...] }` when the user confirmed
+ *     the "move to excluded" prompt -- the caller must drop these tour
+ *     hunks AND append the marker in a single edit.
+ *   - `{ proceed: false }` when the user cancelled, or when there are no
+ *     conflicts but the user dismissed the no-op path (never reached;
+ *     `proceed: true` always fires for the empty case).
+ *
+ * We re-parse the document here (instead of relying on a cached `doc`)
+ * because the user might have typed into the editor since the last
+ * initialize message.
+ */
+async function resolveExclusionConflict(
+	document: vscode.TextDocument,
+	marker: ExcludedHunkMarker,
+): Promise<{ proceed: true; conflictsToDrop: TourHunkNode[] } | { proceed: false }> {
+	const doc = parseCodeTourMarkdown(document.getText());
+	const conflicts = findTourHunksMatchingMarker(doc.children, marker, h => editContentFingerprint(h.patch));
+	if (conflicts.length === 0) {
+		return { proceed: true, conflictsToDrop: [] };
+	}
+	const target = marker.startLine !== undefined && marker.endLine !== undefined
+		? `${marker.file}:${marker.startLine}-${marker.endLine}`
+		: marker.file;
+	// Deduplicate the displayed sample so that a hunk appearing N times in the
+	// tour shows up once (annotated with the count), instead of N identical
+	// lines. The full `conflicts` array is still passed downstream so every
+	// copy gets removed -- only the user-facing summary collapses duplicates.
+	const occurrences = new Map<string, number>();
+	const orderedKeys: string[] = [];
+	for (const n of conflicts) {
+		const key = `${n.hunk.file}:${n.hunk.startLine}-${n.hunk.endLine}`;
+		if (!occurrences.has(key)) {
+			orderedKeys.push(key);
+		}
+		occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+	}
+	const sample = orderedKeys
+		.slice(0, 5)
+		.map(key => occurrences.get(key)! > 1 ? `${key} (×${occurrences.get(key)})` : key)
+		.join(', ');
+	const more = orderedKeys.length > 5 ? `, plus ${orderedKeys.length - 5} more` : '';
+	const distinctCount = orderedKeys.length;
+	const totalCount = conflicts.length;
+	const countSummary = totalCount === distinctCount
+		? `${totalCount} hunk(s) currently in the tour would be covered by this marker`
+		: `${distinctCount} distinct hunk(s) currently in the tour would be covered by this marker (${totalCount} total occurrence(s))`;
+	const detail = `${countSummary}:\n${sample}${more}\n\nMove them out of the tour and into the excluded list? All copies will be removed.`;
+	const choice = await vscode.window.showWarningMessage(
+		`Exclude ${target}?`,
+		{ modal: true, detail },
+		'Move to Excluded',
+	);
+	if (choice !== 'Move to Excluded') {
+		return { proceed: false };
+	}
+	return { proceed: true, conflictsToDrop: conflicts };
+}
+
+/**
+ * Build the new document text after dropping `conflictsToDrop` from the tour
+ * tree and appending `marker` to the exclusion appendix. Round-trips through
+ * `serializeCodeTourMarkdown` (which re-emits the sentinel + markers from
+ * `doc.exclusions`) so the on-disk shape stays canonical.
+ */
+function buildMoveToExcludedText(
+	document: vscode.TextDocument,
+	marker: ExcludedHunkMarker,
+	conflictsToDrop: ReadonlyArray<TourHunkNode>,
+): string {
+	const doc = parseCodeTourMarkdown(document.getText());
+	if (conflictsToDrop.length > 0) {
+		// Re-locate the conflicting nodes by (file, startLine, endLine) -- the
+		// parser regenerates node IDs on every parse, so the `conflictsToDrop`
+		// references from the earlier parse can't be matched by identity.
+		const targetKeys = new Set(conflictsToDrop.map(n => `${n.hunk.file}|${n.hunk.startLine}|${n.hunk.endLine}`));
+		const freshTargets = new Set<TourHunkNode>();
+		const collect = (nodes: ReadonlyArray<{ type: string } & Record<string, unknown>>) => {
+			for (const n of nodes) {
+				if (n.type === 'hunk') {
+					const hunkNode = n as unknown as TourHunkNode;
+					const key = `${hunkNode.hunk.file}|${hunkNode.hunk.startLine}|${hunkNode.hunk.endLine}`;
+					if (targetKeys.has(key)) freshTargets.add(hunkNode);
+				} else if (n.type === 'group') {
+					const groupNode = n as unknown as { children: Array<{ type: string } & Record<string, unknown>> };
+					collect(groupNode.children);
+				}
+			}
+		};
+		collect(doc.children as unknown as Array<{ type: string } & Record<string, unknown>>);
+		doc.children = dropTourHunkNodes(doc.children, freshTargets);
+	}
+	doc.exclusions = [...(doc.exclusions ?? []), marker];
+	return serializeCodeTourMarkdown(doc);
+}
 
 export class CodeTourEditorProvider extends WebviewBase implements vscode.CustomTextEditorProvider {
 
@@ -379,6 +479,37 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 				return;
 			}
 
+			case 'codeTourEditor.openExcludedDiff': {
+				// The Excluded outline's "Open diff" button. For an exact-range
+				// marker this is just one hunk; for a whole-file or glob marker
+				// there can be many, so we surface a quickpick before delegating
+				// to `codetour.openDiff`. The webview pre-resolves the candidate
+				// HunkReferences from `changesData`.
+				const { hunks, target } = message.args as { hunks: HunkReference[]; target: string };
+				if (!hunks || hunks.length === 0) {
+					vscode.window.showInformationMessage(`No matching PR hunks for \`${target}\`.`);
+					return;
+				}
+				if (hunks.length === 1) {
+					vscode.commands.executeCommand('codetour.openDiff', hunks[0]);
+					return;
+				}
+				const items = hunks.map(h => ({
+					label: `${h.file}:${h.startLine}-${h.endLine}`,
+					description: h.previousFile && h.previousFile !== h.file ? `← ${h.previousFile}` : undefined,
+					hunk: h,
+				}));
+				const picked = await vscode.window.showQuickPick(items, {
+					title: `Excluded by ${target} - pick a hunk to open`,
+					placeHolder: `${hunks.length} hunks match this marker`,
+					matchOnDescription: true,
+				});
+				if (picked) {
+					vscode.commands.executeCommand('codetour.openDiff', picked.hunk);
+				}
+				return;
+			}
+
 			case 'codeTourEditor.showError': {
 				const { message: errMsg } = message.args as { message: string };
 				vscode.window.showErrorMessage(errMsg);
@@ -394,6 +525,66 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 			case 'codeTourEditor.addHunk': {
 				const { hunk, mode } = message.args as { hunk: HunkReference[], mode: 'active' | 'quickpick' };
 				CodeTourEditorProvider.addHunkToEditor(hunk, mode);
+				return;
+			}
+
+			case 'codeTourEditor.excludeHunk': {
+				const { file, startLine, endLine, fp } = message.args as { file: string; startLine: number; endLine: number; fp?: string };
+				const resolution = await resolveExclusionConflict(document, { file, startLine, endLine });
+				if (!resolution.proceed) {
+					return; // user cancelled the conflict prompt
+				}
+				const reason = await vscode.window.showInputBox({
+					title: 'Exclude PR hunk from Change Tour',
+					prompt: `${file} lines ${startLine}-${endLine} - optional reason`,
+					placeHolder: 'e.g. deleted file, intentionally not narrated',
+					ignoreFocusOut: true,
+				});
+				if (reason === undefined) {
+					return; // user cancelled the reason prompt
+				}
+				const marker: ExcludedHunkMarker = { file, startLine, endLine, fp, reason: reason || undefined };
+				const newText = resolution.conflictsToDrop.length > 0
+					? buildMoveToExcludedText(document, marker, resolution.conflictsToDrop)
+					: appendExclusionMarker(document.getText(), file, startLine, endLine, fp, reason || undefined);
+				// Programmatic edit -- the webview has no local copy of this change,
+				// so the doc must round-trip back via onDidChangeTextDocument.
+				await this._applyEdit(document, newText, /* originatedFromWebview */ false);
+				return;
+			}
+
+			case 'codeTourEditor.excludeFile': {
+				const { file } = message.args as { file: string };
+				const resolution = await resolveExclusionConflict(document, { file });
+				if (!resolution.proceed) {
+					return;
+				}
+				const reason = await vscode.window.showInputBox({
+					title: 'Exclude entire file from Change Tour',
+					prompt: `${file} - optional reason`,
+					placeHolder: 'e.g. autogenerated, deleted, generated noise',
+					ignoreFocusOut: true,
+				});
+				if (reason === undefined) {
+					return;
+				}
+				const marker: ExcludedHunkMarker = { file, reason: reason || undefined };
+				const newText = resolution.conflictsToDrop.length > 0
+					? buildMoveToExcludedText(document, marker, resolution.conflictsToDrop)
+					: appendWholeFileExclusionMarker(document.getText(), file, reason || undefined);
+				await this._applyEdit(document, newText, /* originatedFromWebview */ false);
+				return;
+			}
+
+			case 'codeTourEditor.removeExclusion': {
+				const { file, startLine, endLine } = message.args as { file: string; startLine?: number; endLine?: number };
+				// undefined bounds -> whole-file / glob marker; otherwise exact-range.
+				const newText = (startLine === undefined && endLine === undefined)
+					? removeWholeFileExclusionMarker(document.getText(), file)
+					: removeExclusionMarker(document.getText(), file, startLine!, endLine!);
+				if (newText !== document.getText()) {
+					await this._applyEdit(document, newText, /* originatedFromWebview */ false);
+				}
 				return;
 			}
 
@@ -887,9 +1078,27 @@ export class CodeTourEditorProvider extends WebviewBase implements vscode.Custom
 		}
 	}
 
-	private async _applyEdit(document: vscode.TextDocument, newContent: string): Promise<void> {
+	/**
+	 * Replace the document's entire text with `newContent`.
+	 *
+	 * `originatedFromWebview` controls the self-echo dance:
+	 *   - `true` (default) - the webview already pushed this exact text via
+	 *     `codeTourEditor.updateDocument` and applied the change to its local
+	 *     React state. We bump the pending counter so the
+	 *     `onDidChangeTextDocument` listener swallows the matching workspace
+	 *     edit event instead of round-tripping it back to the webview (which
+	 *     would re-parse and reset local node IDs / selections).
+	 *   - `false` - the extension is applying the edit *on behalf of* the
+	 *     webview (e.g. the per-hunk Exclude button, the file-level Exclude,
+	 *     the Remove-exclusion "x" button). In this case the webview has NOT
+	 *     applied the change to its local state, so the listener MUST push
+	 *     the new doc back. Skip the counter bump.
+	 */
+	private async _applyEdit(document: vscode.TextDocument, newContent: string, originatedFromWebview: boolean = true): Promise<void> {
 		const key = document.uri.toString();
-		this._pendingWebviewEdits.set(key, (this._pendingWebviewEdits.get(key) ?? 0) + 1);
+		if (originatedFromWebview) {
+			this._pendingWebviewEdits.set(key, (this._pendingWebviewEdits.get(key) ?? 0) + 1);
+		}
 		const edit = new vscode.WorkspaceEdit();
 		edit.replace(
 			document.uri,

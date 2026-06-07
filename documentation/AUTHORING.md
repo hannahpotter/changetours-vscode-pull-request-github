@@ -29,6 +29,7 @@ Use the buttons to add text, hunks, and sections to the Change Tour. Use drag-an
 	- Edit the hunk summary to include additional narrative. These summaries will be visible even when the hunk is collapsed.![Editing hunk summary](images/hunkSummary.png)![Hunk summary closed](images/hunkSummaryClosed.png)
 	- Add highlighting to a hunk to call additional attention to particular lines of the change.![Highlighting](images/highlighting.png)
 	- To see the file context for any hunk in the tour, click the `Open in file context` button.
+	- To exclude a hunk/file from the tour's coverage report, click the eye-closed icon next to a hunk/file header in the Hunk Selector Panel. For an entire directory or a glob of files, run the command palette entry **GitHub Pull Requests: Exclude Files from Change Tour by Pattern** and supply a pattern like `src/generated/**` or `**/*.d.ts`. You'll be prompted for an optional exclusion reason. Excluded entries are written to an appendix at the tail of the tour file; the drift/coverage tools then skip them.
 - **Sections**: Click the section title to edit.
 
 Sections and hunks can be set to be collapsed in view mode by default.![Setting default collapse](images/collapse.png)
@@ -137,12 +138,12 @@ Pass `--skip-pr-check` to skip the live cross-check entirely (e.g. for offline w
 
 By default the assistant uses VS Code's language model API, so it works with whatever chat model you have installed (Copilot's GPT-4o, Copilot's Claude 3.5 Sonnet, Cody, Continue, etc.) and respects the model you've picked in the Copilot Chat dropdown.
 
-If you don't have Copilot but do have an Anthropic API key, run "Change Tour: Set Anthropic API Key" once. The assistant will fall back to calling the Anthropic API directly. The key is stored in VS Code SecretStorage.
+If you don't have Copilot but do have an [Anthropic API key](https://console.anthropic.com/settings/keys), run "Change Tour: Set Anthropic API Key" once. The assistant will fall back to calling the Anthropic API directly. The key is stored in VS Code SecretStorage.
 
 Relevant settings (search "Change Tour" in settings UI):
 - `changeTour.assistant.enabled` - master switch (default `true`)
 - `changeTour.assistant.provider` - `auto` (default), `vscode-lm`, or `anthropic`
-- `changeTour.assistant.anthropicModel` - model name for the Anthropic fallback (default `claude-3-5-sonnet-latest`)
+- `changeTour.assistant.anthropicModel` - model name for the Anthropic fallback (default `claude-sonnet-4-5`)
 - `changeTour.assistant.maxAgentTurns` - safety cap on the agent loop (default 25)
 
 ### Tour Validation

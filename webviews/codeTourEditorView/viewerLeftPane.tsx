@@ -7,15 +7,15 @@ import * as marked from 'marked';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { InlineCommentComposer } from './inlineCommentComposer';
 import { InlineCommentThread } from './inlineCommentThread';
-import { Tooltip } from './tooltip';
-import { descendantHunkKeys, isSectionFullyViewed, isSectionPartiallyViewed } from './viewerModel';
+import { descendantHunkKeys, EXCLUDED_SECTION_ID, isSectionFullyViewed, isSectionPartiallyViewed } from './viewerModel';
 import type { IReviewThread } from '../../src/common/comment';
-import type {
-	CodeTourDocument,
-	TourGroupNode,
-	TourNode,
-	TourTextNode,
-} from '../../src/github/codeTourMarkdown';
+import { type CodeTourDocument,
+	type ExcludedHunkMarker,
+	isGlob,
+	type TourGroupNode,
+	type TourNode,
+	type TourTextNode,} from '../../src/github/codeTourMarkdown';
+import { Tooltip } from '../common/tooltip';
 import { chevronDownIcon } from '../components/icon';
 
 marked.setOptions({ breaks: true });
@@ -38,7 +38,8 @@ interface ViewerLeftPaneProps {
 }
 
 export function ViewerLeftPane(props: ViewerLeftPaneProps) {
-	const { doc } = props;
+	const { doc, selectedSectionId, onSelectSection } = props;
+	const exclusions = doc.exclusions ?? [];
 	return (
 		<div className="viewer-left">
 			<h1 className="viewer-title">{doc.title || 'Untitled Change Tour'}</h1>
@@ -46,7 +47,90 @@ export function ViewerLeftPane(props: ViewerLeftPaneProps) {
 				{doc.children.map(node => (
 					<NodeRenderer key={node.id} node={node} parentGroupId={undefined} {...props} />
 				))}
+				{exclusions.length > 0 && (
+					<ExcludedSectionBlock
+						exclusions={exclusions}
+						selected={selectedSectionId === EXCLUDED_SECTION_ID}
+						onSelectSection={onSelectSection}
+					/>
+				)}
 			</div>
+		</div>
+	);
+}
+
+/**
+ * Render the "target" of an exclusion marker in the left-pane outline. Three
+ * shapes share the styling but differ in suffix:
+ *  - exact-range marker (`file=` literal, `lines="A-B"`): `file:A-B`
+ *  - whole-file marker (`file=` literal, no `lines=`): `file (whole file)`
+ *  - glob marker (`file=` contains `*`/`?`/`[`, no `lines=`): `file (pattern)`
+ */
+function renderExclusionTarget(e: ExcludedHunkMarker): React.ReactNode {
+	const hasRange = e.startLine !== undefined && e.endLine !== undefined;
+	const suffix = hasRange
+		? <span className="viewer-excluded-appendix-range">{`:${e.startLine}-${e.endLine}`}</span>
+		: <span className="viewer-excluded-appendix-kind"> {isGlob(e.file) ? '(pattern)' : '(whole file)'}</span>;
+	return (
+		<>
+			<span className="viewer-excluded-appendix-file">{e.file}</span>
+			{suffix}
+		</>
+	);
+}
+
+/**
+ * Synthetic outline entry rendered at the tail of the left pane when the tour
+ * carries any `<!-- changetour:exclude ... -->` markers. Clicking the header
+ * sets the special `EXCLUDED_SECTION_ID` filter, which the viewer translates
+ * into a right-pane view showing only the excluded entries. Click again to
+ * clear (matches the toggle behavior of real section headers).
+ */
+function ExcludedSectionBlock({
+	exclusions,
+	selected,
+	onSelectSection,
+}: {
+	exclusions: ReadonlyArray<ExcludedHunkMarker>;
+	selected: boolean;
+	onSelectSection: (id: string) => void;
+}) {
+	const count = exclusions.length;
+	return (
+		<div className={`viewer-excluded-appendix${selected ? ' viewer-excluded-appendix-selected' : ''}`}>
+			{/*
+			 * Styled like a section header (muted text + chevron) rather than a
+			 * colored button. Uses a `div[role=button]` instead of `<button>`
+			 * so it doesn't inherit the global VS Code button background. The
+			 * chevron is open when selected (list shown), closed otherwise.
+			 */}
+			<Tooltip text={selected ? 'Hide excluded changes' : 'Show PR hunks the author intentionally left out of this tour (deleted files, generated noise, etc.)'}>
+				<div
+					role="button"
+					tabIndex={0}
+					className="viewer-excluded-appendix-header"
+					onClick={() => onSelectSection(EXCLUDED_SECTION_ID)}
+					onKeyDown={e => {
+						if (e.key === 'Enter' || e.key === ' ') {
+							e.preventDefault();
+							onSelectSection(EXCLUDED_SECTION_ID);
+						}
+					}}
+				>
+					<span className={`expand-icon icon-button ${selected ? '' : 'closed'}`}>{chevronDownIcon}</span>
+					<span className="viewer-excluded-appendix-header-title">Excluded</span>
+					<span className="viewer-excluded-appendix-header-count">({count})</span>
+				</div>
+			</Tooltip>
+			{selected && (
+				<ul className="viewer-excluded-appendix-list">
+					{exclusions.map((e, i) => (
+						<li key={`${e.file}:${e.startLine ?? '*'}-${e.endLine ?? '*'}:${i}`} className="viewer-excluded-appendix-item">
+							{renderExclusionTarget(e)}
+						</li>
+					))}
+				</ul>
+			)}
 		</div>
 	);
 }

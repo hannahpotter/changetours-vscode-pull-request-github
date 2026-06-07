@@ -160,6 +160,116 @@
 	white-space: nowrap;
 }
 
+/* ----- Overflow "⋯" menu (hunk / file action rows) ----- */
+
+.overflow-menu {
+	position: relative;
+	display: inline-flex;
+	flex-shrink: 0;
+}
+
+.overflow-menu-trigger {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	flex-shrink: 0;
+	cursor: pointer;
+	color: var(--vscode-descriptionForeground);
+}
+
+/*
+ * Match the other plain action icons: subtle, hover-only background, and no
+ * persistent outline box after a mouse click (the inherited `.icon-button`
+ * focus outline otherwise lingers because the trigger keeps DOM focus while
+ * its popover is open). Keep a keyboard outline only for `:focus-visible`.
+ */
+.overflow-menu-trigger:focus:not(:focus-visible) {
+	outline: none;
+}
+
+.overflow-menu-trigger:hover,
+.overflow-menu-open .overflow-menu-trigger {
+	color: var(--vscode-foreground);
+}
+
+.overflow-menu-trigger .icon {
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	line-height: 0;
+}
+
+.overflow-menu-trigger .icon svg {
+	width: 16px;
+	height: 16px;
+	display: block;
+}
+
+/*
+ * Horizontal row of icon buttons (same shape as the section-gap "+" menu).
+ * Labels live in each button's tooltip rather than inline text. Portaled to
+ * <body> with fixed positioning (top/left set inline) so the surrounding
+ * `overflow: auto` scroll containers can't clip it.
+ */
+.overflow-menu-popover {
+	position: fixed;
+	display: flex;
+	gap: 4px;
+	padding: 4px;
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+	border-radius: 4px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+	z-index: 1000;
+	white-space: nowrap;
+}
+
+.overflow-menu-item.icon-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 4px;
+	color: var(--vscode-foreground);
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.overflow-menu-item.icon-button:hover:not(:disabled),
+.overflow-menu-item.icon-button:focus-visible {
+	background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+	outline: none;
+}
+
+.overflow-menu-item.icon-button:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.overflow-menu-item.icon-button .icon {
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	line-height: 0;
+}
+
+.overflow-menu-item.icon-button .icon svg {
+	width: 16px;
+	height: 16px;
+	display: block;
+}
+
+.overflow-menu-item-label {
+	flex: 1;
+	min-width: 0;
+}
+
 .tour-node-shell {
 	position: relative;
 	border-radius: 6px;
@@ -823,6 +933,13 @@
 	opacity: 0.85;
 }
 
+.tour-hunk-badge-excluded {
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+	border: 1px solid transparent;
+	opacity: 0.85;
+}
+
 .tour-hunk-badge-draft {
 	background: var(--vscode-inputValidation-infoBackground, rgba(0, 120, 212, 0.18));
 	border: 1px solid var(--vscode-inputValidation-infoBorder, rgba(0, 120, 212, 0.5));
@@ -1440,6 +1557,7 @@ h2 {
 }
 
 .progress-bar-container {
+	display: flex;
 	height: 8px;
 	background: var(--vscode-editorWidget-background, rgba(0,0,0,0.2));
 	border-radius: 4px;
@@ -1450,6 +1568,22 @@ h2 {
 	height: 100%;
 	background: var(--vscode-progressBar-background, var(--vscode-button-background));
 	transition: width 0.3s ease;
+}
+
+/*
+ * In-tour coverage uses the default progress-bar color. The excluded
+ * segment uses the disabled-foreground token so it reads as "counted but
+ * intentionally not narrated" rather than as a primary accomplishment.
+ */
+.progress-bar-excluded {
+	background: var(--vscode-disabledForeground, var(--vscode-descriptionForeground, rgba(128, 128, 128, 0.6)));
+	opacity: 0.7;
+}
+
+.excluded-count-suffix {
+	color: var(--vscode-descriptionForeground);
+	font-weight: normal;
+	margin-left: 4px;
 }
 
 .changed-files-list {
@@ -2405,4 +2539,295 @@ button.viewer-filter-status-clear {
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
 
+/* ----- Excluded-hunk pseudo-section (left pane + right pane) ----- */
+
+/*
+ * ---- "Excluded" appendix in the viewer's left pane ----
+ *
+ * Rendered at the tail of the tour outline as a *demoted* appendix so it
+ * reads as metadata about the tour, not another section of it. The full
+ * selected-fill that real `.viewer-section-selected` gets would imply
+ * parity with tour sections; we deliberately avoid it.
+ *
+ * Visual treatment:
+ *   - dashed top separator + significant top margin (clearly an appendix)
+ *   - italic header in description-foreground color (reads as a footnote)
+ *   - no left-border accent, no selected-fill background
+ *   - when selected, indicate via a subtle left border only on the header
+ *   - list items use smaller, muted text
+ */
+
+.viewer-excluded-appendix {
+	margin-top: 18px;
+	padding-top: 10px;
+	border-top: 1px dashed var(--vscode-panel-border, transparent);
+}
+
+.viewer-excluded-appendix-header {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 4px;
+	margin: 0;
+	background: transparent;
+	border: none;
+	color: var(--vscode-descriptionForeground);
+	font-size: 0.92em;
+	cursor: pointer;
+	user-select: none;
+	border-radius: 3px;
+}
+
+.viewer-excluded-appendix-header:hover {
+	background: var(--vscode-list-hoverBackground);
+	color: var(--vscode-foreground);
+}
+
+.viewer-excluded-appendix-header:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+.viewer-excluded-appendix-selected .viewer-excluded-appendix-header {
+	color: var(--vscode-foreground);
+}
+
+.viewer-excluded-appendix-header-count {
+	color: var(--vscode-descriptionForeground);
+}
+
+.viewer-excluded-appendix-list {
+	list-style: none;
+	margin: 4px 0 0 8px;
+	padding: 0 0 0 8px;
+	border-left: 1px dotted var(--vscode-panel-border, transparent);
+	font-size: 0.88em;
+}
+
+.viewer-excluded-appendix-item {
+	padding: 1px 0;
+	color: var(--vscode-descriptionForeground);
+	word-break: break-all;
+}
+
+.viewer-excluded-appendix-file {
+	color: var(--vscode-foreground);
+	font-family: var(--vscode-editor-font-family);
+	opacity: 0.85;
+}
+
+.viewer-excluded-appendix-range {
+	color: var(--vscode-descriptionForeground);
+	font-family: var(--vscode-editor-font-family);
+}
+
+.viewer-excluded-appendix-kind {
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
+}
+
+.viewer-excluded-appendix-reason {
+	font-style: italic;
+}
+
+/* ----- Edit-mode "Excluded" outline section ----- */
+
+.excluded-outline {
+	margin-top: 16px;
+	padding-top: 10px;
+	border-top: 1px dashed var(--vscode-panel-border, transparent);
+}
+
+.excluded-outline-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 6px;
+	color: var(--vscode-descriptionForeground);
+	font-weight: 600;
+}
+
+.excluded-outline-header-count {
+	font-weight: normal;
+}
+
+.excluded-outline-list {
+	list-style: none;
+	margin: 4px 0 0 0;
+	padding: 0;
+}
+
+.excluded-outline-item {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 3px 8px;
+	color: var(--vscode-descriptionForeground);
+	font-size: 0.92em;
+}
+
+.excluded-outline-item:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+.excluded-outline-target {
+	display: inline-flex;
+	flex-shrink: 0;
+}
+
+.excluded-outline-file {
+	color: var(--vscode-editor-foreground);
+	font-family: var(--vscode-editor-font-family);
+}
+
+.excluded-outline-range {
+	color: var(--vscode-descriptionForeground);
+	font-family: var(--vscode-editor-font-family);
+}
+
+.excluded-outline-kind {
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
+}
+
+/*
+ * Reason text/field flexes to fill the middle of the row and truncates with
+ * an ellipsis when it doesn't fit ("just see what fits then ...").
+ */
+.excluded-outline-reason {
+	font-style: italic;
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/*
+ * Editable variant: a read-only display span at rest, swapped for an input
+ * box only while the row is hovered or the field is focused.
+ */
+.excluded-outline-reason-edit {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+}
+
+.excluded-outline-reason-display {
+	flex: 1;
+	min-width: 0;
+	font-style: italic;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.excluded-outline-reason-empty {
+	color: var(--vscode-descriptionForeground);
+	opacity: 0.7;
+}
+
+/*
+ * Override the global `input[type='text']` rule from common.css (which forces
+ * display: block, width: 100%, and big padding/font) with an attribute
+ * selector to match specificity, then add the class to win. The input is
+ * `display: none` at rest and revealed on row hover / focus-within.
+ */
+input[type='text'].excluded-outline-reason-input {
+	display: none;
+	flex: 1;
+	min-width: 0;
+	width: auto;
+	margin: 0;
+	padding: 1px 4px;
+	font: inherit;
+	font-size: inherit;
+	color: var(--vscode-input-foreground);
+	background: var(--vscode-input-background);
+	border: 1px solid var(--vscode-input-border, var(--vscode-focusBorder));
+	border-radius: 3px;
+	box-sizing: border-box;
+	text-overflow: ellipsis;
+}
+
+input[type='text'].excluded-outline-reason-input::placeholder {
+	color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
+	font-style: italic;
+}
+
+input[type='text'].excluded-outline-reason-input:focus {
+	outline: none;
+	border-color: var(--vscode-focusBorder);
+}
+
+/*
+ * Reveal the input (and hide the static display text) only on row hover or
+ * while the field is focused, so the edit box isn't always present.
+ */
+.excluded-outline-item:hover .excluded-outline-reason-display,
+.excluded-outline-item:focus-within .excluded-outline-reason-display {
+	display: none;
+}
+
+.excluded-outline-item:hover input[type='text'].excluded-outline-reason-input,
+.excluded-outline-item:focus-within input[type='text'].excluded-outline-reason-input {
+	display: block;
+}
+
+.excluded-outline-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: auto;
+	flex-shrink: 0;
+}
+
+/*
+ * Pin the SVG glyph and the surrounding button to predictable sizes so
+ * the Open-diff and Trash buttons are clearly tappable instead of rendering
+ * as the SVG's natural intrinsic width inside a zero-padded flex item.
+ */
+.excluded-outline-action-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 3px;
+	border: 1px solid transparent;
+	background: transparent;
+	color: var(--vscode-foreground);
+	border-radius: 4px;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.excluded-outline-action-btn .icon {
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	line-height: 0;
+}
+
+.excluded-outline-action-btn .icon svg {
+	width: 16px;
+	height: 16px;
+	display: block;
+}
+
+.excluded-outline-action-btn:hover:not(:disabled) {
+	background: var(--vscode-toolbar-hoverBackground);
+	border-color: var(--vscode-contrastBorder, transparent);
+}
+
+.excluded-outline-action-btn:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+.excluded-outline-action-btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
 

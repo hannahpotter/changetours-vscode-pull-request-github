@@ -3,18 +3,33 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type {
-	CodeTourDocument,
-	HunkReference,
-	TourGroupNode,
-	TourHunkNode,
-	TourNode,
+import {
+	type CodeTourDocument, editContentFingerprint,
+	type HunkReference,
+	isExcluded,
+	type TourGroupNode,
+	type TourHunkNode,
+	type TourNode,
 } from '../../src/github/codeTourMarkdown';
+
+// Re-export so existing webview imports keep working without each file
+// pivoting to the canonical source. The implementation now lives in
+// codeTourMarkdown.ts so the LLM tools and the webview can't drift.
+export { editContentFingerprint };
 
 export interface FileHunkGroup {
 	file: string;
 	hunks: TourHunkNode[];
 }
+
+/**
+ * Synthetic section ID for the "Excluded Changes" pseudo-section in the viewer
+ * outline. Real tour groups carry parser-assigned ids (`g123`, `t456`, etc.);
+ * this constant is chosen to never collide. When `selectedSectionId` matches
+ * this value, the viewer renders the exclusion list instead of normal file
+ * groups.
+ */
+export const EXCLUDED_SECTION_ID = '__changetour_excluded__';
 
 /**
  * Snapshot of the bound PR's current state, supplied by the extension via the
@@ -87,40 +102,6 @@ export function indexPrState(prState: PrState | undefined): PrStateIndex {
 		}
 	}
 	return { blobsByFile, hunksByFile, renamedFrom, editFingerprintsByFile };
-}
-
-/**
- * Reduce a unified-diff patch body to just its add/remove content - the
- * lines that *actually* describe the edit, with no surrounding context and
- * no `@@` header. Two patches whose edit content is byte-identical describe
- * the same change even if the surrounding file has shifted (the position
- * line numbers and the context lines differ but the +/- lines don't).
- *
- * Used by drift and coverage detection to distinguish "this hunk's content
- * is unchanged, only its surroundings shifted" from "this hunk was actually
- * rewritten in the PR".
- */
-export function editContentFingerprint(patch: string | undefined): string | undefined {
-	if (!patch) {
-		return undefined;
-	}
-	const out: string[] = [];
-	for (const rawLine of patch.split('\n')) {
-		// Strip trailing CR so CRLF-terminated patches (drag/drop, live PR
-		// fetch use `split('\n')` which leaves `\r`) match LF-terminated ones
-		// (LLM-tool path goes through LineReader which already stripped CR).
-		// Without this, tours authored via the LLM never coverage-match
-		// against the same hunk re-fetched from GitHub.
-		const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-		if (line.length === 0 || line.startsWith('@@')) {
-			continue;
-		}
-		const marker = line[0];
-		if (marker === '+' || marker === '-') {
-			out.push(line);
-		}
-	}
-	return out.join('\n');
 }
 
 /**
@@ -461,12 +442,21 @@ export function computeNewInPrCount(
 			addCovered(renamedTo, fp);
 		}
 	}
+	// Author-curated exclusion markers also count as "covered" for the
+	// banner -- they're an explicit decision that the hunk does not belong
+	// in the tour, equivalent to having narrated it. Without this filter,
+	// the "N hunks not covered" banner stays lit even after the user
+	// excludes every uncovered hunk, contradicting the progress bar.
+	const exclusions = doc.exclusions ?? [];
 	const missing: Array<{ file: string; startLine: number; endLine: number }> = [];
 	for (const [file, hunks] of idx.hunksByFile) {
 		const coveredFps = coveredFpsByFile.get(file);
 		for (const h of hunks) {
 			const fp = editContentFingerprint(h.patch);
 			if (fp !== undefined && coveredFps && coveredFps.has(fp)) {
+				continue;
+			}
+			if (isExcluded(exclusions, file, h.startLine, h.endLine, fp)) {
 				continue;
 			}
 			missing.push({ file, startLine: h.startLine, endLine: h.endLine });

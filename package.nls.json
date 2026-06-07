@@ -210,6 +210,7 @@
 	"command.pr.openCodeTourViewFromEditor.title": "Open Change Tour Hunk Selector",
 	"command.pr.codeTourEditor.toggleEditMode.title": "Toggle Edit / Review Mode",
 	"command.pr.codeTourEditor.toggleDiffLayout.title": "Toggle Diff Layout (Inline / Side-by-Side)",
+	"command.pr.changeTourExcludeByPattern.title": "Exclude Files from Change Tour by Pattern",
 	"codetour.checkoutPR": "Checkout PR",
 	"command.pr.pickOnVscodeDev.title": "Checkout Pull Request on vscode.dev",
 	"command.pr.pickOnCodespaces.title": "Checkout Pull Request on Codespaces",

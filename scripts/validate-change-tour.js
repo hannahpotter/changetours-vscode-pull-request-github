@@ -53,8 +53,10 @@ const DETAILS_OPEN_RE = /^\s*<details(\s+open)?\s*>\s*$/;
 const DETAILS_CLOSE_RE = /^\s*<\/details>\s*$/;
 const SUMMARY_LINE_RE = /^\s*<summary>.*<\/summary>\s*$/;
 const HUNK_METADATA_RE = /^\s*<!--\s*changetour:hunk\s+(.*?)\s*-->\s*$/;
-const DIFF_FENCE_OPEN_RE = /^\s*```diff\s*$/;
-const DIFF_FENCE_CLOSE_RE = /^\s*```\s*$/;
+const EXCLUDE_MARKER_RE = /<!--\s*changetour:exclude\s+(.*?)\s*-->/g;
+const EXCLUDE_LINES_RE = /^(\d+)-(\d+)$/;
+const DIFF_FENCE_OPEN_RE = /^\s*(`{3,})diff\s*$/;
+const DIFF_FENCE_CLOSE_RE = /^\s*`{3,}\s*$/;
 const HAS_LEADING_WHITESPACE_RE = /^[ \t]+/;
 const HUNK_HEADER_LINE_RE = /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/;
 const HUNK_BODY_RANGE_RE = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/;
@@ -285,7 +287,8 @@ function validateStructure(text) {
 		}
 
 		skipBlanks();
-		if (j >= lines.length || !DIFF_FENCE_OPEN_RE.test(lines[j])) {
+		const fenceOpenMatch = j < lines.length ? DIFF_FENCE_OPEN_RE.exec(lines[j]) : null;
+		if (!fenceOpenMatch) {
 			errors.push({
 				line: openLine,
 				message: 'Hunk block is missing the ```diff fence after the metadata comment. The patch body must be wrapped in ```diff … ```.',
@@ -300,11 +303,13 @@ function validateStructure(text) {
 				message: '```diff fence line has leading whitespace. The fence must start at column zero.',
 			});
 		}
+		// Close fence must be >= opening length (CommonMark).
+		const closePattern = new RegExp(`^\\s*\`{${fenceOpenMatch[1].length},}\\s*$`);
 		j++;
 
 		const firstBodyLine = j + 1;
 		const patchBodyLines = [];
-		while (j < lines.length && !DIFF_FENCE_CLOSE_RE.test(lines[j])) {
+		while (j < lines.length && !closePattern.test(lines[j])) {
 			patchBodyLines.push(lines[j]);
 			j++;
 		}
@@ -573,12 +578,89 @@ function crossCheckHunks(tourHunks, prFiles) {
 }
 
 /**
+ * Scan the raw tour markdown for `<!-- changetour:exclude file="..." lines="A-B"
+ * fp="..." reason="..." -->` markers. Authors place these to opt PR hunks
+ * out of the coverage check - a curation tool for hunks the author
+ * deliberately left out of the tour. Mirrors `parseTourExclusions` in
+ * src/github/codeTourMarkdown.ts.
+ */
+function parseTourExclusions(text) {
+	const out = [];
+	EXCLUDE_MARKER_RE.lastIndex = 0;
+	let m;
+	while ((m = EXCLUDE_MARKER_RE.exec(text)) !== null) {
+		const attrs = {};
+		const attrRe = /(\w+)=(?:"((?:\\.|[^"\\])*)"|([^\s]+))/g;
+		let am;
+		while ((am = attrRe.exec(m[1])) !== null) {
+			attrs[am[1]] = am[2] !== undefined ? am[2].replace(/\\(["\\])/g, '$1') : am[3];
+		}
+		if (!attrs.file) continue;
+		let startLine;
+		let endLine;
+		if (attrs.lines !== undefined) {
+			const range = EXCLUDE_LINES_RE.exec(attrs.lines);
+			if (!range) continue; // present but malformed -> skip
+			startLine = parseInt(range[1], 10);
+			endLine = parseInt(range[2], 10);
+		}
+		out.push({
+			file: attrs.file,
+			startLine,
+			endLine,
+			fp: attrs.fp,
+			reason: attrs.reason,
+		});
+	}
+	return out;
+}
+
+function isGlob(s) { return /[*?[]/.test(s); }
+
+/**
+ * `*` matches one path segment (no `/`); `**` matches across segments. No
+ * braces, no character classes. Mirrors `matchesGlob` in
+ * src/github/codeTourMarkdown.ts.
+ */
+function matchesGlob(pattern, path) {
+	let re = '^';
+	let i = 0;
+	while (i < pattern.length) {
+		const ch = pattern[i];
+		if (ch === '*' && pattern[i + 1] === '*') { re += '.*'; i += 2; }
+		else if (ch === '*') { re += '[^/]*'; i += 1; }
+		else if (ch === '?') { re += '[^/]'; i += 1; }
+		else { re += ch.replace(/[.+^${}()|\\]/g, '\\$&'); i += 1; }
+	}
+	re += '$';
+	return new RegExp(re).test(path);
+}
+
+function isExcluded(exclusions, file, startLine, endLine, hunkFp) {
+	for (const e of exclusions) {
+		const fileMatch = isGlob(e.file) ? matchesGlob(e.file, file) : e.file === file;
+		if (!fileMatch) continue;
+		const wholeFile = e.startLine === undefined && e.endLine === undefined;
+		if (wholeFile) return true;
+		if (e.fp && hunkFp) {
+			if (e.fp === hunkFp) return true;
+			continue;
+		}
+		if (e.startLine === startLine && e.endLine === endLine) return true;
+	}
+	return false;
+}
+
+/**
  * Find hunks present in the PR diff but not in the tour. Returns a list of
  * `{ file, startLine, endLine }` entries describing the missing hunks.
  * Used by the coverage check (`/generate` requires that every PR hunk is
  * represented in the tour - trivial ones grouped into a Miscellaneous section).
+ *
+ * Hunks the author opted out of with a `<!-- changetour:exclude … -->` marker
+ * are filtered so they don't perpetually show up as uncovered.
  */
-function findUncoveredHunks(tourHunks, prFiles) {
+function findUncoveredHunks(tourHunks, prFiles, exclusions = []) {
 	const covered = new Set();
 	for (const h of tourHunks) {
 		covered.add(`${h.file}:${h.startLine}:${h.endLine}`);
@@ -587,9 +669,9 @@ function findUncoveredHunks(tourHunks, prFiles) {
 	for (const [file, entry] of prFiles.entries()) {
 		for (const rh of entry.hunks) {
 			const key = `${file}:${rh.startLine}:${rh.endLine}`;
-			if (!covered.has(key)) {
-				missing.push({ file, startLine: rh.startLine, endLine: rh.endLine });
-			}
+			if (covered.has(key)) continue;
+			if (isExcluded(exclusions, file, rh.startLine, rh.endLine)) continue;
+			missing.push({ file, startLine: rh.startLine, endLine: rh.endLine });
 		}
 	}
 	return missing;
@@ -657,6 +739,7 @@ function main(argv) {
 	}
 	const text = fs.readFileSync(filePath, 'utf8');
 	const structResult = validateStructure(text);
+	const exclusions = parseTourExclusions(text);
 
 	const allErrors = [...structResult.errors];
 	const allWarnings = [...structResult.warnings];
@@ -684,7 +767,7 @@ function main(argv) {
 				// Miscellaneous section. By default we report uncovered hunks as
 				// warnings; --require-full-coverage promotes them to errors so CI
 				// or strict workflows can hard-fail incomplete tours.
-				const uncovered = findUncoveredHunks(structResult.hunks, prFiles);
+				const uncovered = findUncoveredHunks(structResult.hunks, prFiles, exclusions);
 				if (uncovered.length > 0) {
 					const sink = args.requireFullCoverage ? allErrors : allWarnings;
 					const preview = uncovered
@@ -732,4 +815,4 @@ if (require.main === module) {
 	main(process.argv);
 }
 
-module.exports = { validateStructure, parsePrDiff, crossCheckHunks, findUncoveredHunks };
+module.exports = { validateStructure, parsePrDiff, parseApiFiles, parsePaginatedJsonArray, parseTourExclusions, crossCheckHunks, findUncoveredHunks, isExcluded, isGlob, matchesGlob };

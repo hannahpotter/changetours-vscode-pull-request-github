@@ -6,13 +6,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InlineCommentComposer } from './inlineCommentComposer';
 import { InlineCommentThread } from './inlineCommentThread';
-import { Tooltip } from './tooltip';
 import { type FileHunkGroup, hunkKeyFor } from './viewerModel';
 import { DiffSide, type IReviewThread } from '../../src/common/comment';
 import type { HunkReference, TourHunkNode } from '../../src/github/codeTourMarkdown';
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
 import { getHunkSummary, ParsedDiffLine, parsePatch } from '../common/diffUtils';
+import { Tooltip } from '../common/tooltip';
 import { chevronDownIcon, diffSingleIcon } from '../components/icon';
 
 export interface CommentTarget {
@@ -506,6 +506,11 @@ function HunkCard({ diffLayout, headSha, isOutdated, node, threads, associated, 
 					{isOutdated && !isPinned && (
 						<span className="tour-hunk-badge tour-hunk-badge-outdated" title="This hunk's file has drifted from the PR since the tour was authored.">
 							Outdated
+						</span>
+					)}
+					{node.id.startsWith('__excluded_synthetic_') && (
+						<span className="tour-hunk-badge tour-hunk-badge-excluded" title="The author marked this PR hunk as excluded from the tour's drift / coverage report.">
+							Excluded
 						</span>
 					)}
 					</div>

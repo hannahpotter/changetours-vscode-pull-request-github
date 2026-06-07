@@ -5,7 +5,9 @@
 
 import React, { useState } from 'react';
 import { ParsedDiffLine } from './diffUtils';
-import { addIcon, chevronDownIcon, listTree } from '../components/icon';
+import { OverflowMenu, type OverflowMenuItem } from './OverflowMenu';
+import { Tooltip } from './tooltip';
+import { addIcon, chevronDownIcon, eyeClosedIcon, listTree } from '../components/icon';
 
 interface DiffTableProps {
 	lines: ParsedDiffLine[];
@@ -13,6 +15,14 @@ interface DiffTableProps {
 	onHunkHeaderDragStart?: (e: React.DragEvent, headerIdx: number) => void;
 	onHunkAddActive?: (headerIdx: number) => void;
 	onHunkAddQuickPick?: (headerIdx: number) => void;
+	/**
+	 * Exclude this hunk from the Change Tour's drift / coverage report. Author
+	 * opts a PR hunk out when it fundamentally can't live in the tour (e.g.
+	 * deleted file, or a diff body whose literal ``` line closes the outer
+	 * fence). Provider prompts the user for a reason and writes the
+	 * `<!-- changetour:exclude … -->` marker.
+	 */
+	onHunkExclude?: (headerIdx: number) => void;
 	activeNodeContext?: string;
 	coveredHeaderIndices?: Set<number>;
 	hideCovered?: boolean;
@@ -41,7 +51,7 @@ export function DiffTable(props: DiffTableProps) {
 	return <DiffTableInline {...props} />;
 }
 
-function DiffTableInline({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, activeNodeContext, coveredHeaderIndices, hideCovered, selectedHeaderIndices, searchActive, searchMatchedHeaderIndices, searchMatchedLineIndices, onHunkSelectToggle, selectedHunksCount, highlightedLineIndices, highlightMode, onHighlightDragStart, onHighlightDragEnter, onHighlightDragEnd, onRemoveHighlightForRow, onAddCommentForLine, composerLineIdx, composerNode, threadWidgetsByLineIdx }: DiffTableProps) {
+function DiffTableInline({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, onHunkExclude, activeNodeContext, coveredHeaderIndices, hideCovered, selectedHeaderIndices, searchActive, searchMatchedHeaderIndices, searchMatchedLineIndices, onHunkSelectToggle, selectedHunksCount, highlightedLineIndices, highlightMode, onHighlightDragStart, onHighlightDragEnter, onHighlightDragEnd, onRemoveHighlightForRow, onAddCommentForLine, composerLineIdx, composerNode, threadWidgetsByLineIdx }: DiffTableProps) {
 	let currentHeaderIdx = -1;
 	const [collapsedState, setCollapsedState] = useState<{ [key: number]: boolean }>({});
 
@@ -76,36 +86,55 @@ function DiffTableInline({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunk
 							>
 								<td className="diff-line-num" colSpan={2}>
 									<span className="diff-hunk-actions">
-									<span className={`expand-icon icon-button ${isCollapsed ? 'closed' : ''}`} title={isCollapsed ? 'Expand hunk' : 'Collapse hunk'} onClick={(e) => { e.stopPropagation(); toggleCollapse(i, isCovered); }}>
-										{chevronDownIcon}
-									</span>
-									{onHunkSelectToggle && (<div className="checkbox-wrapper">
-										<input
-											type="checkbox"
-											title="Select hunk"
-												checked={!!selectedHeaderIndices?.has(i)}
-												onChange={(e) => onHunkSelectToggle?.(i, e.target.checked)}
-												onClick={(e) => e.stopPropagation()}
-											/>
-										</div>)}
-										{onHunkAddActive && (
-											<span
-												className="icon-button"
-												title={selectedHunksCount && selectedHunksCount > 1 ? `Insert ${selectedHunksCount} selected hunks${activeNodeContext ? ` after: ${activeNodeContext}` : ''}` : (activeNodeContext ? `Insert after: ${activeNodeContext}` : 'Append to end of tour')}
-												onClick={(e) => { e.stopPropagation(); onHunkAddActive(i); }}
-											>
-												{addIcon}
-											</span>
-										)}
-										{onHunkAddQuickPick && (
-											<span
-												className="icon-button"
-												title={selectedHunksCount && selectedHunksCount > 1 ? `Add ${selectedHunksCount} selected hunks to Section...` : 'Add Hunk to Section...'}
-												onClick={(e) => { e.stopPropagation(); onHunkAddQuickPick(i); }}
-											>
-												{listTree}
-											</span>
-										)}
+									<Tooltip text={isCollapsed ? 'Expand hunk' : 'Collapse hunk'}>
+										<span
+											className={`expand-icon icon-button ${isCollapsed ? 'closed' : ''}`}
+											onClick={(e) => { e.stopPropagation(); toggleCollapse(i, isCovered); }}
+										>
+											{chevronDownIcon}
+										</span>
+									</Tooltip>
+									{onHunkSelectToggle && (
+										<Tooltip text="Select hunk">
+											<div className="checkbox-wrapper">
+												<input
+													type="checkbox"
+													checked={!!selectedHeaderIndices?.has(i)}
+													onChange={(e) => onHunkSelectToggle?.(i, e.target.checked)}
+													onClick={(e) => e.stopPropagation()}
+												/>
+											</div>
+										</Tooltip>
+									)}
+										{(() => {
+											const multi = !!selectedHunksCount && selectedHunksCount > 1;
+											const menuItems: OverflowMenuItem[] = [];
+											if (onHunkAddActive) {
+												menuItems.push({
+													key: 'add',
+													icon: addIcon,
+													label: multi ? `Add ${selectedHunksCount} selected hunks` : (activeNodeContext ? `Add after: ${activeNodeContext}` : 'Add to end of tour'),
+													onSelect: () => onHunkAddActive(i),
+												});
+											}
+											if (onHunkAddQuickPick) {
+												menuItems.push({
+													key: 'add-section',
+													icon: listTree,
+													label: multi ? `Add ${selectedHunksCount} selected hunks to section…` : 'Add to section…',
+													onSelect: () => onHunkAddQuickPick(i),
+												});
+											}
+											if (onHunkExclude) {
+												menuItems.push({
+													key: 'exclude',
+													icon: eyeClosedIcon,
+													label: 'Exclude from tour',
+													onSelect: () => onHunkExclude(i),
+												});
+											}
+											return <OverflowMenu items={menuItems} title="Hunk actions" />;
+										})()}
 									</span>
 								</td>
 								<td className="diff-line-content diff-hunk-content-flex">

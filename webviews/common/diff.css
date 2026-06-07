@@ -90,15 +90,25 @@
 
 .diff-hunk-actions {
 	display: flex;
+	align-items: center;
+	gap: 2px;
 	height: fit-content;
 	color: var(--vscode-button-background);
+	flex-shrink: 0;
 }
 
 .diff-hunk-actions .icon {
 	display: inline-flex;
-	width: 18px;
-	height: 18px;
+	width: 16px;
+	height: 16px;
 	line-height: 0;
+	flex-shrink: 0;
+}
+
+.diff-hunk-actions .icon svg {
+	width: 16px;
+	height: 16px;
+	display: block;
 }
 
 .diff-hunk-covered {
