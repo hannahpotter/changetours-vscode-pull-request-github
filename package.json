@@ -1,14 +1,14 @@
 {
-	"name": "vscode-pull-request-github",
+	"name": "changetours-vscode-pull-request-github",
 	"displayName": "%displayName%",
 	"description": "%description%",
 	"icon": "resources/icons/github_logo.png",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/Microsoft/vscode-pull-request-github"
+		"url": "https://github.com/hannahpotter/changetours-vscode-pull-request-github"
 	},
 	"bugs": {
-		"url": "https://github.com/Microsoft/vscode-pull-request-github/issues"
+		"url": "https://github.com/hannahpotter/changetours-vscode-pull-request-github/issues"
 	},
 	"enabledApiProposals": [
 		"activeComment",
@@ -42,7 +42,7 @@
 		"treeViewMarkdownMessage"
 	],
 	"version": "0.128.0",
-	"publisher": "GitHub",
+	"publisher": "hannahpotter",
 	"engines": {
 		"vscode": "^1.109.0"
 	},

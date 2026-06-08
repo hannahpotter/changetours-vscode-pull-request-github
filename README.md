@@ -7,10 +7,13 @@ This extension allows you to create and review Change Tours of GitHub pull reque
 ## Building and installing the extension
 **Prerequisites:** [Node.js](https://nodejs.org/) and [Yarn](https://classic.yarnpkg.com/).
 
+> [!IMPORTANT]
+> This extension is a fork of [Microsoft's GitHub Pull Requests](https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github). It ships under a distinct extension id (`hannahpotter.changetours-vscode-pull-request-github`), so VS Code allows both extensions to be installed at the same time - but the fork still registers many of the same commands, views, and settings as the upstream, so running both at once typically produces duplicated commands or unpredictable UI. **Uninstall or disable the upstream GitHub Pull Requests extension before installing this `.vsix`.**
+
 1. Clone this repository and install dependencies:
 	```sh
-	git clone https://github.com/hkpotter/vscode-pull-request-github.git
-	cd vscode-pull-request-github
+	git clone https://github.com/hannahpotter/changetours-vscode-pull-request-github.git
+	cd changetours-vscode-pull-request-github
 	yarn install
 	```
 2. Build a `.vsix` package:

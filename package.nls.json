@@ -1,6 +1,6 @@
 {
-	"displayName": "GitHub Pull Requests",
-	"description": "Pull Request and Issue Provider for GitHub",
+	"displayName": "Change Tours for GitHub Pull Requests",
+	"description": "Author and review GitHub pull requests with structured Change Tour narratives.",
 	"githubPullRequests.pullRequestDescription.description": "The description used when creating pull requests.",
 	"githubPullRequests.pullRequestDescription.template": "Use a pull request template and commit description, or just use the commit description if no templates were found.",
 	"githubPullRequests.pullRequestDescription.commit": "Use the latest commit message only.",
