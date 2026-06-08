@@ -138,7 +138,7 @@ Pass `--skip-pr-check` to skip the live cross-check entirely (e.g. for offline w
 
 By default the assistant uses VS Code's language model API, so it works with whatever chat model you have installed (Copilot's GPT-4o, Copilot's Claude 3.5 Sonnet, Cody, Continue, etc.) and respects the model you've picked in the Copilot Chat dropdown.
 
-If you don't have Copilot but do have an [Anthropic API key](https://console.anthropic.com/settings/keys), run "Change Tour: Set Anthropic API Key" once. The assistant will fall back to calling the Anthropic API directly. The key is stored in VS Code SecretStorage.
+If you don't have Copilot but do have an [Anthropic API key](https://platform.claude.com/settings/keys), run "Change Tour: Set Anthropic API Key" once. The assistant will fall back to calling the Anthropic API directly. The key is stored in VS Code SecretStorage.
 
 Relevant settings (search "Change Tour" in settings UI):
 - `changeTour.assistant.enabled` - master switch (default `true`)

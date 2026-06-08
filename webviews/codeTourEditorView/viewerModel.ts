@@ -32,6 +32,16 @@ export interface FileHunkGroup {
 export const EXCLUDED_SECTION_ID = '__changetour_excluded__';
 
 /**
+ * Sibling sentinel for the synthetic "Uncovered" filter: PR hunks that are
+ * neither narrated in the tour nor opted-out via an exclusion marker. The
+ * coverage banner's "View list" action sets `selectedSectionId` to this value,
+ * which the viewer translates into a right-pane view of synthetic hunk groups
+ * (built from the bound PR's `changesData`) so the user gets full diff bodies
+ * and the standard "Open in file context" affordance on each entry.
+ */
+export const UNCOVERED_SECTION_ID = '__changetour_uncovered__';
+
+/**
  * Snapshot of the bound PR's current state, supplied by the extension via the
  * `codeTourEditor.changesData` message and consumed by the outdated-detection
  * helpers below. Optional fields tolerate the "PR not resolved / offline /

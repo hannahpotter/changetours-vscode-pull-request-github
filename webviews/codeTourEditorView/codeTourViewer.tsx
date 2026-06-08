@@ -19,6 +19,7 @@ import {
 	hunksForSection,
 	indexPrState,
 	type PrState,
+	UNCOVERED_SECTION_ID,
 } from './viewerModel';
 import { type CommentTarget, ViewerRightPane } from './viewerRightPane';
 import { DiffSide, type IComment, type IReviewThread } from '../../src/common/comment';
@@ -223,6 +224,53 @@ function buildExcludedHunkGroups(
 		dedupedByFile.set(file, kept);
 	}
 	return Array.from(dedupedByFile.entries()).map(([file, hunks]) => ({ file, hunks }));
+}
+
+/**
+ * Build synthetic `TourHunkNode`s for the right pane to render when the user
+ * clicks the coverage banner's "View list" button. Each entry in `missing`
+ * (PR hunks not covered by any tour hunk and not opted out by an exclusion
+ * marker) is resolved against the PR's file changes to recover the actual
+ * patch body, so the standard `HunkCard` / "Open in file context" affordances
+ * apply unchanged. Mirrors `buildExcludedHunkGroups` - the only difference is
+ * the source of truth (the `missing` list from `computeNewInPrCount`) and the
+ * absence of a per-hunk `summary` (no author-supplied reason exists).
+ */
+function buildUncoveredHunkGroups(
+	missing: ReadonlyArray<{ file: string; startLine: number; endLine: number }>,
+	files: Array<{ fileName: string; previousFileName?: string; blobSha?: string; patch?: string }> | undefined,
+): Array<{ file: string; hunks: TourHunkNode[] }> {
+	if (!files || missing.length === 0) return [];
+	const groupsByFile = new Map<string, TourHunkNode[]>();
+	let idCounter = 0;
+	for (const m of missing) {
+		const f = files.find(x => x.fileName === m.file);
+		if (!f?.patch) continue;
+		const hunks = splitFilePatch(f.patch);
+		const match = hunks.find(h => h.startLine === m.startLine && h.endLine === m.endLine);
+		if (!match) continue;
+		const node: TourHunkNode = {
+			type: 'hunk',
+			id: `__uncovered_synthetic_${idCounter++}`,
+			hunk: {
+				file: f.fileName,
+				startLine: match.startLine,
+				endLine: match.endLine,
+				patch: match.patch,
+				previousFile: f.previousFileName,
+				baseBlob: f.blobSha,
+			},
+		};
+		const list = groupsByFile.get(f.fileName) ?? [];
+		list.push(node);
+		groupsByFile.set(f.fileName, list);
+	}
+	// Sort hunks within each file by new-side start so the rendered diff order
+	// matches the file's natural reading order.
+	for (const nodes of groupsByFile.values()) {
+		nodes.sort((a, b) => a.hunk.startLine - b.hunk.startLine);
+	}
+	return Array.from(groupsByFile.entries()).map(([file, hunks]) => ({ file, hunks }));
 }
 
 function collectTextNodes(doc: CodeTourDocument): TourTextNode[] {
@@ -594,7 +642,11 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 	// should appear.
 	const prStateIndex = useMemo(() => indexPrState(prState), [prState]);
 	const outdatedHunkIds = useMemo(() => computeOutdatedHunks(doc, prState, prStateIndex), [doc, prState, prStateIndex]);
-	const { count: newInPrCount } = useMemo(() => computeNewInPrCount(doc, prState, prStateIndex), [doc, prState, prStateIndex]);
+	// In view mode the user can't add hunks, but they may still want to see
+	// which PR changes were left out. `uncoveredHunks` powers the right-pane
+	// synthetic groups when the coverage banner's "View uncovered" button
+	// flips `selectedSectionId` to `UNCOVERED_SECTION_ID`.
+	const { count: newInPrCount, missing: uncoveredHunks } = useMemo(() => computeNewInPrCount(doc, prState, prStateIndex), [doc, prState, prStateIndex]);
 	const outdatedUnpinnedCount = useMemo(() => {
 		let n = 0;
 		for (const node of flattenHunks(doc)) {
@@ -608,18 +660,24 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 
 	const exclusions = doc.exclusions ?? [];
 	const isExcludedFilter = selectedSectionId === EXCLUDED_SECTION_ID;
+	const isUncoveredFilter = selectedSectionId === UNCOVERED_SECTION_ID;
 
 	const selectedSection = useMemo(() => {
-		if (!selectedSectionId || isExcludedFilter) {
+		if (!selectedSectionId || isExcludedFilter || isUncoveredFilter) {
 			return undefined;
 		}
 		const node = findNode(doc, selectedSectionId);
 		return node && node.type === 'group' ? node : undefined;
-	}, [doc, selectedSectionId, isExcludedFilter]);
+	}, [doc, selectedSectionId, isExcludedFilter, isUncoveredFilter]);
 
 	const excludedFileGroups = useMemo(
 		() => buildExcludedHunkGroups(exclusions, changesData?.files),
 		[exclusions, changesData],
+	);
+
+	const uncoveredFileGroups = useMemo(
+		() => buildUncoveredHunkGroups(uncoveredHunks, changesData?.files),
+		[uncoveredHunks, changesData],
 	);
 
 	const fileGroups = useMemo(() => {
@@ -630,20 +688,25 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 			// in the header.
 			return excludedFileGroups;
 		}
+		if (isUncoveredFilter) {
+			// Same machinery, different source: PR hunks not narrated in the
+			// tour and not opted out by an exclusion marker.
+			return uncoveredFileGroups;
+		}
 		if (selectedSectionId) {
 			return dedupAndGroupByFile(selectedSection ? hunksForSection(selectedSection) : []);
 		}
 		return allFileGroups;
-	}, [allFileGroups, selectedSection, selectedSectionId, isExcludedFilter, excludedFileGroups]);
+	}, [allFileGroups, selectedSection, selectedSectionId, isExcludedFilter, isUncoveredFilter, excludedFileGroups, uncoveredFileGroups]);
 
-	// Pull PR file changes the first time the user opens the Excluded filter
-	// (the editor side requests them eagerly when its Changes pane opens, but
-	// a viewer-only session may never have triggered that fetch).
+	// Pull PR file changes the first time the user opens either synthetic
+	// filter (the editor side requests them eagerly when its Changes pane
+	// opens, but a viewer-only session may never have triggered that fetch).
 	useEffect(() => {
-		if (isExcludedFilter && !changesData) {
+		if ((isExcludedFilter || isUncoveredFilter) && !changesData) {
 			postMessage({ command: 'codeTourEditor.requestChanges' });
 		}
-	}, [isExcludedFilter, changesData, postMessage]);
+	}, [isExcludedFilter, isUncoveredFilter, changesData, postMessage]);
 
 	useEffect(() => {
 		fileGroupsRef.current = fileGroups.map(fg => ({
@@ -667,7 +730,9 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 	const isFiltering = !!selectedSectionId;
 	const filterLabel = isExcludedFilter
 		? 'Excluded'
-		: (isFiltering ? (selectedSection?.title || 'Selected section') : undefined);
+		: isUncoveredFilter
+			? 'Uncovered'
+			: (isFiltering ? (selectedSection?.title || 'Selected section') : undefined);
 
 	const handleClearFilter = useCallback(() => {
 		setSelectedSectionId(undefined);
@@ -839,6 +904,19 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 					</span>
 					<div className="tour-pr-warning-actions">
 						{/* View mode is read-only: the Outdated banner stays informational. The Claude CLI / @change-tour / "Update with AI" actions all mutate the tour file, so they only render in edit mode (CodeTourEditor). */}
+						{newInPrCount > 0 && (
+							<Tooltip text="Show every PR hunk that isn't narrated in this tour. Each entry has an Open-in-file-context affordance.">
+								<button
+									className="tour-action-btn"
+									onClick={() => {
+										setSelectedSectionId(UNCOVERED_SECTION_ID);
+										setSelectedTextNodeId(undefined);
+									}}
+								>
+									View Uncovered
+								</button>
+							</Tooltip>
+						)}
 						{onRefreshPrState && (
 							<Tooltip text="Re-fetch the PR's current state">
 								<button className="tour-action-btn" onClick={onRefreshPrState}>
@@ -890,10 +968,14 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				totalHunkCount={totalHunkCount}
 				shownFileCount={shownFileCount}
 				totalFileCount={totalFileCount}
+				filterHideCounts={isUncoveredFilter}
+				filterClearLabel={isUncoveredFilter ? 'Show all covered' : undefined}
 				onClearFilter={handleClearFilter}
 				emptyMessage={isExcludedFilter
 					? (changesData ? 'No PR hunks are excluded.' : 'Loading PR file changes…')
-					: (selectedSectionId ? 'This section has no hunks.' : 'No hunks in this tour yet.')}
+					: isUncoveredFilter
+						? (changesData ? 'Every PR hunk is covered by this tour.' : 'Loading PR file changes…')
+						: (selectedSectionId ? 'This section has no hunks.' : 'No hunks in this tour yet.')}
 				viewedHunks={viewedHunks}
 				collapsedHunks={collapsedHunks}
 				collapsedFiles={collapsedFiles}

@@ -45,6 +45,10 @@ interface ViewerRightPaneProps {
 	totalHunkCount: number;
 	shownFileCount: number;
 	totalFileCount: number;
+	/** Hide the "X of Y hunks · A of B files" subtitle in the filter banner. Used by filters where the denominator isn't meaningful (e.g. "Uncovered" - the count is hunks NOT in the tour, so dividing by the tour's hunk total is misleading). */
+	filterHideCounts?: boolean;
+	/** Override label for the filter banner's clear button. Defaults to "Show all". */
+	filterClearLabel?: string;
 	onClearFilter: () => void;
 	emptyMessage?: string;
 	viewedHunks: Set<string>;
@@ -79,6 +83,8 @@ export function ViewerRightPane({
 	totalHunkCount,
 	shownFileCount,
 	totalFileCount,
+	filterHideCounts,
+	filterClearLabel,
 	onClearFilter,
 	emptyMessage,
 	viewedHunks,
@@ -111,6 +117,8 @@ export function ViewerRightPane({
 					totalHunkCount={totalHunkCount}
 					shownFileCount={shownFileCount}
 					totalFileCount={totalFileCount}
+					hideCounts={filterHideCounts}
+					clearLabel={filterClearLabel}
 					onClearFilter={onClearFilter}
 				/>
 			)}
@@ -170,6 +178,10 @@ interface FilterStatusBarProps {
 	totalHunkCount: number;
 	shownFileCount: number;
 	totalFileCount: number;
+	/** Hide the "X of Y hunks ..." denominator subtitle. Used by filters where the count isn't a meaningful proportion of the tour total. */
+	hideCounts?: boolean;
+	/** Override the clear-filter button label. Defaults to "Show all". */
+	clearLabel?: string;
 	onClearFilter: () => void;
 }
 
@@ -181,18 +193,20 @@ function pluralFiles(n: number): string {
 	return n === 1 ? 'file' : 'files';
 }
 
-function FilterStatusBar({ label, shownHunkCount, totalHunkCount, shownFileCount, totalFileCount, onClearFilter }: FilterStatusBarProps) {
+function FilterStatusBar({ label, shownHunkCount, totalHunkCount, shownFileCount, totalFileCount, hideCounts, clearLabel, onClearFilter }: FilterStatusBarProps) {
 	return (
 		<div className="viewer-filter-status" role="status" aria-live="polite">
 			<div className="viewer-filter-status-text">
 				<span className="viewer-filter-status-label">
 					Filtered to <strong>{label ?? 'selected section'}</strong>
 				</span>
-				<span className="viewer-filter-status-counts">
-					{shownHunkCount} of {totalHunkCount} {pluralHunks(totalHunkCount)}
-					{' · '}
-					{shownFileCount} of {totalFileCount} {pluralFiles(totalFileCount)}
-				</span>
+				{!hideCounts && (
+					<span className="viewer-filter-status-counts">
+						{shownHunkCount} of {totalHunkCount} {pluralHunks(totalHunkCount)}
+						{' · '}
+						{shownFileCount} of {totalFileCount} {pluralFiles(totalFileCount)}
+					</span>
+				)}
 			</div>
 			<Tooltip text="Clear the section filter and show all hunks">
 				<button
@@ -200,7 +214,7 @@ function FilterStatusBar({ label, shownHunkCount, totalHunkCount, shownFileCount
 					className="viewer-filter-status-clear secondary"
 					onClick={onClearFilter}
 				>
-					Show all
+					{clearLabel ?? 'Show all'}
 				</button>
 			</Tooltip>
 		</div>

@@ -13,6 +13,7 @@ import { RateLimitBanner, type RateLimitNotice } from './rateLimitBanner';
 import { type PrState } from './viewerModel';
 import { type CodeTourDocument, type HunkReference, parseCodeTourMarkdown, type TourNode } from '../../src/github/codeTourMarkdown';
 import { getMessageHandler, MessageHandler } from '../common/message';
+import { Tooltip } from '../common/tooltip';
 
 export function main() {
 	render(<Root />, document.getElementById('app'));
@@ -538,23 +539,24 @@ function Root() {
 			</div>
 				{isChangesOpen ? (
 					<div style={{ display: 'flex', flex: 1, minWidth: 0, height: '100%' }}>
-						<div
-							role="button"
-							tabIndex={0}
-							className="changes-gutter changes-gutter-open"
-							title="Hide PR change list"
-							aria-label="Hide PR change list"
-							onClick={() => setIsChangesOpen(false)}
-							onKeyDown={e => {
-								if (e.key === 'Enter' || e.key === ' ') {
-									e.preventDefault();
-									setIsChangesOpen(false);
-								}
-							}}
-						>
-							<span className="changes-gutter-chevrons" aria-hidden="true">{'>>'}</span>
-							<span className="changes-gutter-label" aria-hidden="true">Change List</span>
-						</div>
+						<Tooltip text="Hide PR change list">
+							<div
+								role="button"
+								tabIndex={0}
+								className="changes-gutter changes-gutter-open"
+								aria-label="Hide PR change list"
+								onClick={() => setIsChangesOpen(false)}
+								onKeyDown={e => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										setIsChangesOpen(false);
+									}
+								}}
+							>
+								<span className="changes-gutter-chevrons" aria-hidden="true">{'>>'}</span>
+								<span className="changes-gutter-label" aria-hidden="true">Change List</span>
+							</div>
+						</Tooltip>
 						<div style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', position: 'relative' }}>
 							{changesData ? (
 								<ChangedFilesOverview {...changesData} onHunkAdd={onHunkAdd} onHunkExclude={onHunkExclude} onFileExclude={onFileExclude} activeNodeContext={activeNodeContext} codeTourHunks={codeTourHunks} exclusions={doc?.exclusions ?? []} onAddAllMissing={onAddAllMissing} diffLayout={diffLayout} />
@@ -564,31 +566,32 @@ function Root() {
 						</div>
 					</div>
 				) : (
-					<div
-						role="button"
-						tabIndex={0}
-						className="changes-gutter changes-gutter-collapsed"
-						title="Show PR change list"
-						aria-label="Show PR change list"
-						onClick={() => {
-							setIsChangesOpen(true);
-							if (!changesData) {
-								handler?.postMessage({ command: 'codeTourEditor.requestChanges' });
-							}
-						}}
-						onKeyDown={e => {
-							if (e.key === 'Enter' || e.key === ' ') {
-								e.preventDefault();
+					<Tooltip text="Show PR change list">
+						<div
+							role="button"
+							tabIndex={0}
+							className="changes-gutter changes-gutter-collapsed"
+							aria-label="Show PR change list"
+							onClick={() => {
 								setIsChangesOpen(true);
 								if (!changesData) {
 									handler?.postMessage({ command: 'codeTourEditor.requestChanges' });
 								}
-							}
-						}}
-					>
-						<span className="changes-gutter-chevrons" aria-hidden="true">{'<<'}</span>
-						<span className="changes-gutter-label" aria-hidden="true">Change List</span>
-					</div>
+							}}
+							onKeyDown={e => {
+								if (e.key === 'Enter' || e.key === ' ') {
+									e.preventDefault();
+									setIsChangesOpen(true);
+									if (!changesData) {
+										handler?.postMessage({ command: 'codeTourEditor.requestChanges' });
+									}
+								}
+							}}
+						>
+							<span className="changes-gutter-chevrons" aria-hidden="true">{'<<'}</span>
+							<span className="changes-gutter-label" aria-hidden="true">Change List</span>
+						</div>
+					</Tooltip>
 				)}
 			</div>
 		</div>
