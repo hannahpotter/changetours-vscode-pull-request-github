@@ -5,6 +5,7 @@
 
 import {
 	type CodeTourDocument, editContentFingerprint,
+	getHunkSummary,
 	type HunkReference,
 	isExcluded,
 	type TourGroupNode,
@@ -20,6 +21,38 @@ export { editContentFingerprint };
 export interface FileHunkGroup {
 	file: string;
 	hunks: TourHunkNode[];
+	/**
+	 * All occurrences of each hunk grouped by `hunkKeyFor`, including the
+	 * representative kept in `hunks`. Right pane consumers use this to compute
+	 * the richest summary across duplicates rather than just the first
+	 * occurrence's. Order within each list matches document order.
+	 */
+	duplicatesByKey: Map<string, TourHunkNode[]>;
+}
+
+/**
+ * Aggregate summary across all duplicate occurrences of a single hunk.
+ *
+ * Prefers authored summaries over auto-derived ones: if any duplicate has an
+ * authored `hunk.summary`, the result is the deduplicated list of authored
+ * summaries (in document order) joined by newlines, with `isAuto: false`.
+ * Falls back to the first node's auto summary when no occurrence carries
+ * an authored value.
+ */
+export function aggregateHunkSummary(nodes: readonly TourHunkNode[]): { text: string; isAuto: boolean } {
+	const seen = new Set<string>();
+	const authored: string[] = [];
+	for (const n of nodes) {
+		const a = n.hunk.summary?.trim();
+		if (a && !seen.has(a)) {
+			seen.add(a);
+			authored.push(a);
+		}
+	}
+	if (authored.length > 0) {
+		return { text: authored.join('\n'), isAuto: false };
+	}
+	return getHunkSummary(nodes[0].hunk);
 }
 
 /**
@@ -523,13 +556,25 @@ export function dedupAndGroupByFile(hunks: TourHunkNode[]): FileHunkGroup[] {
 	const seenKeys = new Set<string>();
 	const fileOrder: string[] = [];
 	const byFile = new Map<string, TourHunkNode[]>();
+	const dupsByFile = new Map<string, Map<string, TourHunkNode[]>>();
 	for (const n of hunks) {
 		const key = hunkKey(n);
+		const f = n.hunk.file;
+		let fileDups = dupsByFile.get(f);
+		if (!fileDups) {
+			fileDups = new Map();
+			dupsByFile.set(f, fileDups);
+		}
+		let bucket = fileDups.get(key);
+		if (!bucket) {
+			bucket = [];
+			fileDups.set(key, bucket);
+		}
+		bucket.push(n);
 		if (seenKeys.has(key)) {
 			continue;
 		}
 		seenKeys.add(key);
-		const f = n.hunk.file;
 		if (!byFile.has(f)) {
 			byFile.set(f, []);
 			fileOrder.push(f);
@@ -539,6 +584,7 @@ export function dedupAndGroupByFile(hunks: TourHunkNode[]): FileHunkGroup[] {
 	return fileOrder.map(file => ({
 		file,
 		hunks: [...byFile.get(file)!].sort((a, b) => a.hunk.startLine - b.hunk.startLine),
+		duplicatesByKey: dupsByFile.get(file) ?? new Map(),
 	}));
 }
 
@@ -635,8 +681,14 @@ export function isSectionPartiallyViewed(group: TourGroupNode, viewedKeys: Set<s
  * Hunks "associated with" a text node = the contiguous run of hunk siblings
  * that immediately follow the text node in its parent's children list,
  * stopping at the first non-hunk sibling.
+ *
+ * Returns the specific TourHunkNode ids of the adjacent occurrences. The
+ * right pane uses these to pick which duplicate's summary + highlights to
+ * render: if the same hunk appears after both P1 and P2 in the same section,
+ * selecting P1 should show P1's adjacent occurrence's authored summary and
+ * highlights, not the first-dedup-survivor's.
  */
-export function associatedHunkIds(parent: TourGroupNode | undefined, doc: CodeTourDocument, textNodeId: string): Set<string> {
+export function associatedHunkNodeIds(parent: TourGroupNode | undefined, doc: CodeTourDocument, textNodeId: string): Set<string> {
 	const out = new Set<string>();
 	const siblings = parent ? parent.children : doc.children;
 	const idx = siblings.findIndex(n => n.id === textNodeId);

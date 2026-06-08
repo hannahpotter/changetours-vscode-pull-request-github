@@ -46,7 +46,7 @@ type EditorNode = EditorGroupNode | TourTextNode | EditorHunkNode | TourDropZone
  * Narration "group" the active node belongs to - the selected paragraph
  * plus the contiguous run of hunk siblings that immediately follow it
  * (same forward-walk rule the viewer applies on paragraph-click in view
- * mode; see `viewerModel.ts#associatedHunkIds`).
+ * mode; see `viewerModel.ts#associatedHunkNodeIds`).
  *
  *   - `members` is the set of node ids in the group (paragraph + hunks).
  *   - `lastId` is the id of the visually-bottommost member, used to stop

@@ -2257,7 +2257,10 @@ button.viewer-filter-status-clear {
 .viewer-hunk-summary {
 	flex: 1;
 	min-width: 0;
-	white-space: normal;
+	/* `pre-line` so the newline separator between distinct authored summaries
+	 * (one per duplicate occurrence of the same hunk) renders as an actual
+	 * line break while still collapsing other whitespace. */
+	white-space: pre-line;
 	overflow-wrap: anywhere;
 	/* Authored summaries read as natural language; override the parent
 	 * header's monospace+italic (which suited the old raw @@ header text). */

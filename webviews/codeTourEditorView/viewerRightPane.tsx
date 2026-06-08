@@ -6,12 +6,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InlineCommentComposer } from './inlineCommentComposer';
 import { InlineCommentThread } from './inlineCommentThread';
-import { type FileHunkGroup, hunkKeyFor } from './viewerModel';
+import { aggregateHunkSummary, type FileHunkGroup, hunkKeyFor } from './viewerModel';
 import { DiffSide, type IReviewThread } from '../../src/common/comment';
-import type { HunkReference, TourHunkNode } from '../../src/github/codeTourMarkdown';
+import type { HighlightRange, HunkReference, TourHunkNode } from '../../src/github/codeTourMarkdown';
 import { indicesFromHighlights } from '../common/diffHighlights';
 import { DiffTable } from '../common/DiffTable';
-import { getHunkSummary, ParsedDiffLine, parsePatch } from '../common/diffUtils';
+import { ParsedDiffLine, parsePatch } from '../common/diffUtils';
 import { Tooltip } from '../common/tooltip';
 import { chevronDownIcon, diffSingleIcon } from '../components/icon';
 
@@ -28,7 +28,17 @@ interface ViewerRightPaneProps {
 	fileGroups: FileHunkGroup[];
 	totalsByFile: Map<string, number>;
 	threadsByHunkId: Map<string, IReviewThread[]>;
-	associatedHunkIds: Set<string>;
+	/**
+	 * Per-card "active" duplicate set, keyed by hunkKey. The card renders summary +
+	 * highlights aggregated over these nodes (rather than all duplicates) so
+	 * paragraph selection switches which occurrence's authored content is shown.
+	 * When no paragraph is selected this just contains every duplicate. When a
+	 * paragraph is selected, cards adjacent to it are filtered to only their
+	 * adjacent occurrences; cards not adjacent fall back to all their duplicates.
+	 */
+	activeNodesByKey: Map<string, TourHunkNode[]>;
+	/** Hunk keys for cards whose active set was narrowed by paragraph selection. Drives the "this card matches the selected paragraph" visual + highlights gate. */
+	associatedHunkKeys: Set<string>;
 	scrollTargetHunkId: string | undefined;
 	showHighlights: boolean;
 	onToggleHighlights: () => void;
@@ -66,7 +76,8 @@ export function ViewerRightPane({
 	fileGroups,
 	totalsByFile,
 	threadsByHunkId,
-	associatedHunkIds,
+	activeNodesByKey,
+	associatedHunkKeys,
 	scrollTargetHunkId,
 	showHighlights,
 	onToggleHighlights,
@@ -148,9 +159,10 @@ export function ViewerRightPane({
 						outdatedHunkIds={outdatedHunkIds}
 						file={group.file}
 						hunks={group.hunks}
+						activeNodesByKey={activeNodesByKey}
 						totalHunksForFile={totalsByFile.get(group.file) ?? group.hunks.length}
 						threadsByHunkId={threadsByHunkId}
-						associatedHunkIds={associatedHunkIds}
+						associatedHunkKeys={associatedHunkKeys}
 						showHighlights={showHighlights}
 						onOpenDiff={onOpenDiff}
 						onPostLineComment={onPostLineComment}
@@ -227,9 +239,11 @@ interface FileGroupBlockProps {
 	outdatedHunkIds?: Set<string>;
 	file: string;
 	hunks: TourHunkNode[];
+	/** Active duplicate set per rendered card. See {@link ViewerRightPaneProps.activeNodesByKey}. */
+	activeNodesByKey: Map<string, TourHunkNode[]>;
 	totalHunksForFile: number;
 	threadsByHunkId: Map<string, IReviewThread[]>;
-	associatedHunkIds: Set<string>;
+	associatedHunkKeys: Set<string>;
 	showHighlights: boolean;
 	onOpenDiff: (hunk: HunkReference) => void;
 	onPostLineComment: (hunk: HunkReference, target: CommentTarget, body: string) => Promise<void>;
@@ -252,9 +266,10 @@ function FileGroupBlock({
 	outdatedHunkIds,
 	file,
 	hunks,
+	activeNodesByKey,
 	totalHunksForFile,
 	threadsByHunkId,
-	associatedHunkIds,
+	associatedHunkKeys,
 	showHighlights,
 	onOpenDiff,
 	onPostLineComment,
@@ -313,6 +328,21 @@ function FileGroupBlock({
 			</div>
 			{!isFileCollapsed && hunks.map(node => {
 				const key = hunkKeyFor(node.hunk);
+				const active = activeNodesByKey.get(key) ?? [node];
+				// Concatenate highlights from every active occurrence rather than
+				// reading the dedup rep's `node.hunk.highlights`. When a paragraph
+				// is selected, `active` is just that paragraph's adjacent
+				// duplicate(s), so the rendered highlights track the paragraph
+				// the user clicked on.
+				const highlights: HighlightRange[] | undefined = (() => {
+					const merged: HighlightRange[] = [];
+					for (const a of active) {
+						if (a.hunk.highlights) {
+							merged.push(...a.hunk.highlights);
+						}
+					}
+					return merged.length > 0 ? merged : undefined;
+				})();
 				return (
 					<HunkCard
 						key={node.id}
@@ -320,8 +350,10 @@ function FileGroupBlock({
 						headSha={headSha}
 						isOutdated={outdatedHunkIds?.has(node.id) ?? false}
 						node={node}
+						summary={aggregateHunkSummary(active)}
+						highlights={highlights}
 						threads={threadsByHunkId.get(node.id) ?? []}
-						associated={associatedHunkIds.has(node.id)}
+						associated={associatedHunkKeys.has(key)}
 						showHighlights={showHighlights}
 						onOpenDiff={onOpenDiff}
 						onPostLineComment={onPostLineComment}
@@ -348,6 +380,10 @@ interface HunkCardProps {
 	/** True when this hunk's file has drifted since the tour was authored. Drives the badge. */
 	isOutdated: boolean;
 	node: TourHunkNode;
+	/** Aggregated summary across all duplicate occurrences of this hunk; see {@link aggregateHunkSummary}. */
+	summary: { text: string; isAuto: boolean };
+	/** Highlight ranges merged across the currently active duplicates (not `node.hunk.highlights`). Drives the line-highlight overlay together with `associated`. */
+	highlights: HighlightRange[] | undefined;
 	threads: IReviewThread[];
 	associated: boolean;
 	showHighlights: boolean;
@@ -385,12 +421,12 @@ function threadAttachesToLine(thread: IReviewThread, line: ParsedDiffLine): bool
 	return line.newLine !== undefined && line.newLine === thread.endLine;
 }
 
-function HunkCard({ diffLayout, headSha, isOutdated, node, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, openDiffDisabled, openDiffDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
+function HunkCard({ diffLayout, headSha, isOutdated, node, summary, highlights, threads, associated, showHighlights, onOpenDiff, onPostLineComment, onReplyToThread, commentsEnabled, commentsDisabledReason, openDiffDisabled, openDiffDisabledReason, hunkKey, isViewed, isCollapsed, onToggleViewed, onToggleCollapsed }: HunkCardProps) {
 	const { file, startLine, endLine, patch } = node.hunk;
 	const headShaShort = headSha ? headSha.substring(0, 7) : '';
 	const isPinned = !!node.hunk.pinned;
 	const lines = useMemo(() => patch ? parsePatch(patch) : [], [patch]);
-	const summaryInfo = useMemo(() => getHunkSummary(node.hunk), [node.hunk]);
+	const summaryInfo = summary;
 	const diffHunkHeaderText = useMemo(() => {
 		const h = lines.find(l => l.type === 'hunk-header');
 		return h?.content ?? `@@ L${startLine}-${endLine} @@`;
@@ -399,8 +435,8 @@ function HunkCard({ diffLayout, headSha, isOutdated, node, threads, associated, 
 		if (!associated || !showHighlights) {
 			return undefined;
 		}
-		return indicesFromHighlights(lines, node.hunk.highlights);
-	}, [associated, showHighlights, lines, node.hunk.highlights]);
+		return indicesFromHighlights(lines, highlights);
+	}, [associated, showHighlights, lines, highlights]);
 
 	const [composerLineIdx, setComposerLineIdx] = useState<number | null>(null);
 

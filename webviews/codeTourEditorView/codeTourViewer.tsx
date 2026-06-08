@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ViewerLeftPane } from './viewerLeftPane';
 import {
-	associatedHunkIds as computeAssociatedHunkIds,
+	associatedHunkNodeIds as computeAssociatedHunkNodeIds,
 	computeNewInPrCount,
 	computeOutdatedHunks,
 	dedupAndGroupByFile,
@@ -473,15 +473,19 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 	}, [inbox]);
 
 	const handleSelectSection = useCallback((id: string) => {
-		setSelectedSectionId(prev => {
-			if (prev === id) {
-				setSelectedTextNodeId(undefined);
-				return undefined;
-			}
+		// Clicking the header of the already-selected section: if a paragraph
+		// inside it is currently the active selection, step back to a plain
+		// section-only view (so headers + summaries re-aggregate across all
+		// duplicates) instead of clearing the section too. Only when the
+		// section was already the sole selection does the click toggle the
+		// section off.
+		if (selectedSectionId === id && selectedTextNodeId !== undefined) {
 			setSelectedTextNodeId(undefined);
-			return id;
-		});
-	}, []);
+			return;
+		}
+		setSelectedSectionId(prev => (prev === id ? undefined : id));
+		setSelectedTextNodeId(undefined);
+	}, [selectedSectionId, selectedTextNodeId]);
 
 	const handleSelectTextNode = useCallback((textNodeId: string, parentGroupId: string | undefined) => {
 		setSelectedTextNodeId(prev => (prev === textNodeId ? undefined : textNodeId));
@@ -739,25 +743,48 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 		setSelectedTextNodeId(undefined);
 	}, []);
 
-	const { associatedIds, scrollTargetHunkId } = useMemo(() => {
-		if (!selectedTextNodeId) {
-			return { associatedIds: new Set<string>(), scrollTargetHunkId: undefined };
-		}
-		const parent = findParentGroup(doc, selectedTextNodeId);
-		const ids = computeAssociatedHunkIds(parent, doc, selectedTextNodeId);
-		if (ids.size === 0) {
-			return { associatedIds: ids, scrollTargetHunkId: undefined };
-		}
-		let first: string | undefined;
-		outer: for (const fg of fileGroups) {
-			for (const n of fg.hunks) {
-				if (ids.has(n.id)) {
-					first = n.id;
-					break outer;
+	// Active duplicate set per rendered card and the "this card is highlighted
+	// as matching the selected paragraph" key set. Both fall out of the same
+	// pass over `fileGroups.duplicatesByKey`:
+	//   - No paragraph selected: every duplicate stays active for its card.
+	//     associatedHunkKeys is empty (no card is "associated").
+	//   - Paragraph selected: for each card, filter its duplicates to those
+	//     adjacent to the paragraph. If at least one stays, the card is
+	//     associated and its active set is just the adjacent occurrences -
+	//     so summary + highlights track THAT paragraph's authored content
+	//     rather than the dedup rep's. Cards with no adjacent occurrence keep
+	//     all their duplicates active (still rendered, just not highlighted).
+	const { activeNodesByKey, associatedHunkKeys, scrollTargetHunkId } = useMemo(() => {
+		const active = new Map<string, TourHunkNode[]>();
+		const associated = new Set<string>();
+		const associatedNodeIds = selectedTextNodeId
+			? computeAssociatedHunkNodeIds(findParentGroup(doc, selectedTextNodeId), doc, selectedTextNodeId)
+			: new Set<string>();
+		let scrollTarget: string | undefined;
+		for (const fg of fileGroups) {
+			for (const [key, dups] of fg.duplicatesByKey) {
+				if (selectedTextNodeId) {
+					const adjacent = dups.filter(d => associatedNodeIds.has(d.id));
+					if (adjacent.length > 0) {
+						active.set(key, adjacent);
+						associated.add(key);
+					} else {
+						active.set(key, dups);
+					}
+				} else {
+					active.set(key, dups);
+				}
+			}
+			if (scrollTarget === undefined && associated.size > 0) {
+				for (const n of fg.hunks) {
+					if (associated.has(hunkKeyFor(n.hunk))) {
+						scrollTarget = n.id;
+						break;
+					}
 				}
 			}
 		}
-		return { associatedIds: ids, scrollTargetHunkId: first };
+		return { activeNodesByKey: active, associatedHunkKeys: associated, scrollTargetHunkId: scrollTarget };
 	}, [doc, selectedTextNodeId, fileGroups]);
 
 	const threadsByHunkId = useMemo(() => {
@@ -952,7 +979,8 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				fileGroups={fileGroups}
 				totalsByFile={totalsByFile}
 				threadsByHunkId={threadsByHunkId}
-				associatedHunkIds={associatedIds}
+				activeNodesByKey={activeNodesByKey}
+				associatedHunkKeys={associatedHunkKeys}
 				scrollTargetHunkId={scrollTargetHunkId}
 				showHighlights={showHighlights}
 				onToggleHighlights={handleToggleHighlights}
