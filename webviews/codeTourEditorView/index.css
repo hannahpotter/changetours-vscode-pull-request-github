@@ -343,6 +343,44 @@
 	transition: box-shadow 0.15s ease;
 }
 
+/*
+ * Narration-association marker. A single 3px blue vertical accent on the
+ * left edge that starts at the top of the selected paragraph and extends
+ * unbroken through every hunk in its narration group, stopping at the
+ * bottom of the last hunk. Each group member renders one of these as a
+ * real `<span>` child (NodeShell's `::before` and `::after` pseudos are
+ * reserved for drag-drop indicators). Non-last members extend 12px below
+ * their node bottom to cover the `.tour-insert-gap` between siblings; the
+ * bottom-most member uses `.tour-node-association-marker-last` to truncate
+ * at its own bottom so the bar doesn't poke past the last hunk. Color
+ * matches the viewer's `.viewer-hunk-associated` (the same
+ * `--vscode-textLink-foreground` token) so paragraph-click highlighting
+ * feels identical across edit and view modes.
+ */
+.tour-node-association-marker {
+	position: absolute;
+	/* Sits in the empty 4px gutter between the drag handle (0-22px) and the
+	 * content padding (28px) - keeps the marker out of the way of HTML5
+	 * drag hit-testing on the gripper. */
+	left: 24px;
+	top: 0;
+	bottom: -12px;
+	width: 3px;
+	background: var(--vscode-textLink-foreground);
+	pointer-events: none;
+}
+
+.tour-node-association-marker-last {
+	bottom: 0;
+}
+
+/* When the shell isn't draggable (non-edit-mode shells skip the padding-left
+ * gutter), pin the marker to the very left edge so it still reads as a
+ * left-side accent rather than floating inside the content area. */
+.tour-node-shell:not(.tour-node-shell-draggable) .tour-node-association-marker {
+	left: 0;
+}
+
 .tour-node-shell-draggable {
 	padding-left: 28px;
 }
@@ -1829,6 +1867,27 @@ h2 {
 	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
 	font-size: 1.45em;
 	font-weight: 600;
+}
+
+/*
+ * Adds a "click to clear filter" affordance to the H1 while a section /
+ * text-node / Excluded / Uncovered filter is active. Cursor + hover-color
+ * mirror the section-title clickable behavior in the same pane so the
+ * gesture reads as part of the same outline-navigation idiom rather than
+ * as a new control.
+ */
+.viewer-title-clickable {
+	cursor: pointer;
+	transition: color 0.15s ease;
+}
+
+.viewer-title-clickable:hover {
+	color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+}
+
+.viewer-title-clickable:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 2px;
 }
 
 .viewer-left-body {

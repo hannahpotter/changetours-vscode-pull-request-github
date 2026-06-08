@@ -943,6 +943,7 @@ export function CodeTourViewer({ doc, activePR, postMessage, inbox, onOpenDiff, 
 				onReplyToThread={handleReplyToThread}
 				tourCommentsEnabled={tourCommentsEnabled}
 				tourCommentsDisabledReason={tourCommentsDisabledReason}
+				onClearFilter={handleClearFilter}
 			/>
 			<ViewerRightPane
 				diffLayout={diffLayout}

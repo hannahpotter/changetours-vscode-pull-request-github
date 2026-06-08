@@ -27,12 +27,36 @@ Use the buttons to add text, hunks, and sections to the Change Tour. Use drag-an
 	- Drag-and-drop or use the buttons in the Hunk Selector Panel to add hunks to the tour.
 	- The panel indicates how much of the change list has been included/covered in the tour.
 	- Edit the hunk summary to include additional narrative. These summaries will be visible even when the hunk is collapsed.![Editing hunk summary](images/hunkSummary.png)![Hunk summary closed](images/hunkSummaryClosed.png)
-	- Add highlighting to a hunk to call additional attention to particular lines of the change.![Highlighting](images/highlighting.png)
+	- Add highlighting to a hunk to call additional attention to particular lines of the change. ![Highlighting](images/highlighting.png)
 	- To see the file context for any hunk in the tour, click the `Open in file context` button.
 	- To exclude a hunk/file from the tour's coverage report, click the eye-closed icon next to a hunk/file header in the Hunk Selector Panel. For an entire directory or a glob of files, run the command palette entry **GitHub Pull Requests: Exclude Files from Change Tour by Pattern** and supply a pattern like `src/generated/**` or `**/*.d.ts`. You'll be prompted for an optional exclusion reason. Excluded entries are written to an appendix at the tail of the tour file; the drift/coverage tools then skip them.
 - **Sections**: Click the section title to edit.
 
 Sections and hunks can be set to be collapsed in view mode by default.![Setting default collapse](images/collapse.png)
+
+### How text is associated with hunks
+
+A text node's prose is paired with the **contiguous run of hunks that immediately follow it** within the same section (or at the top level, if it isn't inside a section). To check what a paragraph currently claims, click the paragraph; a blue left-edge accent is added around the associated hunks.
+
+The canonical shape is:
+
+```
+## Section heading
+Intro paragraph that explains WHY the next hunks exist.
+<hunk 1 it narrates>
+<hunk 2 it narrates>
+<hunk 3 it narrates>
+A pivot paragraph that explains the next sub-theme.
+<hunk 4 it narrates>
+<hunk 5 it narrates>
+```
+
+The first paragraph claims hunks 1-3; the pivot paragraph claims hunks 4-5. The run stops as soon as a non-hunk node appears (another paragraph, a section heading, or the end of the section).
+
+**Authoring guidance**
+
+- Put narration **before** the hunk(s) it describes, never after.
+-
 
 ## AI Assistant
 ![AI editing](images/AIEdit.gif)

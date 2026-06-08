@@ -20,7 +20,7 @@ headSha: <PR head commit SHA at tour-author time>
 **Part 3: An ordered tree of three node kinds.**
 
 - **group**: a markdown heading `##` through `######` that groups related nodes. To mark a section as collapsed-by-default in the viewer, append an HTML comment: `## My Section <!-- collapsed -->`.
-- **text**: a paragraph of narration
+- **text**: a paragraph of narration. A text node is *associated* with the contiguous run of `hunk` siblings that immediately follow it within the same parent (a group, or the document root), stopping at the first non-hunk sibling. A text node that has no hunks immediately following it is treated as an orphan - it claims nothing. To narrate a hunk, place the text node BEFORE it.
 - **hunk**: a `<details>` block referencing one diff hunk from the bound pull request. The on-disk shape is GitHub-friendly so the file renders as a collapsible syntax-highlighted diff in standard markdown viewers:
 
 ````

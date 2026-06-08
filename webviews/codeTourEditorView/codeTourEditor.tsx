@@ -42,6 +42,81 @@ interface EditorGroupNode {
 
 type EditorNode = EditorGroupNode | TourTextNode | EditorHunkNode | TourDropZoneNode;
 
+/**
+ * Narration "group" the active node belongs to - the selected paragraph
+ * plus the contiguous run of hunk siblings that immediately follow it
+ * (same forward-walk rule the viewer applies on paragraph-click in view
+ * mode; see `viewerModel.ts#associatedHunkIds`).
+ *
+ *   - `members` is the set of node ids in the group (paragraph + hunks).
+ *   - `lastId` is the id of the visually-bottommost member, used to stop
+ *     the connecting marker so it doesn't protrude past the last hunk.
+ *
+ * Activating a *hunk* that sits inside a run keeps the same group lit by
+ * walking backward to the preceding paragraph - otherwise clicking a hunk
+ * after clicking its intro paragraph would dismiss the highlight (the
+ * "weird flicker" we want to avoid).
+ */
+interface NarrationGroup {
+	members: Set<string>;
+	lastId: string | undefined;
+}
+
+function findNarrationGroup(children: ReadonlyArray<EditorNode>, activeId: string): NarrationGroup {
+	const empty: NarrationGroup = { members: new Set(), lastId: undefined };
+	const fromTextAt = (siblings: ReadonlyArray<EditorNode>, textIdx: number): NarrationGroup => {
+		const members = new Set<string>();
+		const text = siblings[textIdx];
+		members.add(text.id);
+		let lastId: string = text.id;
+		for (let j = textIdx + 1; j < siblings.length; j++) {
+			const sib = siblings[j];
+			if (sib.type === 'hunk') {
+				members.add(sib.id);
+				lastId = sib.id;
+			} else {
+				break;
+			}
+		}
+		return { members, lastId };
+	};
+	const visit = (siblings: ReadonlyArray<EditorNode>): NarrationGroup | undefined => {
+		for (let i = 0; i < siblings.length; i++) {
+			const cur = siblings[i];
+			if (cur.id === activeId) {
+				if (cur.type === 'text') {
+					return fromTextAt(siblings, i);
+				}
+				if (cur.type === 'hunk') {
+					// Walk backward through contiguous hunks to find the
+					// intro paragraph that owns this run. If we hit a
+					// non-text non-hunk (group / dropzone), the active
+					// hunk has no intro and no group lights up.
+					for (let j = i - 1; j >= 0; j--) {
+						const sib = siblings[j];
+						if (sib.type === 'text') {
+							return fromTextAt(siblings, j);
+						}
+						if (sib.type !== 'hunk') {
+							break;
+						}
+					}
+					return empty;
+				}
+				return empty;
+			}
+			if (cur.type === 'group') {
+				const found = visit(cur.children);
+				if (found) {
+					return found;
+				}
+			}
+		}
+		return undefined;
+	};
+	return visit(children) ?? empty;
+}
+
 interface ReorderDragState {
 	nodeId: string;
 }
@@ -322,6 +397,8 @@ function NodeShell({
 	onHunkDropAtNode,
 	isEditMode,
 	isAiAdded,
+	isAssociated,
+	isLastInNarrationGroup,
 	children,
 }: {
 	node: EditorNode;
@@ -335,6 +412,10 @@ function NodeShell({
 	isEditMode: boolean;
 	/** True when the node was added by the AI in the current review session. Adds the highlight class. */
 	isAiAdded?: boolean;
+	/** True when this node (paragraph OR claimed hunk) is part of the active narration group. Paints the blue left-edge accent. */
+	isAssociated?: boolean;
+	/** True when this node is the visually-bottommost member of the narration group. Stops the connecting marker so it doesn't extend past the last hunk. */
+	isLastInNarrationGroup?: boolean;
 	children: React.ReactNode;
 }) {
 	const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
@@ -447,6 +528,17 @@ function NodeShell({
 				>
 					{gripperIcon}
 				</span>
+			)}
+			{/* Narration-association bar. Rendered as a real element (the shell's
+			 * `::before`/`::after` pseudos are reserved for drag-drop indicators)
+			 * AND positioned in the empty 4px gutter between the drag handle
+			 * (left: 0-22px) and the content (left: 28px) so HTML5 drag hit-
+			 * testing on the gripper never gets shadowed by this element. */}
+			{isAssociated && (
+				<span
+					className={`tour-node-association-marker${isLastInNarrationGroup ? ' tour-node-association-marker-last' : ''}`}
+					aria-hidden="true"
+				/>
 			)}
 			{children}
 		</div>
@@ -1239,6 +1331,7 @@ function GroupBlock({
 	pickerOpenFor,
 	onCancelAutoUpdatePick,
 	aiAddedNodeIds,
+	narrationGroup,
 }: {
 	node: EditorGroupNode;
 	doc: EditorDocument;
@@ -1281,6 +1374,8 @@ function GroupBlock({
 	pickerOpenFor?: string;
 	onCancelAutoUpdatePick?: () => void;
 	aiAddedNodeIds?: Set<string>;
+	/** Hunk node ids associated with the currently-active text node (forward-walk siblings). Drives the on-selection blue left-edge accent. */
+	narrationGroup?: NarrationGroup;
 }) {
 	// Seed and re-sync the editor's local collapse state to the section's
 	// `defaultCollapsed` flag, so toggling the eye in the section header also
@@ -1464,6 +1559,7 @@ function GroupBlock({
 								pickerOpenFor={pickerOpenFor}
 								onCancelAutoUpdatePick={onCancelAutoUpdatePick}
 								aiAddedNodeIds={aiAddedNodeIds}
+								narrationGroup={narrationGroup}
 								onOpenDiff={onOpenDiff}
 								activePR={activePR}
 								isEditMode={isEditMode}
@@ -1539,6 +1635,7 @@ function NodeRenderer({
 	pickerOpenFor,
 	onCancelAutoUpdatePick,
 	aiAddedNodeIds,
+	narrationGroup,
 }: {
 	node: EditorNode;
 	doc: EditorDocument;
@@ -1588,6 +1685,8 @@ function NodeRenderer({
 	onCancelAutoUpdatePick?: () => void;
 	/** Set of node IDs added by the AI in the current review session - drives the per-node highlight. */
 	aiAddedNodeIds?: Set<string>;
+	/** Hunk node ids associated with the currently-active text node. Each NodeShell uses set-membership to decide whether to paint the blue left-edge accent. */
+	narrationGroup?: NarrationGroup;
 }) {
 	switch (node.type) {
 		case 'group':
@@ -1645,6 +1744,7 @@ function NodeRenderer({
 						pickerOpenFor={pickerOpenFor}
 						onCancelAutoUpdatePick={onCancelAutoUpdatePick}
 						aiAddedNodeIds={aiAddedNodeIds}
+						narrationGroup={narrationGroup}
 					/>
 				</NodeShell>
 			);
@@ -1661,6 +1761,8 @@ function NodeRenderer({
 					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
 					isAiAdded={aiAddedNodeIds?.has(node.id)}
+					isAssociated={narrationGroup?.members.has(node.id)}
+					isLastInNarrationGroup={narrationGroup?.lastId === node.id}
 				>
 					<TextBlock node={node as TourTextNode} onChange={onTextChange} onRemove={onRemove} isEditMode={isEditMode} />
 				</NodeShell>
@@ -1678,6 +1780,8 @@ function NodeRenderer({
 					onHunkDropAtNode={onHunkDropAtNode}
 					isEditMode={isEditMode}
 					isAiAdded={aiAddedNodeIds?.has(node.id)}
+					isAssociated={narrationGroup?.members.has(node.id)}
+					isLastInNarrationGroup={narrationGroup?.lastId === node.id}
 				>
 					{(() => {
 						const hunkNode = node as EditorHunkNode;
@@ -2537,6 +2641,15 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 		setPendingUpdates(new Map());
 		setPickerOpenFor(undefined);
 	}, [aiSessionSnapshot]);
+
+	// Narration group of the currently-active node (the selected paragraph
+	// + its contiguous run of following hunks). Activating any member keeps
+	// the same group lit, so clicking a hunk after clicking its intro
+	// paragraph doesn't flicker the accent away. See `findNarrationGroup`.
+	const narrationGroup = useMemo<NarrationGroup>(() => {
+		if (!activeNodeId) return { members: new Set(), lastId: undefined };
+		return findNarrationGroup(doc.children, activeNodeId);
+	}, [doc, activeNodeId]);
 
 	const aiAddedNodeIdsInDocOrder = useMemo(() => {
 		if (aiAddedNodeIds.size === 0) return [] as string[];
@@ -3423,6 +3536,7 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							pickerOpenFor={pickerOpenFor}
 							onCancelAutoUpdatePick={handleCancelAutoUpdatePick}
 							aiAddedNodeIds={aiAddedNodeIds}
+							narrationGroup={narrationGroup}
 						/>
 					</React.Fragment>
 				))}

@@ -35,14 +35,39 @@ interface ViewerLeftPaneProps {
 	onReplyToThread: (thread: IReviewThread, body: string) => Promise<void>;
 	tourCommentsEnabled: boolean;
 	tourCommentsDisabledReason?: string;
+	/** Clear any active filter (selected section, text node, Excluded, Uncovered) and return the viewer to "show full tour". */
+	onClearFilter: () => void;
 }
 
 export function ViewerLeftPane(props: ViewerLeftPaneProps) {
-	const { doc, selectedSectionId, onSelectSection } = props;
+	const { doc, selectedSectionId, selectedTextNodeId, onSelectSection, onClearFilter } = props;
 	const exclusions = doc.exclusions ?? [];
+	const isFiltering = selectedSectionId !== undefined || selectedTextNodeId !== undefined;
+	const titleText = doc.title || 'Untitled Change Tour';
+	const titleClass = `viewer-title${isFiltering ? ' viewer-title-clickable' : ''}`;
+	const title = isFiltering ? (
+		<Tooltip text="Clear the active filter and show the full tour">
+			<h1
+				className={titleClass}
+				role="button"
+				tabIndex={0}
+				onClick={onClearFilter}
+				onKeyDown={e => {
+					if (e.key === 'Enter' || e.key === ' ') {
+						e.preventDefault();
+						onClearFilter();
+					}
+				}}
+			>
+				{titleText}
+			</h1>
+		</Tooltip>
+	) : (
+		<h1 className={titleClass}>{titleText}</h1>
+	);
 	return (
 		<div className="viewer-left">
-			<h1 className="viewer-title">{doc.title || 'Untitled Change Tour'}</h1>
+			{title}
 			<div className="viewer-left-body">
 				{doc.children.map(node => (
 					<NodeRenderer key={node.id} node={node} parentGroupId={undefined} {...props} />
@@ -167,6 +192,7 @@ function GroupBlock({
 	onReplyToThread,
 	tourCommentsEnabled,
 	tourCommentsDisabledReason,
+	onClearFilter,
 }: ViewerLeftPaneProps & { node: TourGroupNode }) {
 	const collapsed = collapsedSections.has(node.id);
 	const selected = selectedSectionId === node.id;
@@ -256,6 +282,7 @@ function GroupBlock({
 							onReplyToThread={onReplyToThread}
 							tourCommentsEnabled={tourCommentsEnabled}
 							tourCommentsDisabledReason={tourCommentsDisabledReason}
+							onClearFilter={onClearFilter}
 						/>
 					))}
 				</div>
