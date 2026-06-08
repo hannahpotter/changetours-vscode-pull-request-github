@@ -69,7 +69,7 @@ For a more detailed overview of the reviewing features, see the [reviewing docum
 
 Found a bug or have a feature request? Please [open an issue](https://github.com/hannahpotter/changetours-vscode-pull-request-github/issues) on the GitHub repository. When filing a bug, it helps to include:
 
-- The extension version (Extensions view → ChangeTours: Pull Requests → Version), VS Code version, and your OS.
+- The extension version (Extensions view → Change Tours for GitHub Pull Requests → Version), VS Code version, and your OS.
 - Steps to reproduce, what you expected, and what actually happened.
 - Any relevant output from the **Output** panel (select **Change Tours** from the dropdown).
 - A screenshot or short screen recording if the issue is visual.

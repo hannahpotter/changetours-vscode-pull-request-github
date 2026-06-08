@@ -12,8 +12,8 @@
 ## Editor Actions
 ![Editor Actions toolbar](images/editorActionsToolbar.png)
 While *editing* Change Tours, the Editor Actions toolbar contains the following actions:
-- **Edit Change Tour with Claude Code (Terminal)**: Opens the terminal with a prefilled Claude invocation (see [Using the Claude Code CLI below](#using-the-claude-code-cli) for details)
-- **Toggle Change Tour Hunk Selector**: Open/close the pull request diff for selecting hunks to add to the Change Tour
+- **Edit with Claude Code (Terminal)**: Opens the terminal with a prefilled Claude invocation (see [Using the Claude Code CLI below](#using-the-claude-code-cli) for details)
+- **Toggle Hunk Selector**: Open/close the pull request diff for selecting hunks to add to the Change Tour
 - **Open Pull Request Overview**: Open the GitHub Pull Request overview
 - **Toggle Diff Layout (Inline / Side-by-Side)**: Switch the diff layout between inline (unified) and side-by-side
 - **Toggle Edit / Review Mode**: Switch the Change Tour view between edit and review modes
@@ -29,7 +29,7 @@ Use the buttons to add text, hunks, and sections to the Change Tour. Use drag-an
 	- Edit the hunk summary to include additional narrative. These summaries will be visible even when the hunk is collapsed.![Editing hunk summary](images/hunkSummary.png)![Hunk summary closed](images/hunkSummaryClosed.png)
 	- Add highlighting to a hunk to call additional attention to particular lines of the change. ![Highlighting](images/highlighting.png)
 	- To see the file context for any hunk in the tour, click the `Open in file context` button.
-	- To exclude a hunk/file from the tour's coverage report, click the eye-closed icon next to a hunk/file header in the Hunk Selector Panel. For an entire directory or a glob of files, run the command palette entry **GitHub Pull Requests: Exclude Files from Change Tour by Pattern** and supply a pattern like `src/generated/**` or `**/*.d.ts`. You'll be prompted for an optional exclusion reason. Excluded entries are written to an appendix at the tail of the tour file; the drift/coverage tools then skip them.
+	- To exclude a hunk/file from the tour's coverage report, click the eye-closed icon next to a hunk/file header in the Hunk Selector Panel. For an entire directory or a glob of files, run the command palette entry **Change Tour: Exclude Files by Pattern** and supply a pattern like `src/generated/**` or `**/*.d.ts`. You'll be prompted for an optional exclusion reason. Excluded entries are written to an appendix at the tail of the tour file; the drift/coverage tools then skip them.
 - **Sections**: Click the section title to edit.
 
 Sections and hunks can be set to be collapsed in view mode by default.![Setting default collapse](images/collapse.png)
@@ -107,7 +107,7 @@ For users who prefer driving an external agent, the extension ships a project-sc
 
 **Skill install**
 
-On first use of the command palette action **"Change Tour: Edit Change Tour with Claude Code (Terminal)"**, the extension writes `<repoRoot>/.claude/skills/change-tour/SKILL.md`. The skill is project-scoped, so it gets committed to the repo and travels with the project - collaborators with `claude` installed pick it up automatically. If the file already exists (you customized it), the extension leaves it alone.
+On first use of the command palette action **"Change Tour: Edit with Claude Code (Terminal)"**, the extension writes `<repoRoot>/.claude/skills/change-tour/SKILL.md`. The skill is project-scoped, so it gets committed to the repo and travels with the project - collaborators with `claude` installed pick it up automatically. If the file already exists (you customized it), the extension leaves it alone.
 
 **Three ways to use it**
 
@@ -172,7 +172,7 @@ Relevant settings (search "Change Tour" in settings UI):
 
 ### Tour Validation
 
-The assistant only generates valid tours: every hunk it inserts is resolved server-side against the bound pull request's diff, so refs and patch content are always correct. The toolbar button is disabled until the document has pull request frontmatter (created automatically by "Pull Request: New Change Tour").
+The assistant only generates valid tours: every hunk it inserts is resolved server-side against the bound pull request's diff, so refs and patch content are always correct. The toolbar button is disabled until the document has pull request frontmatter (created automatically by "GitHub Pull Requests: New Change Tour").
 
 ## Drift Detection
 If the Change Tour is out of date with the underlying pull request, a banner is shown with options to have the AI assistant update the tour. Individual hunks that are out of date show an indicator badge. Hunks from previous commits can be pinned to the tour as history.

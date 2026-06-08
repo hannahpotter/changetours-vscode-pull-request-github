@@ -1108,49 +1108,49 @@
 			},
 			{
 				"command": "pr.editTourWithClaudeCode",
-				"title": "Edit Change Tour with Claude Code (Terminal)",
-				"category": "Change Tour",
+				"title": "%command.pr.editTourWithClaudeCode.title%",
+				"category": "%command.change.tour.category%",
 				"icon": "$(terminal)"
 			},
 			{
 				"command": "pr.updateTourWithClaudeCode",
-				"title": "Update Change Tour with Claude Code (Terminal)",
-				"category": "Change Tour",
+				"title": "%command.pr.updateTourWithClaudeCode.title%",
+				"category": "%command.change.tour.category%",
 				"icon": "$(terminal)"
 			},
 			{
 				"command": "pr.setAnthropicApiKey",
-				"title": "Set Anthropic API Key",
-				"category": "Change Tour"
+				"title": "%command.pr.setAnthropicApiKey.title%",
+				"category": "%command.change.tour.category%"
 			},
 			{
 				"command": "pr.openOverviewFromCodeTour",
 				"title": "%command.pr.openOverviewFromCodeTour.title%",
-				"category": "%command.pull.request.category%",
+				"category": "%command.change.tour.category%",
 				"icon": "$(code-review)"
 			},
 			{
 				"command": "pr.openCodeTourViewFromEditor",
 				"title": "%command.pr.openCodeTourViewFromEditor.title%",
-				"category": "%command.pull.request.category%",
+				"category": "%command.change.tour.category%",
 				"icon": "$(diff-multiple)"
 			},
 			{
 				"command": "pr.codeTourEditor.toggleEditMode",
 				"title": "%command.pr.codeTourEditor.toggleEditMode.title%",
-				"category": "%command.pull.request.category%",
+				"category": "%command.change.tour.category%",
 				"icon": "$(edit)"
 			},
 			{
 				"command": "pr.codeTourEditor.toggleDiffLayout",
 				"title": "%command.pr.codeTourEditor.toggleDiffLayout.title%",
-				"category": "%command.pull.request.category%",
+				"category": "%command.change.tour.category%",
 				"icon": "$(diff)"
 			},
 			{
 				"command": "pr.changeTourExcludeByPattern",
 				"title": "%command.pr.changeTourExcludeByPattern.title%",
-				"category": "%command.pull.request.category%",
+				"category": "%command.change.tour.category%",
 				"icon": "$(eye-closed)"
 			},
 			{
@@ -2270,6 +2270,18 @@
 				},
 				{
 					"command": "pr.editCodeTour",
+					"when": "false"
+				},
+				{
+					"command": "pr.changeTourExcludeByPattern",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/"
+				},
+				{
+					"command": "pr.updateTourWithClaudeCode",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/ && config.changeTour.assistant.enabled"
+				},
+				{
+					"command": "codetour.scrollToSection",
 					"when": "false"
 				},
 				{
