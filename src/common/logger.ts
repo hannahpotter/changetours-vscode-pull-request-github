@@ -17,7 +17,7 @@ class Log extends Disposable {
 
 	constructor() {
 		super();
-		this._outputChannel = this._register(vscode.window.createOutputChannel('GitHub Pull Request', { log: true }));
+		this._outputChannel = this._register(vscode.window.createOutputChannel('Change Tours', { log: true }));
 	}
 
 	public startPerfMarker(marker: string) {

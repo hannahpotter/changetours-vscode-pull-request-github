@@ -65,6 +65,17 @@ Directly add comments on the tour and change list to be added to the GitHub pull
 
 For a more detailed overview of the reviewing features, see the [reviewing documentation](documentation/REVIEWING.md).
 
+# Reporting bugs
+
+Found a bug or have a feature request? Please [open an issue](https://github.com/hannahpotter/changetours-vscode-pull-request-github/issues) on the GitHub repository. When filing a bug, it helps to include:
+
+- The extension version (Extensions view → ChangeTours: Pull Requests → Version), VS Code version, and your OS.
+- Steps to reproduce, what you expected, and what actually happened.
+- Any relevant output from the **Output** panel (select **Change Tours** from the dropdown).
+- A screenshot or short screen recording if the issue is visual.
+
+For issues with the underlying GitHub Pull Requests functionality (not specific to Change Tours), you may also want to check the [upstream extension's issues](https://github.com/Microsoft/vscode-pull-request-github/issues).
+
 # GitHub Pull Requests VS Code Extension
 
 This extension is built from a fork of the [GitHub Pull Requests VS Code Extension](https://github.com/Microsoft/vscode-pull-request-github). See [its documentation](https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github) for the GitHub features.
