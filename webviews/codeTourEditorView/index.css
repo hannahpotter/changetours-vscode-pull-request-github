@@ -162,8 +162,19 @@
 }
 
 .tour-insert-gap:hover::before,
-.tour-insert-gap-open::before {
+.tour-insert-gap-open::before,
+.tour-insert-gap-drag-over::before {
 	opacity: 0.5;
+}
+
+/* Drop-target highlight while a node is being dragged over the gap. Same
+ * visual language as the per-node drop bar (focus-border accent) so the
+ * affordance is consistent whether the cursor lands on a NodeShell or in
+ * the seam between siblings. */
+.tour-insert-gap-drag-over::before {
+	opacity: 1;
+	height: 2px;
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 35%, transparent);
 }
 
 .tour-insert-gap-btn {

@@ -902,11 +902,19 @@ function HunkBlock({
 		return h?.content ?? `@@ L${startLine}-${endLine} @@`;
 	}, [lines, startLine, endLine]);
 
-	// While any drag (in-tour reorder or external hunk drop) is active, we
-	// hide the diff body but keep the full 3-row header visible. That way the
-	// tour reads as a stack of summary-only cards and the drop target is easy
-	// to find regardless of how long each hunk's diff is. The body restores
-	// automatically when the drag ends and `isDragging` flips back to false.
+	// While an EXTERNAL hunk drag is active (dragging a hunk in from the
+	// changes picker), collapse the diff body so the tour reads as a stack
+	// of summary-only cards - drop targets are easy to find regardless of
+	// how long each hunk's diff is. The body restores automatically when
+	// the drag ends and `isDragging` flips back to false.
+	//
+	// Critically, this is NOT applied during in-tour reorder drags: that
+	// would mass-collapse hunks at the moment dragstart fires, snapping any
+	// node-shell below a hunk hundreds of pixels upward and yanking the
+	// drag source out from under the cursor. Chromium then silently aborts
+	// the drag, producing the "I can't drag any node after a hunk" bug.
+	// `isDragging` is wired to `isExternalHunkDragActive` only at the call
+	// site for this reason.
 	const bodyHidden = collapsed || !!isDragging;
 
 	return (
@@ -1216,7 +1224,12 @@ function TextBlock({
 	useEffect(() => {
 		if (editing) {
 			resize();
-			textareaRef.current?.focus();
+			// `preventScroll: true` keeps the browser from auto-scrolling the
+			// textarea into view on focus. Without it, the first click on a
+			// paragraph causes a visible vertical shift right as the rendered
+			// HTML swaps for the textarea - reads as a "flicker" even though
+			// the underlying layout box is roughly the same size.
+			textareaRef.current?.focus({ preventScroll: true });
 		}
 	}, [editing, resize]);
 
@@ -1523,6 +1536,10 @@ function GroupBlock({
 								<InsertGap
 									parentLevel={node.level}
 									onInsert={kind => onInsertRelative(kind, child.id, 'before')}
+									dragState={dragState}
+									dropTargetId={child.id}
+									onReorder={onReorder}
+									onHunkDropAtNode={onHunkDropAtNode}
 								/>
 							)}
 							<NodeRenderer
@@ -1790,7 +1807,7 @@ function NodeRenderer({
 							? suggestUpdateCandidateIdx(hunkNode.hunk, candidates)
 							: undefined;
 						return (
-							<HunkBlock node={hunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} onSummaryChange={onSummaryChange} onToggleHunkDefaultCollapsed={onToggleHunkDefaultCollapsed} onTogglePinned={onTogglePinned} isOutdated={outdatedHunkIds?.has(node.id)} pendingProposed={pendingUpdates?.get(node.id)?.proposed} canAutoUpdate={autoUpdateAvailableNodeIds?.has(node.id)} onStageAutoUpdate={onStageAutoUpdate} onConfirmAutoUpdate={onConfirmAutoUpdate} onDiscardAutoUpdate={onDiscardAutoUpdate} autoUpdateCandidates={candidates} suggestedAutoUpdateIdx={suggestedIdx} pickerOpen={pickerOpenFor === node.id} onCancelAutoUpdatePick={onCancelAutoUpdatePick} activePR={activePR} isEditMode={isEditMode} diffLayout={diffLayout} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} isDragging={!!dragState || !!isExternalHunkDragActive} />
+							<HunkBlock node={hunkNode} doc={doc} onRemove={onRemove} onOpenDiff={onOpenDiff} onHighlightsChange={onHighlightsChange} onSummaryChange={onSummaryChange} onToggleHunkDefaultCollapsed={onToggleHunkDefaultCollapsed} onTogglePinned={onTogglePinned} isOutdated={outdatedHunkIds?.has(node.id)} pendingProposed={pendingUpdates?.get(node.id)?.proposed} canAutoUpdate={autoUpdateAvailableNodeIds?.has(node.id)} onStageAutoUpdate={onStageAutoUpdate} onConfirmAutoUpdate={onConfirmAutoUpdate} onDiscardAutoUpdate={onDiscardAutoUpdate} autoUpdateCandidates={candidates} suggestedAutoUpdateIdx={suggestedIdx} pickerOpen={pickerOpenFor === node.id} onCancelAutoUpdatePick={onCancelAutoUpdatePick} activePR={activePR} isEditMode={isEditMode} diffLayout={diffLayout} onRunAssistant={onRunAssistant} assistantRunning={assistantRunning} isDragging={!!isExternalHunkDragActive} />
 						);
 					})()}
 				</NodeShell>
@@ -1821,11 +1838,23 @@ function NodeRenderer({
 function InsertGap({
 	parentLevel,
 	onInsert,
+	dragState,
+	dropTargetId,
+	onReorder,
+	onHunkDropAtNode,
 }: {
 	parentLevel: number;
 	onInsert: (kind: InsertKind) => void;
+	/** Active in-tour reorder drag, if any. When set, drops in this gap reorder the dragged node to immediately before `dropTargetId`. */
+	dragState?: ReorderDragState | null;
+	/** The next sibling's id (i.e. the node that this gap sits immediately above). Drops in the gap land "before" this target. */
+	dropTargetId?: string;
+	onReorder?: (draggedId: string, targetId: string, position: DropPosition) => void;
+	/** Forwarder for external hunk drags from the changes picker. */
+	onHunkDropAtNode?: (payload: HunkPayload, targetId: string, position: DropPosition) => void;
 }) {
 	const [open, setOpen] = useState(false);
+	const [isDragOver, setIsDragOver] = useState(false);
 	const containerRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -1855,11 +1884,60 @@ function InsertGap({
 		onInsert(kind);
 	}, [onInsert]);
 
+	// Forward drops in the gap to "before the next sibling" so the 12px gap
+	// between siblings stops being a dead zone where dragover never preventDefaults
+	// (which silently rejects drops landing there). Without this, dropping a
+	// node anywhere except cleanly on top of a NodeShell would feel flaky.
+	const canAcceptReorder = !!dragState && !!dropTargetId && !!onReorder && dragState.nodeId !== dropTargetId;
+	const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+		const isHunkDrag = !dragState && event.dataTransfer.types.includes(HUNK_MIME_TYPE);
+		if (!canAcceptReorder && !(isHunkDrag && onHunkDropAtNode && dropTargetId)) {
+			return;
+		}
+		event.preventDefault();
+		event.dataTransfer.dropEffect = canAcceptReorder ? 'move' : 'copy';
+		setIsDragOver(true);
+	}, [canAcceptReorder, dragState, dropTargetId, onHunkDropAtNode]);
+	const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+		const relatedTarget = event.relatedTarget;
+		if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+			return;
+		}
+		setIsDragOver(false);
+	}, []);
+	const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+		const isHunkDrag = !dragState && event.dataTransfer.types.includes(HUNK_MIME_TYPE);
+		if (!canAcceptReorder && !(isHunkDrag && onHunkDropAtNode && dropTargetId)) {
+			return;
+		}
+		event.preventDefault();
+		event.stopPropagation();
+		setIsDragOver(false);
+		if (canAcceptReorder && dragState && dropTargetId && onReorder) {
+			onReorder(dragState.nodeId, dropTargetId, 'before');
+			return;
+		}
+		if (isHunkDrag && onHunkDropAtNode && dropTargetId) {
+			try {
+				const raw = event.dataTransfer.getData(HUNK_MIME_TYPE);
+				if (raw) {
+					const payload = JSON.parse(raw) as HunkPayload;
+					onHunkDropAtNode(payload, dropTargetId, 'before');
+				}
+			} catch {
+				// ignore malformed payload
+			}
+		}
+	}, [canAcceptReorder, dragState, dropTargetId, onReorder, onHunkDropAtNode]);
+
 	return (
 		<div
 			ref={containerRef}
-			className={`tour-insert-gap${open ? ' tour-insert-gap-open' : ''}`}
+			className={`tour-insert-gap${open ? ' tour-insert-gap-open' : ''}${isDragOver ? ' tour-insert-gap-drag-over' : ''}`}
 			onClick={e => e.stopPropagation()}
+			onDragOver={handleDragOver}
+			onDragLeave={handleDragLeave}
+			onDrop={handleDrop}
 		>
 			<Tooltip text="Insert element here">
 				<button
@@ -3493,6 +3571,10 @@ export function CodeTourEditor({ document: initialDoc, onDocumentChange, onCodeT
 							<InsertGap
 								parentLevel={1}
 								onInsert={kind => handleInsertRelative(kind, node.id, 'before')}
+								dragState={dragState}
+								dropTargetId={node.id}
+								onReorder={handleReorder}
+								onHunkDropAtNode={handleHunkDropAtNode}
 							/>
 						)}
 						<NodeRenderer
