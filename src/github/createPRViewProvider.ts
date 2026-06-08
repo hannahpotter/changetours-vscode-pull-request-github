@@ -10,13 +10,13 @@ import {
 	PullRequestDefaults,
 	titleAndBodyFrom,
 } from './folderRepositoryManager';
-import { GitHubRepository } from './githubRepository';
+import { GitHubRepository, isRateLimitError, ViewerPermission } from './githubRepository';
 import { IAccount, ILabel, IMilestone, IProject, isITeam, ITeam, MergeMethod, RepoAccessAndMergeMethods } from './interface';
 import { BaseBranchMetadata, PullRequestGitHelper } from './pullRequestGitHelper';
 import { PullRequestModel } from './pullRequestModel';
 import { getDefaultMergeMethod } from './pullRequestOverview';
-import { branchPicks, getAssigneesQuickPickItems, getLabelOptions, getMilestoneFromQuickPick, getProjectFromQuickPick, reviewersQuickPick } from './quickPicks';
-import { getIssueNumberLabelFromParsed, ISSUE_EXPRESSION, ISSUE_OR_URL_EXPRESSION, parseIssueExpressionOutput, variableSubstitution } from './utils';
+import { branchPicks, cachedBranchPicks, getAssigneesQuickPickItems, getLabelOptions, getMilestoneFromQuickPick, getProjectFromQuickPick, reviewersQuickPick } from './quickPicks';
+import { ISSUE_EXPRESSION, parseIssueExpressionOutput, variableSubstitution } from './utils';
 import { ChangeTemplateReply, DisplayLabel, PreReviewState } from './views';
 import { RemoteInfo } from '../../common/types';
 import { ChooseBaseRemoteAndBranchResult, ChooseCompareRemoteAndBranchResult, ChooseRemoteAndBranchArgs, CreateParamsNew, CreatePullRequestNew, TitleAndDescriptionArgs } from '../../common/views';
@@ -129,8 +129,11 @@ export abstract class BaseCreatePullRequestViewProvider<T extends BasePullReques
 
 	protected abstract getTitleAndDescription(compareBranch: Branch, baseBranch: string): Promise<{ title: string, description: string }>;
 
-	protected async getMergeConfiguration(owner: string, name: string, refetch: boolean = false): Promise<RepoAccessAndMergeMethods> {
+	protected async getMergeConfiguration(owner: string, name: string, refetch: boolean = false): Promise<RepoAccessAndMergeMethods | undefined> {
 		const repo = await this._folderRepositoryManager.createGitHubRepositoryFromOwnerName(owner, name);
+		if (!repo) {
+			return undefined;
+		}
 		return repo.getRepoAccessAndMergeMethods(refetch);
 	}
 
@@ -211,17 +214,51 @@ export abstract class BaseCreatePullRequestViewProvider<T extends BasePullReques
 
 		const defaultBaseBranch = detectedBaseMetadata?.branch ?? this._pullRequestDefaults.base;
 
-		const [defaultTitleAndDescription, mergeConfiguration, viewerPermission, mergeQueueMethodForBranch, labels] = await Promise.all([
-			this.getTitleAndDescription(defaultCompareBranch, defaultBaseBranch),
-			this.getMergeConfiguration(defaultBaseRemote.owner, defaultBaseRemote.repositoryName),
-			defaultOrigin.getViewerPermission(),
-			this._folderRepositoryManager.mergeQueueMethodForBranch(defaultBaseBranch, defaultBaseRemote.owner, defaultBaseRemote.repositoryName),
-			this.getPullRequestDefaultLabels(defaultBaseRemote)
-		]);
+		let defaultTitleAndDescription: { title: string; description: string };
+		let mergeConfiguration: RepoAccessAndMergeMethods | undefined;
+		let viewerPermission: ViewerPermission;
+		let mergeQueueMethodForBranch: MergeMethod | undefined;
+		let labels: ILabel[];
+		try {
+			[defaultTitleAndDescription, mergeConfiguration, viewerPermission, mergeQueueMethodForBranch, labels] = await Promise.all([
+				this.getTitleAndDescription(defaultCompareBranch, defaultBaseBranch),
+				this.getMergeConfiguration(defaultBaseRemote.owner, defaultBaseRemote.repositoryName),
+				defaultOrigin.getViewerPermission(),
+				this._folderRepositoryManager.mergeQueueMethodForBranch(defaultBaseBranch, defaultBaseRemote.owner, defaultBaseRemote.repositoryName),
+				this.getPullRequestDefaultLabels(defaultBaseRemote)
+			]);
+		} catch (e) {
+			if (isRateLimitError(e)) {
+				vscode.window.showErrorMessage(vscode.l10n.t('GitHub API rate limit exceeded. Please wait and try again.'));
+			}
+			Logger.error(`Error initializing create pull request view: ${e}`, BaseCreatePullRequestViewProvider.ID);
+			return {
+				canModifyBranches: true,
+				defaultBaseRemote,
+				defaultBaseBranch,
+				defaultCompareRemote,
+				defaultCompareBranch: this._defaultCompareBranch,
+				defaultTitle: '',
+				defaultDescription: '',
+				baseHasMergeQueue: false,
+				remoteCount: remotes.length,
+				autoMergeDefault: false,
+				createError: '',
+				isDraftDefault: false,
+				isDarkTheme: vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Dark,
+				generateTitleAndDescriptionTitle: undefined,
+				creating: false,
+				initializeWithGeneratedTitleAndDescription: false,
+				preReviewState: PreReviewState.None,
+				preReviewer: undefined,
+				reviewing: false,
+				usingTemplate: false,
+			};
+		}
 
 		const defaultCreateOption = vscode.workspace.getConfiguration(PR_SETTINGS_NAMESPACE).get<'lastUsed' | 'create' | 'createDraft' | 'createAutoMerge'>(DEFAULT_CREATE_OPTION, 'lastUsed');
 		const lastCreateMethod: { autoMerge: boolean, mergeMethod: MergeMethod | undefined, isDraft: boolean } | undefined = this._folderRepositoryManager.context.workspaceState.get<{ autoMerge: boolean, mergeMethod: MergeMethod, isDraft } | undefined>(PREVIOUS_CREATE_METHOD, undefined);
-		const repoMergeMethod = getDefaultMergeMethod(mergeConfiguration.mergeMethodsAvailability);
+		const repoMergeMethod = mergeConfiguration ? getDefaultMergeMethod(mergeConfiguration.mergeMethodsAvailability) : 'merge' as MergeMethod;
 
 		// default values are for 'create'
 		let defaultMergeMethod: MergeMethod = repoMergeMethod;
@@ -232,11 +269,11 @@ export abstract class BaseCreatePullRequestViewProvider<T extends BasePullReques
 		if (defaultCreateOption === 'lastUsed') {
 			defaultMergeMethod = lastCreateMethod?.mergeMethod ?? repoMergeMethod;
 			isDraftDefault = !!lastCreateMethod?.isDraft;
-			autoMergeDefault = mergeConfiguration.viewerCanAutoMerge && !!lastCreateMethod?.autoMerge;
+			autoMergeDefault = !!mergeConfiguration?.viewerCanAutoMerge && !!lastCreateMethod?.autoMerge;
 		} else if (defaultCreateOption === 'createDraft') {
 			isDraftDefault = true;
 		} else if (defaultCreateOption === 'createAutoMerge') {
-			autoMergeDefault = mergeConfiguration.viewerCanAutoMerge;
+			autoMergeDefault = !!mergeConfiguration?.viewerCanAutoMerge;
 		}
 		commands.setContext(contexts.CREATE_PR_PERMISSIONS, viewerPermission);
 
@@ -267,8 +304,8 @@ export abstract class BaseCreatePullRequestViewProvider<T extends BasePullReques
 			defaultMergeMethod,
 			baseHasMergeQueue: !!mergeQueueMethodForBranch,
 			remoteCount: remotes.length,
-			allowAutoMerge: mergeConfiguration.viewerCanAutoMerge,
-			mergeMethodsAvailability: mergeConfiguration.mergeMethodsAvailability,
+			allowAutoMerge: mergeConfiguration?.viewerCanAutoMerge,
+			mergeMethodsAvailability: mergeConfiguration?.mergeMethodsAvailability,
 			autoMergeDefault,
 			createError: '',
 			labels: this.labels,
@@ -667,14 +704,17 @@ export class CreatePullRequestViewProvider extends BaseCreatePullRequestViewProv
 	}
 
 	public async setDefaultCompareBranch(compareBranch: Branch | undefined) {
-		this._defaultCompareBranch = compareBranch!.name!;
-		this.model.setCompareBranch(compareBranch!.name);
-		this.changeBranch(compareBranch!.name!, false).then(async titleAndDescription => {
+		if (!compareBranch?.name) {
+			return;
+		}
+		this._defaultCompareBranch = compareBranch.name;
+		this.model.setCompareBranch(compareBranch.name);
+		this.changeBranch(compareBranch.name, false).then(async titleAndDescription => {
 			const params: Partial<CreateParamsNew> = {
 				defaultTitle: titleAndDescription.title,
 				defaultDescription: titleAndDescription.description,
-				compareBranch: compareBranch?.name,
-				defaultCompareBranch: compareBranch?.name,
+				compareBranch: compareBranch.name,
+				defaultCompareBranch: compareBranch.name,
 				warning: await this.existingPRMessage(),
 			};
 			return this._postMessage({
@@ -721,7 +761,8 @@ export class CreatePullRequestViewProvider extends BaseCreatePullRequestViewProv
 
 		const name = compareBranch.name;
 		const branchNameTitle = (name: string) => {
-			return `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+			const nameWithSpaces = name.replace(/[-_]/g, ' ');
+			return `${nameWithSpaces.charAt(0).toUpperCase()}${nameWithSpaces.slice(1)}`;
 		};
 
 		// If branchName is selected, use the branch name as the title
@@ -771,11 +812,12 @@ export class CreatePullRequestViewProvider extends BaseCreatePullRequestViewProv
 			}
 
 			// Set description
-			if (pullRequestTemplate && lastCommit?.body) {
+			// Match GitHub.com behavior: only use the commit body when there is a single commit.
+			if (pullRequestTemplate && lastCommit?.body && !useBranchName) {
 				description = `${lastCommit.body}\n\n${pullRequestTemplate}`;
 			} else if (pullRequestTemplate) {
 				description = pullRequestTemplate;
-			} else if (lastCommit?.body && (this._pullRequestDefaults.base !== compareBranch.name)) {
+			} else if (lastCommit?.body && !useBranchName && (this._pullRequestDefaults.base !== compareBranch.name)) {
 				description = lastCommit.body;
 			}
 
@@ -972,7 +1014,20 @@ Don't forget to commit your template file to the repository so that it can be us
 		const params = await super.getCreateParams();
 		this.model.baseOwner = params.defaultBaseRemote!.owner;
 		this.model.baseBranch = params.defaultBaseBranch!;
+		// Pre-fetch branches so they're cached when the user opens the branch picker
+		this.prefetchBranches(params.defaultBaseRemote!);
 		return params;
+	}
+
+	private prefetchBranches(baseRemote: RemoteInfo): void {
+		const githubRepository = this._folderRepositoryManager.findRepo(
+			repo => repo.remote.owner === baseRemote.owner && repo.remote.repositoryName === baseRemote.repositoryName,
+		);
+		if (githubRepository) {
+			githubRepository.listBranches(baseRemote.owner, baseRemote.repositoryName, undefined).catch(e => {
+				Logger.debug(`Pre-fetching branches failed: ${e}`, CreatePullRequestViewProvider.ID);
+			});
+		}
 	}
 
 
@@ -991,7 +1046,18 @@ Don't forget to commit your template file to the repository so that it can be us
 	}
 
 	private async processRemoteAndBranchResult(githubRepository: GitHubRepository, result: { remote: RemoteInfo, branch: string }, isBase: boolean) {
-		const [defaultBranch, viewerPermission] = await Promise.all([githubRepository.getDefaultBranch(), githubRepository.getViewerPermission()]);
+		let viewerPermission: ViewerPermission;
+		try {
+			viewerPermission = await githubRepository.getViewerPermission();
+		} catch (e) {
+			if (isRateLimitError(e)) {
+				vscode.window.showErrorMessage(vscode.l10n.t('GitHub API rate limit exceeded. Please wait and try again.'));
+				viewerPermission = ViewerPermission.Unknown;
+			} else {
+				throw e;
+			}
+		}
+		const defaultBranch = await githubRepository.getDefaultBranch();
 
 		commands.setContext(contexts.CREATE_PR_PERMISSIONS, viewerPermission);
 		let chooseResult: ChooseBaseRemoteAndBranchResult | ChooseCompareRemoteAndBranchResult;
@@ -1010,7 +1076,7 @@ Don't forget to commit your template file to the repository so that it can be us
 				this.getTitleAndDescription(compareBranch, this.model.baseBranch),
 				this._folderRepositoryManager.mergeQueueMethodForBranch(this.model.baseBranch, this.model.baseOwner, this.model.repositoryName)]);
 			let autoMergeDefault = false;
-			if (mergeConfiguration.viewerCanAutoMerge) {
+			if (mergeConfiguration?.viewerCanAutoMerge) {
 				const defaultCreateOption = vscode.workspace.getConfiguration(PR_SETTINGS_NAMESPACE).get<'lastUsed' | 'create' | 'createDraft' | 'createAutoMerge'>(DEFAULT_CREATE_OPTION, 'lastUsed');
 				const lastCreateMethod: { autoMerge: boolean, mergeMethod: MergeMethod | undefined, isDraft: boolean } | undefined = this._folderRepositoryManager.context.workspaceState.get<{ autoMerge: boolean, mergeMethod: MergeMethod, isDraft } | undefined>(PREVIOUS_CREATE_METHOD, undefined);
 				autoMergeDefault = (defaultCreateOption === 'lastUsed' && lastCreateMethod?.autoMerge) || (defaultCreateOption === 'createAutoMerge');
@@ -1020,10 +1086,10 @@ Don't forget to commit your template file to the repository so that it can be us
 				baseRemote: result.remote,
 				baseBranch: result.branch,
 				defaultBaseBranch: defaultBranch,
-				defaultMergeMethod: getDefaultMergeMethod(mergeConfiguration.mergeMethodsAvailability),
-				allowAutoMerge: mergeConfiguration.viewerCanAutoMerge,
+				defaultMergeMethod: mergeConfiguration ? getDefaultMergeMethod(mergeConfiguration.mergeMethodsAvailability) : 'merge' as MergeMethod,
+				allowAutoMerge: mergeConfiguration?.viewerCanAutoMerge ?? false,
 				baseHasMergeQueue: !!mergeQueueMethodForBranch,
-				mergeMethodsAvailability: mergeConfiguration.mergeMethodsAvailability,
+				mergeMethodsAvailability: mergeConfiguration?.mergeMethodsAvailability ?? { merge: true, squash: true, rebase: true },
 				autoMergeDefault,
 				defaultTitle: titleAndDescription.title,
 				defaultDescription: titleAndDescription.description
@@ -1092,19 +1158,21 @@ Don't forget to commit your template file to the repository so that it can be us
 		quickPick.show();
 		quickPick.busy = true;
 		if (githubRepository) {
-			await updateItems(githubRepository, undefined);
-		} else {
-			quickPick.items = await this.remotePicks(isBase);
+			// Show cached branches immediately if available, then refresh in the background
+			const cached = cachedBranchPicks(githubRepository, this._folderRepositoryManager, chooseDifferentRemote, isBase);
+			if (cached) {
+				quickPick.items = cached;
+				const activeItem = message.args.currentBranch ? quickPick.items.find(item => item.branch === message.args.currentBranch) : undefined;
+				quickPick.activeItems = activeItem ? [activeItem] : [];
+			}
 		}
-		const activeItem = message.args.currentBranch ? quickPick.items.find(item => item.branch === message.args.currentBranch) : undefined;
-		quickPick.activeItems = activeItem ? [activeItem] : [];
-		quickPick.busy = false;
+		// Register event handlers before awaiting async operations to avoid missing early user interactions
 		const remoteAndBranch: Promise<{ remote: RemoteInfo, branch: string } | undefined> = new Promise((resolve) => {
 			quickPick.onDidAccept(async () => {
-				if (quickPick.selectedItems.length === 0) {
+				const selectedPick = quickPick.selectedItems[0] ?? quickPick.activeItems[0];
+				if (!selectedPick) {
 					return;
 				}
-				const selectedPick = quickPick.selectedItems[0];
 				if (selectedPick.label === chooseDifferentRemote) {
 					quickPick.busy = true;
 					quickPick.items = await this.remotePicks(isBase);
@@ -1125,6 +1193,14 @@ Don't forget to commit your template file to the repository so that it can be us
 			});
 		});
 		const hidePromise = new Promise<void>((resolve) => quickPick.onDidHide(() => resolve()));
+		if (githubRepository) {
+			await updateItems(githubRepository, undefined);
+		} else {
+			quickPick.items = await this.remotePicks(isBase);
+		}
+		const activeItem = message.args.currentBranch ? quickPick.items.find(item => item.branch === message.args.currentBranch) : undefined;
+		quickPick.activeItems = activeItem ? [activeItem] : [];
+		quickPick.busy = false;
 		const result = await Promise.race([remoteAndBranch, hidePromise]);
 		if (!result || !githubRepository) {
 			quickPick.hide();
@@ -1142,57 +1218,8 @@ Don't forget to commit your template file to the repository so that it can be us
 		return this._replyMessage(message, chooseResult);
 	}
 
-	private async findIssueContext(commits: string[]): Promise<{ content: string, reference: string }[] | undefined> {
-		const issues: Promise<{ content: string, reference: string } | undefined>[] = [];
-		for (const commit of commits) {
-			const tryParse = parseIssueExpressionOutput(commit.match(ISSUE_OR_URL_EXPRESSION));
-			if (tryParse) {
-				const owner = tryParse.owner ?? this.model.baseOwner;
-				const name = tryParse.name ?? this.model.repositoryName;
-				issues.push(new Promise(resolve => {
-					this._folderRepositoryManager.resolveIssue(owner, name, tryParse.issueNumber).then(issue => {
-						if (issue) {
-							resolve({ content: `${issue.title}\n${issue.body}`, reference: getIssueNumberLabelFromParsed(tryParse) });
-						} else {
-							resolve(undefined);
-						}
-					}).catch(() => resolve(undefined));
-				}));
-			}
-		}
-		if (issues.length) {
-			return (await Promise.all(issues)).filter(issue => !!issue) as { content: string, reference: string }[];
-		}
-		return undefined;
-	}
-
 	private async getCommitsAndPatches(): Promise<{ commitMessages: string[], patches: { patch: string, fileUri: string, previousFileUri?: string }[] }> {
-		let commitMessages: string[];
-		let patches: ({ patch: string, fileUri: string, previousFileUri?: string } | undefined)[] | undefined;
-		if (await this.model.getCompareHasUpstream()) {
-			[commitMessages, patches] = await Promise.all([
-				this.model.gitHubCommits().then(rawCommits => rawCommits.map(commit => commit.commit.message)),
-				this.model.gitHubFiles().then(rawPatches => rawPatches?.map(file => {
-					if (!file.patch) {
-						return;
-					}
-					const fileUri = vscode.Uri.joinPath(this._folderRepositoryManager.repository.rootUri, file.filename).toString();
-					const previousFileUri = file.previous_filename ? vscode.Uri.joinPath(this._folderRepositoryManager.repository.rootUri, file.previous_filename).toString() : undefined;
-					return { patch: file.patch, fileUri, previousFileUri };
-				}))]);
-		} else {
-			[commitMessages, patches] = await Promise.all([
-				this.model.gitCommits().then(rawCommits => rawCommits.filter(commit => commit.parents.length === 1).map(commit => commit.message)),
-				Promise.all((await this.model.gitFiles()).map(async (file) => {
-					return {
-						patch: await this._folderRepositoryManager.repository.diffBetween(this.model.baseBranch, this.model.compareBranch, file.uri.fsPath),
-						fileUri: file.uri.toString(),
-					};
-				}))]);
-		}
-		const filteredPatches: { patch: string, fileUri: string, previousFileUri?: string }[] =
-			patches?.filter<{ patch: string, fileUri: string, previousFileUri?: string }>((patch): patch is { patch: string, fileUri: string, previousFileUri?: string } => !!patch) ?? [];
-		return { commitMessages, patches: filteredPatches };
+		return this.model.getCommitsAndPatches();
 	}
 
 	private lastGeneratedTitleAndDescription: { title?: string, description?: string, providerTitle: string } | undefined;
@@ -1201,12 +1228,11 @@ Don't forget to commit your template file to the repository so that it can be us
 			try {
 				const templatePromise = this.getPullRequestTemplate(); // Fetch in parallel
 				const { commitMessages, patches } = await this.getCommitsAndPatches();
-				const issues = await this.findIssueContext(commitMessages);
+				const issues = await this.model.findIssueContext(commitMessages);
 				const template = await templatePromise;
 
 				const provider = this._folderRepositoryManager.getTitleAndDescriptionProvider(searchTerm);
-				const result = await provider?.provider.provideTitleAndDescription({ commitMessages, patches, issues, template }, token);
-
+				const result = await provider?.provider.provideTitleAndDescription({ commitMessages, patches, issues, template, compareBranch: this.model.compareBranch }, token);
 				if (provider) {
 					this.lastGeneratedTitleAndDescription = { ...result, providerTitle: provider.title };
 					/* __GDPR__

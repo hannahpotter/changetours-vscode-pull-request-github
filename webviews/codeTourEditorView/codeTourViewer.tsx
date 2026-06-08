@@ -15,6 +15,7 @@ import {
 	findNode,
 	findParentGroup,
 	flattenHunks,
+	type FileHunkGroup,
 	hunkKeyFor,
 	hunksForSection,
 	indexPrState,
@@ -110,13 +111,37 @@ function rangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: numbe
 	return aStart <= bEnd && bStart <= aEnd;
 }
 
+/**
+ * Extract the OLD-side line range from a hunk's patch by parsing its first
+ * `@@ -A,B +C,D @@` header. `HunkReference.startLine/endLine` only carry the
+ * new-side range, so for LEFT-side overlap checks (comments on deleted lines,
+ * including the entire body of a deleted file) we have to recover the old
+ * range here. Returns undefined when the patch is missing or unparseable.
+ */
+function oldLineRangeForHunk(hunk: HunkReference): { startLine: number; endLine: number } | undefined {
+	if (!hunk.patch) return undefined;
+	const m = /^@@\s+-(\d+)(?:,(\d+))?\s+\+\d+(?:,\d+)?\s+@@/m.exec(hunk.patch);
+	if (!m) return undefined;
+	const start = parseInt(m[1], 10);
+	const len = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+	return { startLine: start, endLine: start + Math.max(len, 1) - 1 };
+}
+
 function threadOverlapsHunk(thread: IReviewThread, hunk: HunkReference): boolean {
 	if (thread.diffSide === DiffSide.LEFT) {
 		const path = hunk.previousFile ?? hunk.file;
 		if (thread.path !== path) {
 			return false;
 		}
-		return rangesOverlap(thread.originalStartLine, thread.originalEndLine, hunk.startLine, hunk.endLine);
+		// Compare against the hunk's OLD-side range. For deleted-file hunks the
+		// new-side range is (0, 0), so reusing hunk.startLine/endLine here would
+		// never overlap with the thread's original* lines and the thread would
+		// silently disappear from the viewer.
+		const oldRange = oldLineRangeForHunk(hunk);
+		if (!oldRange) {
+			return false;
+		}
+		return rangesOverlap(thread.originalStartLine, thread.originalEndLine, oldRange.startLine, oldRange.endLine);
 	}
 	if (thread.path !== hunk.file) {
 		return false;
@@ -170,7 +195,7 @@ function splitFilePatch(patch: string): Array<{ startLine: number; endLine: numb
 function buildExcludedHunkGroups(
 	exclusions: ReadonlyArray<ExcludedHunkMarker>,
 	files: Array<{ fileName: string; previousFileName?: string; blobSha?: string; patch?: string }> | undefined,
-): Array<{ file: string; hunks: TourHunkNode[] }> {
+): FileHunkGroup[] {
 	if (!files || exclusions.length === 0) return [];
 	const groupsByFile = new Map<string, TourHunkNode[]>();
 	let idCounter = 0;
@@ -223,7 +248,7 @@ function buildExcludedHunkGroups(
 		kept.sort((a, b) => a.hunk.startLine - b.hunk.startLine);
 		dedupedByFile.set(file, kept);
 	}
-	return Array.from(dedupedByFile.entries()).map(([file, hunks]) => ({ file, hunks }));
+	return Array.from(dedupedByFile.entries()).map(([file, hunks]) => ({ file, hunks, duplicatesByKey: new Map<string, TourHunkNode[]>() }));
 }
 
 /**
@@ -239,7 +264,7 @@ function buildExcludedHunkGroups(
 function buildUncoveredHunkGroups(
 	missing: ReadonlyArray<{ file: string; startLine: number; endLine: number }>,
 	files: Array<{ fileName: string; previousFileName?: string; blobSha?: string; patch?: string }> | undefined,
-): Array<{ file: string; hunks: TourHunkNode[] }> {
+): FileHunkGroup[] {
 	if (!files || missing.length === 0) return [];
 	const groupsByFile = new Map<string, TourHunkNode[]>();
 	let idCounter = 0;
@@ -270,7 +295,7 @@ function buildUncoveredHunkGroups(
 	for (const nodes of groupsByFile.values()) {
 		nodes.sort((a, b) => a.hunk.startLine - b.hunk.startLine);
 	}
-	return Array.from(groupsByFile.entries()).map(([file, hunks]) => ({ file, hunks }));
+	return Array.from(groupsByFile.entries()).map(([file, hunks]) => ({ file, hunks, duplicatesByKey: new Map<string, TourHunkNode[]>() }));
 }
 
 function collectTextNodes(doc: CodeTourDocument): TourTextNode[] {

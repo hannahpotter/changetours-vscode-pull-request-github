@@ -93,6 +93,7 @@ export class FilesCategoryNode extends TreeNode implements vscode.TreeItem {
 		if (dirNode.label === '') {
 			// nothing on the root changed, pull children to parent
 			this.directories = dirNode._children;
+			this.directories.forEach(child => { child.parent = this; });
 		} else {
 			this.directories = [dirNode];
 		}
@@ -102,6 +103,12 @@ export class FilesCategoryNode extends TreeNode implements vscode.TreeItem {
 		} else {
 			const fileNodes = [...filesToShow];
 			fileNodes.sort((a, b) => compareIgnoreCase(a.fileChangeResourceUri.toString(), b.fileChangeResourceUri.toString()));
+			// In flat layout, files are rendered as direct children of this node.
+			// Keep parent pointers aligned with the rendered hierarchy so reveal/getParent
+			// don't try to walk through hidden DirectoryTreeNode instances.
+			fileNodes.forEach(fileNode => {
+				fileNode.parent = this;
+			});
 			nodes = fileNodes;
 		}
 		Logger.appendLine(`Got all children for Files node`, PR_TREE);

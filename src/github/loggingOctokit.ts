@@ -28,14 +28,120 @@ interface RateLimitResult {
 	} | undefined;
 }
 
+export enum GraphQLErrorType {
+	Unprocessable = 'UNPROCESSABLE',
+}
+
+export interface GraphQLError {
+	extensions?: {
+		code: string;
+	};
+	type?: GraphQLErrorType;
+	message?: string;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Detects whether an error from a REST (Octokit) or GraphQL (Apollo) call
+ * indicates that the GitHub authentication token is no longer valid. This
+ * happens when the token has been revoked or has expired and surfaces as
+ * either a 401 status, a "Bad credentials" message (REST), or a
+ * "401 Unauthorized" network error (GraphQL).
+ */
+export function isAuthError(e: unknown): boolean {
+	if (!isObject(e)) {
+		return false;
+	}
+	if (e.status === 401) {
+		return true;
+	}
+	const networkError = e.networkError;
+	if (isObject(networkError) && networkError.statusCode === 401) {
+		return true;
+	}
+	if (typeof e.message === 'string') {
+		if (e.message.includes('Bad credentials')) {
+			return true;
+		}
+		if (e.message.includes('401 Unauthorized')) {
+			return true;
+		}
+	}
+	return false;
+}
+
+export function getErrorCode(e: unknown): string | undefined {
+	if (!isObject(e)) {
+		return undefined;
+	}
+
+	if (e.status !== undefined) {
+		return String(e.status);
+	}
+
+	const networkError = e.networkError;
+	if (isObject(networkError) && networkError.statusCode !== undefined) {
+		return String(networkError.statusCode);
+	}
+
+	const graphQLErrors = e.graphQLErrors;
+	if (Array.isArray(graphQLErrors) && graphQLErrors.length > 0) {
+		const firstGraphQLError = graphQLErrors[0] as GraphQLError | undefined;
+		if (firstGraphQLError) {
+			if (firstGraphQLError.extensions?.code !== undefined) {
+				return String(firstGraphQLError.extensions.code);
+			}
+			if (firstGraphQLError.type !== undefined) {
+				return String(firstGraphQLError.type);
+			}
+		}
+	}
+
+	if (e.code !== undefined) {
+		return String(e.code);
+	}
+
+	if (typeof e.name === 'string' && e.name) {
+		const message = typeof e.message === 'string' ? e.message : '';
+		if (e.name !== 'Error') {
+			return message ? `${e.name}: ${message}` : e.name;
+		}
+		if (message) {
+			return message;
+		}
+	}
+
+	return undefined;
+}
+
 export class RateLogger {
 	private bulkhead: BulkheadPolicy = bulkhead(140);
 	private static ID = 'RateLimit';
 	private hasLoggedLowRateLimit: boolean = false;
+	private readonly _isInsiders: boolean;
 
-	constructor(private readonly telemetry: ITelemetry, private readonly errorOnFlood: boolean) { }
+	constructor(private readonly telemetry: ITelemetry, private readonly errorOnFlood: boolean, private readonly authErrorHandler?: (e: unknown) => void) {
+		this._isInsiders = vscode.env.appName.toLowerCase().includes('insider');
+	}
+
+	private static sanitizeOperationName(info: string): string {
+		// REST URLs like /repos/{owner}/{repo}/pulls get redacted because they look
+		// like file paths. Convert slashes to dots to avoid redaction.
+		return info.replace(/\/+/g, '.').replace(/^\.+|\.+$/g, '');
+	}
 
 	public logAndLimit<T extends Promise<any>>(info: string | undefined, apiRequest: () => T): T | undefined {
+		if (this._isInsiders && info) {
+			/* __GDPR__
+				"pr.apiCall" : {
+					"operation" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
+				}
+			*/
+			this.telemetry.sendTelemetryEvent('pr.apiCall', { operation: RateLogger.sanitizeOperationName(info) });
+		}
 		if (this.bulkhead.executionSlots === 0) {
 			Logger.error('API call count has exceeded 140 concurrent calls.', RateLogger.ID);
 			// We have hit more than 140 concurrent API requests.
@@ -94,6 +200,33 @@ export class RateLogger {
 		}
 	}
 
+	public logApiError(info: string | undefined, apiResult: Promise<unknown>): void {
+		apiResult.catch(e => {
+			const properties: { operation: string; errorCode?: string } = {
+				operation: RateLogger.sanitizeOperationName(info ?? 'unknown'),
+			};
+			const errorCode = getErrorCode(e);
+			if (errorCode) {
+				properties.errorCode = errorCode;
+			}
+			/* __GDPR__
+				"pr.apiCallFailed" : {
+					"operation": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" },
+					"errorCode": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" }
+				}
+			*/
+			this.telemetry.sendTelemetryErrorEvent('pr.apiCallFailed', properties);
+
+			if (this.authErrorHandler && isAuthError(e)) {
+				try {
+					this.authErrorHandler(e);
+				} catch {
+					// Ignore errors from the auth error handler so they don't propagate.
+				}
+			}
+		});
+	}
+
 	public async logRestRateLimit(info: string | undefined, restResponse: Promise<RestResponse>) {
 		let result;
 		try {
@@ -122,16 +255,18 @@ export class LoggingApolloClient {
 			throw new Error('API call count has exceeded a rate limit.');
 		}
 		this._rateLogger.logRateLimit(logInfo, result as Promise<RateLimitResult>);
+		this._rateLogger.logApiError(logInfo, result);
 		return result;
 	}
 
 	mutate<T = any, TVariables = OperationVariables>(options: MutationOptions<T, TVariables>): Promise<FetchResult<T>> {
-		const logInfo = options.context;
+		const logInfo = String(options.context);
 		const result = this._rateLogger.logAndLimit(logInfo, () => this._graphql.mutate(options));
 		if (result === undefined) {
 			throw new Error('API call count has exceeded a rate limit.');
 		}
 		this._rateLogger.logRateLimit(logInfo, result as Promise<RateLimitResult>);
+		this._rateLogger.logApiError(logInfo, result);
 		return result;
 	}
 }
@@ -146,6 +281,7 @@ export class LoggingOctokit {
 			throw new Error('API call count has exceeded a rate limit.');
 		}
 		this._rateLogger.logRestRateLimit(logInfo, result as Promise<unknown> as Promise<RestResponse>);
+		this._rateLogger.logApiError(logInfo, result);
 		return result;
 	}
 }

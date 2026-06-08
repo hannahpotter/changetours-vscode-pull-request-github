@@ -294,9 +294,9 @@ export interface LatestCommit {
 
 export interface LatestReviewThread {
 	comments: {
-		nodes: {
+		nodes: ({
 			createdAt: string;
-		}[];
+		} | null)[];
 	}
 }
 
@@ -304,18 +304,18 @@ export interface LatestUpdatesResponse {
 	repository: {
 		pullRequest: {
 			reactions: {
-				nodes: {
+				nodes: ({
 					createdAt: string;
-				}[];
+				} | null)[];
 			}
 			updatedAt: string;
 			comments: {
 				nodes: {
 					updatedAt: string;
 					reactions: {
-						nodes: {
+						nodes: ({
 							createdAt: string;
-						}[];
+						} | null)[];
 					}
 				}[];
 			}
@@ -733,6 +733,9 @@ export interface Issue {
 		totalCount: number;
 	}
 	reactionGroups: ReactionGroup[];
+	issueType?: {
+		name: string;
+	} | null;
 }
 
 
@@ -768,6 +771,15 @@ export interface PullRequest extends Issue {
 	suggestedReviewers: SuggestedReviewerResponse[];
 	additions?: number;
 	deletions?: number;
+	closingIssuesReferences?: {
+		nodes: {
+			databaseId: number,
+			title: string,
+			number: number,
+			state: 'CLOSED' | 'OPEN',
+			url: string,
+		}[];
+	};
 }
 
 export enum DefaultCommitTitle {
@@ -994,6 +1006,7 @@ export interface StatusContext {
 export interface CheckRun {
 	__typename: string;
 	id: string;
+	databaseId: number | null;
 	conclusion:
 	| 'ACTION_REQUIRED'
 	| 'CANCELLED'

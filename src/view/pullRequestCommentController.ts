@@ -230,6 +230,17 @@ export class PullRequestCommentController extends CommentControllerBase implemen
 	private async onDidChangeReviewThreads(e: ReviewThreadChangeEvent): Promise<void> {
 		for (const thread of e.added) {
 			const fileName = thread.path;
+			const key = this.getCommentThreadCacheKey(thread.path, thread.diffSide === DiffSide.LEFT);
+
+			// Defensive: if a comment thread for this review thread id already exists in the cache
+			// (e.g. because addThreadsForEditors already created it from the cache before this event was
+			// processed), update it in place instead of creating a duplicate VS Code comment thread.
+			const existing = this._commentThreadCache[key]?.find(t => t.gitHubThreadId === thread.id);
+			if (existing) {
+				updateThread(this._context, existing, thread, this._githubRepositories);
+				continue;
+			}
+
 			const index = this._pendingCommentThreadAdds.findIndex(t => {
 				const samePath = this._folderRepoManager.gitRelativeRootPath(t.uri.path) === thread.path;
 				const sameLine = (t.range === undefined && thread.subjectType === SubjectType.FILE) || (t.range && t.range.end.line + 1 === thread.endLine);
@@ -270,9 +281,8 @@ export class PullRequestCommentController extends CommentControllerBase implemen
 			}
 
 			if (!newThread) {
-				return;
+				continue;
 			}
-			const key = this.getCommentThreadCacheKey(thread.path, thread.diffSide === DiffSide.LEFT);
 			if (this._commentThreadCache[key]) {
 				this._commentThreadCache[key].push(newThread);
 			} else {
@@ -374,7 +384,7 @@ export class PullRequestCommentController extends CommentControllerBase implemen
 			if (e.graphQLErrors?.length && e.graphQLErrors[0].type === 'NOT_FOUND') {
 				vscode.window.showWarningMessage('The comment that you\'re replying to was deleted. Refresh to update.', 'Refresh').then(result => {
 					if (result === 'Refresh') {
-						this.pullRequestModel.githubRepository.getPullRequest(this.pullRequestModel.number);
+						this.pullRequestModel.githubRepository.getPullRequest(this.pullRequestModel.number, 'PullRequestCommentController.replyThread');
 					}
 				});
 			} else {

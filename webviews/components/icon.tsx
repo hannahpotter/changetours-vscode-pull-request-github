@@ -20,6 +20,7 @@ export const checkAllIcon = <Icon src={require('../../resources/icons/codicons/c
 export const chevronDownIcon = <Icon src={require('../../resources/icons/codicons/chevron-down.svg')} />;
 export const circleFilledIcon = <Icon src={require('../../resources/icons/codicons/circle-filled.svg')} className='pending' />;
 export const closeIcon = <Icon src={require('../../resources/icons/codicons/close.svg')} className='close' />;
+export const cloudUploadIcon = <Icon src={require('../../resources/icons/codicons/cloud-upload.svg')} />;
 export const codeIcon = <Icon src={require('../../resources/icons/codicons/code.svg')} />;
 export const codeReviewIcon = <Icon src={require('../../resources/icons/codicons/code-review.svg')} />;
 export const commentIcon = <Icon src={require('../../resources/icons/codicons/comment.svg')} />;
@@ -66,6 +67,7 @@ export const trashIcon = <Icon src={require('../../resources/icons/codicons/tras
 export const unpinIcon	= <Icon src={require('../../resources/icons/codicons/unpin.svg')} />;
 export const warningIcon = <Icon src={require('../../resources/icons/codicons/warning.svg')} />;
 export const prMergeIcon = <Icon src={require('../../resources/icons/codicons/merge.svg')} />;
+export const outputIcon = <Icon src={require('../../resources/icons/codicons/output.svg')} />;
 export const skipIcon = <Icon src={require('../../resources/icons/codicons/skip.svg')} className='skip' />;
 
 // Other icons

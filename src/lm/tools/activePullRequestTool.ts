@@ -11,6 +11,10 @@ import { CommentEvent, EventType, ReviewEvent } from '../../common/timelineEvent
 import { PullRequestModel } from '../../github/pullRequestModel';
 import { RepositoriesManager } from '../../github/repositoriesManager';
 
+interface PullRequestToolParams {
+	refresh?: boolean;
+}
+
 export abstract class PullRequestTool implements vscode.LanguageModelTool<FetchIssueResult> {
 	constructor(
 		protected readonly folderManagers: RepositoriesManager
@@ -42,29 +46,47 @@ export abstract class PullRequestTool implements vscode.LanguageModelTool<FetchI
 		};
 	}
 
-	async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken): Promise<vscode.ExtendedLanguageModelToolResult | undefined> {
+	async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken): Promise<vscode.ExtendedLanguageModelToolResult | undefined> {
 		let pullRequest = this._findActivePullRequest();
 
 		if (!pullRequest) {
 			return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart('There is no active pull request')]);
 		}
 
-		const status = await pullRequest.getStatusChecks();
+		if ((options.input as PullRequestToolParams | undefined)?.refresh) {
+			await Promise.all([
+				pullRequest.githubRepository.getPullRequest(pullRequest.number, 'ActivePullRequestTool.invoke'),
+				pullRequest.getTimelineEvents(),
+				pullRequest.initializeReviewThreadCacheAndReviewComments(),
+			]);
+		}
+
 		const timeline = (pullRequest.timelineEvents && pullRequest.timelineEvents.length > 0) ? pullRequest.timelineEvents : await pullRequest.getTimelineEvents();
+		const reviewAndCommentEvents = timeline.filter((event): event is ReviewEvent | CommentEvent => event.event === EventType.Reviewed || event.event === EventType.Commented);
+
+		if ((pullRequest.comments.length === 0) && (reviewAndCommentEvents.length !== 0)) {
+			// Probably missing some comments
+			await pullRequest.initializeReviewThreadCacheAndReviewComments();
+		}
+
 		const pullRequestInfo = {
 			title: pullRequest.title,
 			body: pullRequest.body,
 			author: pullRequest.author,
 			assignees: pullRequest.assignees,
-			comments: pullRequest.comments.map(comment => {
+			reviewThreads: pullRequest.reviewThreadsCache.map(thread => {
 				return {
-					author: comment.user?.login,
-					body: comment.body,
-					commentState: comment.isResolved ? 'resolved' : 'unresolved',
-					file: comment.path
+					id: thread.id,
+					isResolved: thread.isResolved,
+					canResolve: thread.viewerCanResolve,
+					file: thread.path,
+					comments: thread.comments.map(c => ({
+						author: c.user?.login,
+						body: c.body,
+					})),
 				};
 			}),
-			timelineComments: timeline.filter((event): event is ReviewEvent | CommentEvent => event.event === EventType.Reviewed || event.event === EventType.Commented).map(event => {
+			timelineComments: reviewAndCommentEvents.map(event => {
 				return {
 					author: event.user?.login,
 					body: event.body,
@@ -72,20 +94,6 @@ export abstract class PullRequestTool implements vscode.LanguageModelTool<FetchI
 				};
 			}),
 			state: pullRequest.state,
-			statusChecks: status[0]?.statuses.map((status) => {
-				return {
-					context: status.context,
-					description: status.description,
-					state: status.state,
-					name: status.workflowName,
-					targetUrl: status.targetUrl
-				};
-			}),
-			reviewRequirements: {
-				approvalsNeeded: status[1]?.count ?? 0,
-				currentApprovals: status[1]?.approvals.length ?? 0,
-				areChangesRequested: (status[1]?.requestedChanges.length ?? 0) > 0,
-			},
 			isDraft: pullRequest.isDraft ? 'is a draft and cannot be merged until marked as ready for review' : 'false',
 			changes: (await pullRequest.getFileChangesInfo()).map(change => {
 				if (change instanceof InMemFileChange) {
@@ -93,7 +101,8 @@ export abstract class PullRequestTool implements vscode.LanguageModelTool<FetchI
 				} else {
 					return `File: ${change.fileName} was ${change.status === GitChangeType.ADD ? 'added' : change.status === GitChangeType.DELETE ? 'deleted' : 'modified'}.`;
 				}
-			})
+			}),
+			lastUpdatedAt: new Date(pullRequest.updatedAt).toLocaleString()
 		};
 
 		const result = new vscode.ExtendedLanguageModelToolResult([new vscode.LanguageModelTextPart(JSON.stringify(pullRequestInfo))]);
@@ -104,7 +113,7 @@ export abstract class PullRequestTool implements vscode.LanguageModelTool<FetchI
 }
 
 export class ActivePullRequestTool extends PullRequestTool {
-	public static readonly toolId = 'github-pull-request_activePullRequest';
+	public static readonly toolId = 'github-pull-request_currentActivePullRequest';
 
 	protected _findActivePullRequest(): PullRequestModel | undefined {
 		const folderManager = this.folderManagers.folderManagers.find((manager) => manager.activePullRequest);

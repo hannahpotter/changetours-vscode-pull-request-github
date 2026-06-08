@@ -110,6 +110,9 @@ fragment IssueBase on Issue {
 		}
 		url
 	}
+	issueType {
+		name
+	}
 }
 
 fragment IssueFragment on Issue {
@@ -223,6 +226,15 @@ fragment PullRequestFragment on PullRequest {
 		squashMergeCommitMessage
 		mergeCommitMessage
 		mergeCommitTitle
+	}
+	closingIssuesReferences(first: 50) {
+		nodes {
+			databaseId
+			number
+			title
+			state
+			url
+		}
 	}
 	merged
 	mergeable

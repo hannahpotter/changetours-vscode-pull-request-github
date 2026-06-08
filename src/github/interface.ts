@@ -221,6 +221,15 @@ export interface Issue {
 	commentCount: number;
 	reactionCount: number;
 	reactions: Reaction[];
+	issueType?: string;
+}
+
+export interface IssueReference {
+	id: number;
+	number: number;
+	title: string;
+	state: GithubItemStateEnum;
+	url: string;
 }
 
 export interface PullRequest extends Issue {
@@ -242,6 +251,7 @@ export interface PullRequest extends Issue {
 	mergeCommitMeta?: { title: string, description: string };
 	squashCommitMeta?: { title: string, description: string };
 	suggestedReviewers?: ISuggestedReviewer[];
+	closingIssues?: IssueReference[];
 	hasComments?: boolean;
 	additions?: number;
 	deletions?: number;
@@ -346,6 +356,7 @@ export enum CheckState {
 
 export interface PullRequestCheckStatus {
 	id: string;
+	databaseId: number | null | undefined;
 	url: string | undefined;
 	avatarUrl: string | undefined;
 	state: CheckState;
@@ -355,6 +366,7 @@ export interface PullRequestCheckStatus {
 	workflowName: string | undefined;
 	event: string | undefined;
 	isRequired: boolean;
+	isCheckRun: boolean;
 }
 
 export interface PullRequestChecks {

@@ -22,6 +22,7 @@ import {
 	IMilestone,
 	IProjectItem,
 	Issue,
+	IssueReference,
 	ISuggestedReviewer,
 	ITeam,
 	MergeMethod,
@@ -55,10 +56,24 @@ import { Remote } from '../common/remote';
 import { GITHUB_ENTERPRISE, OVERRIDE_DEFAULT_BRANCH, PR_SETTINGS_NAMESPACE, URI } from '../common/settingKeys';
 import * as Common from '../common/timelineEvent';
 import { DataUri, toOpenIssueWebviewUri, toOpenPullRequestWebviewUri } from '../common/uri';
-import { escapeRegExp, gitHubLabelColor, stringReplaceAsync, uniqBy } from '../common/utils';
+import { escapeRegExp, gitHubLabelColor, processDiffLinks as processDiffLinksCore, processPermalinks as processPermalinksCore, stringReplaceAsync, uniqBy } from '../common/utils';
 
 export const ISSUE_EXPRESSION = /(([A-Za-z0-9_.\-]+)\/([A-Za-z0-9_.\-]+))?(#|GH-)([1-9][0-9]*)($|\b)/;
 export const ISSUE_OR_URL_EXPRESSION = /(https?:\/\/github\.com\/(([^\s]+)\/([^\s]+))\/([^\s]+\/)?(issues|pull)\/([0-9]+)(#issuecomment\-([0-9]+))?)|(([A-Za-z0-9_.\-]+)\/([A-Za-z0-9_.\-]+))?(#|GH-)([1-9][0-9]*)($|\b)/;
+
+/**
+ * Returns an issue/URL regex matching the appropriate GitHub host. When a
+ * GitHub Enterprise URI is provided, that host is used in addition to
+ * github.com so that issue URLs from the enterprise instance are recognized.
+ * The capture group layout matches `ISSUE_OR_URL_EXPRESSION` for use with
+ * `parseIssueExpressionOutput`.
+ */
+export function getIssueOrURLExpression(enterpriseUri?: vscode.Uri): RegExp {
+	const hostPattern = enterpriseUri
+		? `(?:github\\.com|${escapeRegExp(enterpriseUri.authority)})`
+		: 'github\\.com';
+	return new RegExp(`(https?:\\/\\/${hostPattern}\\/(([^\\s]+)\\/([^\\s]+))\\/([^\\s]+\\/)?(issues|pull)\\/([0-9]+)(#issuecomment\\-([0-9]+))?)|(([A-Za-z0-9_.\\-]+)\\/([A-Za-z0-9_.\\-]+))?(#|GH-)([1-9][0-9]*)($|\\b)`);
+}
 
 export interface CommentReactionHandler {
 	toggleReaction(comment: vscode.Comment, reaction: vscode.CommentReaction): Promise<void>;
@@ -104,6 +119,10 @@ export function threadRange(startLine: number, endLine: number, endCharacter?: n
 export async function setReplyAuthor(thread: vscode.CommentThread | vscode.CommentThread2, currentUser: IAccount, context: vscode.ExtensionContext) {
 	if (currentUser.avatarUrl) {
 		const thread2 = thread as vscode.CommentThread2;
+		if (!DataUri.isGitHubDotComAvatar(currentUser.avatarUrl)) {
+			thread2.canReply = { name: currentUser.name ?? currentUser.login, iconPath: undefined };
+			return;
+		}
 		thread2.canReply = { name: currentUser.name ?? currentUser.login, iconPath: vscode.Uri.parse(currentUser.avatarUrl) };
 		const uri = await DataUri.avatarCirclesAsImageDataUris(context, [currentUser], 28, 28);
 		thread2.canReply = { name: currentUser.name ?? currentUser.login, iconPath: uri[0] };
@@ -328,6 +347,61 @@ async function transformHtmlUrlsToExtensionUrls(body: string, githubRepository: 
 			return `href="${(await toOpenPullRequestWebviewUri({ owner: githubRepository.remote.owner, repo: githubRepository.remote.repositoryName, pullRequestNumber: Number(number) })).toString()}"`;
 		}
 	});
+}
+
+/**
+ * Process GitHub blob permalinks in HTML and add data attributes for local file handling.
+ * Finds blob permalinks (e.g., /blob/[sha]/file.ts#L10), checks if files exist locally,
+ * and adds data attributes to enable clicking to open local files.
+ */
+export async function processPermalinks(
+	bodyHTML: string,
+	githubRepository: GitHubRepository,
+	rootUri: vscode.Uri
+): Promise<string> {
+	try {
+		const repoName = githubRepository.remote.repositoryName;
+		const authority = githubRepository.remote.gitProtocol.url.authority;
+
+		// Create file existence check callback
+		const fileExistsCheck = async (filePath: string): Promise<boolean> => {
+			try {
+				const localFileUri = vscode.Uri.joinPath(rootUri, filePath);
+				const stat = await vscode.workspace.fs.stat(localFileUri);
+				return stat.type === vscode.FileType.File;
+			} catch {
+				return false;
+			}
+		};
+
+		return await processPermalinksCore(bodyHTML, repoName, authority, fileExistsCheck);
+	} catch (error) {
+		Logger.error(`Failed to process blob permalinks in HTML: ${error}`, 'processPermalinks');
+		return bodyHTML;
+	}
+}
+
+/**
+ * Process GitHub diff permalinks in HTML and add data attributes for local file handling.
+ * Finds diff permalinks (e.g., /pull/123/files#diff-[hash]R10), maps hashes to filenames,
+ * and adds data attributes to enable clicking to open diff views.
+ */
+export async function processDiffLinks(
+	bodyHTML: string,
+	githubRepository: GitHubRepository,
+	hashMap: Record<string, string>,
+	prNumber: number
+): Promise<string> {
+	try {
+		const repoName = githubRepository.remote.repositoryName;
+		const repoOwner = githubRepository.remote.owner;
+		const authority = githubRepository.remote.gitProtocol.url.authority;
+
+		return await processDiffLinksCore(bodyHTML, repoOwner, repoName, authority, hashMap, prNumber);
+	} catch (error) {
+		Logger.error(`Failed to process diff permalinks in HTML: ${error}`, 'processDiffLinks');
+		return bodyHTML;
+	}
 }
 
 export function convertRESTPullRequestToRawPullRequest(
@@ -865,6 +939,7 @@ export async function parseGraphQLPullRequest(
 		commentCount: graphQLPullRequest.comments.totalCount,
 		additions: graphQLPullRequest.additions,
 		deletions: graphQLPullRequest.deletions,
+		closingIssues: parseClosingIssuesReferences(graphQLPullRequest.closingIssuesReferences?.nodes),
 	};
 	pr.mergeCommitMeta = parseCommitMeta(graphQLPullRequest.baseRepository.mergeCommitTitle, graphQLPullRequest.baseRepository.mergeCommitMessage, pr);
 	pr.squashCommitMeta = parseCommitMeta(graphQLPullRequest.baseRepository.squashMergeCommitTitle, graphQLPullRequest.baseRepository.squashMergeCommitMessage, pr);
@@ -977,7 +1052,8 @@ export async function parseGraphQLIssue(issue: GraphQL.Issue, githubRepository: 
 		comments: issue.comments.nodes?.map(comment => parseIssueComment(comment, githubRepository)),
 		reactionCount: issue.reactions.totalCount,
 		reactions: parseGraphQLReaction(issue.reactionGroups),
-		commentCount: issue.comments.totalCount
+		commentCount: issue.comments.totalCount,
+		issueType: issue.issueType?.name
 	};
 }
 
@@ -1007,6 +1083,22 @@ function parseSuggestedReviewers(
 	});
 
 	return ret.sort(loginComparator);
+}
+
+function parseClosingIssuesReferences(
+	closingIssuesReferences: Array<{ databaseId: number, number: number, title: string, state: string, url: string }> | undefined
+): IssueReference[] {
+	if (!closingIssuesReferences) {
+		return [];
+	}
+
+	return closingIssuesReferences.map(issue => ({
+		id: issue.databaseId,
+		number: issue.number,
+		title: issue.title,
+		state: issue.state === 'OPEN' ? GithubItemStateEnum.Open : GithubItemStateEnum.Closed,
+		url: issue.url,
+	}));
 }
 
 /**
@@ -1773,6 +1865,15 @@ export function variableSubstitution(
 				break;
 			case 'sanitizedLowercaseIssueTitle':
 				result = issueModel ? sanitizeIssueTitle(issueModel.title).toLowerCase() : match;
+				break;
+			case 'issueType':
+				result = issueModel?.item.issueType ? issueModel.item.issueType : match;
+				break;
+			case 'sanitizedIssueType':
+				result = issueModel?.item.issueType ? sanitizeIssueTitle(issueModel.item.issueType) : match;
+				break;
+			case 'sanitizedLowercaseIssueType':
+				result = issueModel?.item.issueType ? sanitizeIssueTitle(issueModel.item.issueType).toLowerCase() : match;
 				break;
 			case 'today':
 				result = computeSinceValue(extra);

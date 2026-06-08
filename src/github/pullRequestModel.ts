@@ -13,7 +13,7 @@ import { ConflictResolutionModel } from './conflictResolutionModel';
 import { CredentialStore } from './credentials';
 import { showEmptyCommitWebview } from './emptyCommitWebview';
 import { FolderRepositoryManager } from './folderRepositoryManager';
-import { GitHubRepository, GraphQLError, GraphQLErrorType } from './githubRepository';
+import { GitHubRepository } from './githubRepository';
 import {
 	AddCommentResponse,
 	AddReactionResponse,
@@ -54,6 +54,7 @@ import {
 	IGitTreeItem,
 	IRawFileChange,
 	IRawFileContent,
+	IssueReference,
 	ISuggestedReviewer,
 	ITeam,
 	MergeMethod,
@@ -66,7 +67,7 @@ import {
 	ReviewEventEnum,
 } from './interface';
 import { IssueChangeEvent, IssueModel } from './issueModel';
-import { compareCommits } from './loggingOctokit';
+import { compareCommits, GraphQLError, GraphQLErrorType } from './loggingOctokit';
 import {
 	convertRESTPullRequestToRawPullRequest,
 	convertRESTReviewEvent,
@@ -137,6 +138,7 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 	public conflicts?: string[];
 	public suggestedReviewers?: ISuggestedReviewer[];
 	public hasChangesSinceLastReview?: boolean;
+	public closingIssues: IssueReference[] = [];
 	private _showChangesSinceReview: boolean;
 	private _hasPendingReview: boolean = false;
 	private _onDidChangePendingReviewState: vscode.EventEmitter<boolean> = this._register(new vscode.EventEmitter<boolean>());
@@ -265,7 +267,7 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 		}
 
 		this.suggestedReviewers = item.suggestedReviewers;
-
+		this.closingIssues = item.closingIssues ?? [];
 		if (item.isRemoteHeadDeleted != null) {
 			this.isRemoteHeadDeleted = item.isRemoteHeadDeleted;
 		}
@@ -344,11 +346,11 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 		let rejectMessage: string | undefined;
 		if (this.isActive) {
 			localHead = repository.state.HEAD?.commit;
-			remoteHead = (await this.githubRepository.getPullRequest(this.number))?.head?.sha;
+			remoteHead = (await this.githubRepository.getPullRequest(this.number, 'PullRequestModel.approve'))?.head?.sha;
 			rejectMessage = vscode.l10n.t('The remote head of the pull request branch has changed. Please pull the latest changes from the remote branch before approving.');
 		} else {
 			localHead = this.head?.sha;
-			remoteHead = (await this.githubRepository.getPullRequest(this.number))?.head?.sha;
+			remoteHead = (await this.githubRepository.getPullRequest(this.number, 'PullRequestModel.approve'))?.head?.sha;
 			rejectMessage = vscode.l10n.t('The remote head of the pull request branch has changed. Please refresh the pull request before approving.');
 		}
 
@@ -751,7 +753,7 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 					pullRequestId: this.graphNodeId,
 					pullRequestReviewId: pendingReviewId,
 					startLine: startLine === endLine ? undefined : startLine,
-					line: (endLine === undefined) ? 0 : endLine,
+					line: endLine,
 					side,
 					subjectType: (startLine === undefined || endLine === undefined) ? SubjectType.FILE : SubjectType.LINE
 				}
@@ -763,7 +765,7 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 		}
 
 		if (!data.addPullRequestReviewThread.thread) {
-			throw new Error('File has been deleted.');
+			throw new Error(`Cannot add comment: "${commentPath}" is not part of this pull request. If the file is untracked or uncommitted (e.g., a new Change Tour), commit and push it to the pull request first.`);
 		}
 
 		if (!suppressDraftModeUpdate) {

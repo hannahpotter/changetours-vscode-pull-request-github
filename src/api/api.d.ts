@@ -53,6 +53,14 @@ export interface Remote {
 	readonly isReadOnly: boolean;
 }
 
+export interface Worktree {
+	readonly name: string;
+	readonly path: string;
+	readonly ref: string;
+	readonly main: boolean;
+	readonly detached: boolean;
+}
+
 export { Status } from './api1';
 
 export interface Change {
@@ -71,6 +79,7 @@ export interface RepositoryState {
 	readonly HEAD: Branch | undefined;
 	readonly remotes: Remote[];
 	readonly submodules: Submodule[];
+	readonly worktrees?: Worktree[];
 	readonly rebaseCommit: Commit | undefined;
 
 	readonly mergeChanges: Change[];
@@ -209,6 +218,9 @@ export interface Repository {
 	add(paths: string[]): Promise<void>;
 	merge(ref: string): Promise<void>;
 	mergeAbort(): Promise<void>;
+
+	createWorktree?(options?: { path?: string; commitish?: string; branch?: string }): Promise<string>;
+	deleteWorktree?(path: string, options?: { force?: boolean }): Promise<void>;
 }
 
 /**
@@ -244,7 +256,7 @@ export interface IGit {
 }
 
 export interface TitleAndDescriptionProvider {
-	provideTitleAndDescription(context: { commitMessages: string[], patches: string[] | { patch: string, fileUri: string, previousFileUri?: string }[], issues?: { reference: string, content: string }[], template?: string }, token: CancellationToken): Promise<{ title: string, description?: string } | undefined>;
+	provideTitleAndDescription(context: { commitMessages: string[], patches: string[] | { patch: string, fileUri: string, previousFileUri?: string }[], issues?: { reference: string, content: string }[], template?: string, compareBranch?: string }, token: CancellationToken): Promise<{ title: string, description?: string } | undefined>;
 }
 
 export interface ReviewerComments {

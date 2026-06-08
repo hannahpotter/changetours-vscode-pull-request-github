@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import { GitApiImpl } from '../api/api1';
 import { Disposable } from '../common/lifecycle';
+import Logger from '../common/logger';
 import { onceEvent } from '../common/utils';
 import { issueMarkdown } from '../github/markdownUtils';
 import { PullRequestModel } from '../github/pullRequestModel';
@@ -23,14 +24,15 @@ export namespace PRChatContextItem {
 	}
 }
 
-export class PullRequestContextProvider extends Disposable implements vscode.ChatContextProvider {
-	private readonly _onDidChangeWorkspaceChatContext = new vscode.EventEmitter<void>();
+export class WorkspaceContextProvider extends Disposable implements vscode.ChatWorkspaceContextProvider {
+	private static readonly ID = 'WorkspaceContextProvider';
+
+	private readonly _onDidChangeWorkspaceChatContext = this._register(new vscode.EventEmitter<void>());
 	readonly onDidChangeWorkspaceChatContext = this._onDidChangeWorkspaceChatContext.event;
 
-	constructor(private readonly _prsTreeModel: PrsTreeModel,
+	constructor(
 		private readonly _reposManager: RepositoriesManager,
-		private readonly _git: GitApiImpl,
-		private readonly _context: vscode.ExtensionContext
+		private readonly _git: GitApiImpl
 	) {
 		super();
 	}
@@ -71,7 +73,15 @@ export class PullRequestContextProvider extends Disposable implements vscode.Cha
 			if (folderManager.gitHubRepositories.length === 0) {
 				continue;
 			}
-			const defaults = await folderManager.getPullRequestDefaults();
+			let defaults;
+			try {
+				defaults = await folderManager.getPullRequestDefaults();
+			} catch (e) {
+				// The folder may have no upstream, a detached HEAD, or an upstream that is not a GitHub
+				// repository. Skip it instead of letting the rejection escape as an unhandled promise.
+				Logger.debug(`Skipping workspace chat context for folder ${folderManager.repository.rootUri.toString()}: ${e.message ?? e}`, WorkspaceContextProvider.ID);
+				continue;
+			}
 
 			let value = `Repository name: ${defaults.repo}
 Owner: ${defaults.owner}
@@ -90,15 +100,39 @@ Active pull request (may not be the same as open pull request): ${folderManager.
 		}
 		return contexts;
 	}
+}
 
-	async provideChatContextForResource(_options: { resource: vscode.Uri }, _token: vscode.CancellationToken): Promise<PRChatContextItem | undefined> {
+export class PullRequestContextProvider extends Disposable implements vscode.ChatExplicitContextProvider<PRChatContextItem>, vscode.ChatResourceContextProvider<PRChatContextItem> {
+	constructor(private readonly _prsTreeModel: PrsTreeModel,
+		private readonly _reposManager: RepositoriesManager,
+		private readonly _context: vscode.ExtensionContext
+	) {
+		super();
+	}
+
+	async provideExplicitChatContext(_token: vscode.CancellationToken): Promise<PRChatContextItem[]> {
+		const prs = await this._prsTreeModel.getAllPullRequests(this._reposManager.folderManagers[0], false);
+		return prs.items.map(pr => {
+			return this._prToUnresolvedContext(pr);
+		});
+	}
+
+	async provideResourceChatContext(_options: { resource: vscode.Uri; }, _token: vscode.CancellationToken): Promise<PRChatContextItem | undefined> {
 		const item = PullRequestOverviewPanel.getActivePanel()?.getCurrentItem();
 		if (item) {
 			return this._prToUnresolvedContext(item);
 		}
 	}
 
-	async resolveChatContext(context: PRChatContextItem, _token: vscode.CancellationToken): Promise<vscode.ChatContextItem> {
+	async resolveExplicitChatContext(context: PRChatContextItem, token: vscode.CancellationToken): Promise<vscode.ChatContextItem> {
+		return this._resolveChatContext(context, token);
+	}
+
+	async resolveResourceChatContext(context: PRChatContextItem, token: vscode.CancellationToken): Promise<vscode.ChatContextItem> {
+		return this._resolveChatContext(context, token);
+	}
+
+	private async _resolveChatContext(context: PRChatContextItem, _token: vscode.CancellationToken): Promise<vscode.ChatContextItem> {
 		if (!context.pr) {
 			return context;
 		}
@@ -106,13 +140,6 @@ Active pull request (may not be the same as open pull request): ${folderManager.
 		context.modelDescription = 'All the information about the GitHub pull request the user is viewing, including comments, review threads, and changes.';
 		context.tooltip = await issueMarkdown(context.pr, this._context, this._reposManager);
 		return context;
-	}
-
-	async provideChatContextExplicit(_token: vscode.CancellationToken): Promise<PRChatContextItem[] | undefined> {
-		const prs = await this._prsTreeModel.getAllPullRequests(this._reposManager.folderManagers[0], false);
-		return prs.items.map(pr => {
-			return this._prToUnresolvedContext(pr);
-		});
 	}
 
 	private _prToUnresolvedContext(pr: PullRequestModel): PRChatContextItem {

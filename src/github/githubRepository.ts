@@ -55,7 +55,7 @@ import {
 	User,
 } from './interface';
 import { IssueChangeEvent, IssueModel } from './issueModel';
-import { LoggingOctokit } from './loggingOctokit';
+import { getErrorCode, GraphQLError, LoggingOctokit } from './loggingOctokit';
 import { PullRequestModel } from './pullRequestModel';
 import defaultSchema from './queries.gql';
 import * as extraSchema from './queriesExtra.gql';
@@ -125,6 +125,26 @@ export enum ViewerPermission {
 	Write = 'WRITE',
 }
 
+export class RateLimitError extends Error {
+	constructor(message?: string) {
+		super(message ?? 'GitHub API rate limit exceeded');
+		this.name = 'RateLimitError';
+	}
+}
+
+export function isRateLimitError(e: unknown): boolean {
+	if (e instanceof RateLimitError) {
+		return true;
+	}
+	if (e instanceof Error) {
+		const msg = e.message.toLowerCase();
+		if (msg.includes('rate limit') || msg.includes('secondary rate') || msg.includes('abuse detection')) {
+			return true;
+		}
+	}
+	return false;
+}
+
 export enum TeamReviewerRefreshKind {
 	None,
 	Try,
@@ -143,18 +163,6 @@ export interface ForkDetails {
 
 export type IMetadata = OctokitCommon.ReposGetResponseData;
 
-export enum GraphQLErrorType {
-	Unprocessable = 'UNPROCESSABLE',
-}
-
-export interface GraphQLError {
-	extensions?: {
-		code: string;
-	};
-	type?: GraphQLErrorType;
-	message?: string;
-}
-
 export enum CopilotWorkingStatus {
 	NotCopilotIssue = 'NotCopilotIssue',
 	InProgress = 'InProgress',
@@ -169,6 +177,8 @@ export interface PullRequestChangeEvent {
 
 export class GitHubRepository extends Disposable {
 	static ID = 'GitHubRepository';
+	private static _allRepoIds: Set<number> = new Set();
+	private static _succeededPullRequests: Map<number, Set<number>> = new Map();
 	protected _initialized: boolean = false;
 	protected _hub: GitHub | undefined;
 	protected _metadata: Promise<IMetadata> | undefined;
@@ -191,7 +201,14 @@ export class GitHubRepository extends Disposable {
 	// eslint-disable-next-line rulesdir/no-any-except-union-method-signature
 	private _queriesSchema: any;
 	private _areQueriesLimited: boolean = false;
+
+	private static readonly MAX_ITEM_NUMBER_TTL_MS = 60 * 60 * 1000; /* 1 hour */
+	private static readonly MAX_ITEM_NUMBER_BUFFER = 50;
+	private _maxItemNumberCache: { value: number; fetchedAt: number } | undefined;
+	private _maxItemNumberPromise: Promise<number | undefined> | undefined;
 	get areQueriesLimited(): boolean { return this._areQueriesLimited; }
+
+	private _branchesCache: Map<string, string[]> = new Map();
 
 	private _onDidAddPullRequest: vscode.EventEmitter<PullRequestModel> = this._register(new vscode.EventEmitter());
 	public readonly onDidAddPullRequest: vscode.Event<PullRequestModel> = this._onDidAddPullRequest.event;
@@ -249,6 +266,10 @@ export class GitHubRepository extends Disposable {
 
 	override dispose() {
 		super.dispose();
+		GitHubRepository._allRepoIds.delete(this._id);
+		for (const repoIds of GitHubRepository._succeededPullRequests.values()) {
+			repoIds.delete(this._id);
+		}
 		this.commentsController = undefined;
 		this.commentsHandler = undefined;
 	}
@@ -270,6 +291,7 @@ export class GitHubRepository extends Disposable {
 		silent: boolean = false
 	) {
 		super();
+		GitHubRepository._allRepoIds.add(this._id);
 		this._queriesSchema = mergeQuerySchemaWithShared(sharedSchema.default, defaultSchema);
 		// kick off the comments controller early so that the Comments view is visible and doesn't pop up later in an way that's jarring
 		if (!silent) {
@@ -503,7 +525,18 @@ export class GitHubRepository extends Disposable {
 			Logger.debug('Fetch pull request templates - done', this.id);
 			return result.data.repository.pullRequestTemplates.map(template => template.body);
 		} catch (e) {
-			// The template was not found.
+			Logger.error(`Fetching pull request templates failed: ${e}`, this.id);
+			const properties: { errorCode?: string } = {};
+			const errorCode = getErrorCode(e);
+			if (errorCode) {
+				properties.errorCode = errorCode;
+			}
+			/* __GDPR__
+				"pr.getPullRequestTemplatesFailed" : {
+					"errorCode": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" }
+				}
+			*/
+			this.telemetry.sendTelemetryErrorEvent('pr.getPullRequestTemplatesFailed', properties);
 		}
 	}
 
@@ -877,13 +910,17 @@ export class GitHubRepository extends Disposable {
 			});
 			Logger.debug(`Fetch issues with query - done`, this.id);
 
-			const issues: Issue[] = [];
+			let issues: Issue[] = [];
 			if (data && data.search.edges) {
-				await Promise.all(data.search.edges.map(async raw => {
+				// Preserve the order returned by the server (e.g. sort:created-desc).
+				// Using `Promise.all(map(async ... push))` would reorder results by completion time.
+				const parsed = await Promise.all(data.search.edges.map(async raw => {
 					if (raw.node.id) {
-						issues.push(await parseGraphQLIssue(raw.node, this));
+						return parseGraphQLIssue(raw.node, this);
 					}
+					return undefined;
 				}));
+				issues = parsed.filter((issue): issue is Issue => issue !== undefined);
 			}
 			return {
 				items: issues,
@@ -927,6 +964,62 @@ export class GitHubRepository extends Disposable {
 		return this._getMaxItem(false);
 	}
 
+	/**
+	 * Returns the highest known issue or pull request number for this repository.
+	 * Issues and pull requests share the same number sequence on GitHub, so the
+	 * larger of the two latest items is an upper bound for any valid number.
+	 * Result is cached for a short TTL to avoid extra round-trips.
+	 */
+	private async getCachedMaxItemNumber(forceRefresh: boolean = false): Promise<number | undefined> {
+		const now = Date.now();
+		if (!forceRefresh && this._maxItemNumberCache && (now - this._maxItemNumberCache.fetchedAt) < GitHubRepository.MAX_ITEM_NUMBER_TTL_MS) {
+			return this._maxItemNumberCache.value;
+		}
+		if (this._maxItemNumberPromise) {
+			return this._maxItemNumberPromise;
+		}
+		this._maxItemNumberPromise = (async () => {
+			const [maxIssue, maxPr] = await Promise.all([this._getMaxItem(true), this._getMaxItem(false)]);
+			const max = Math.max(maxIssue ?? 0, maxPr ?? 0);
+			if (max > 0) {
+				this._maxItemNumberCache = { value: max, fetchedAt: Date.now() };
+				return max;
+			}
+			return undefined;
+		})();
+		try {
+			return await this._maxItemNumberPromise;
+		} finally {
+			this._maxItemNumberPromise = undefined;
+		}
+	}
+
+	/**
+	 * Returns false when `number` is implausibly higher than the latest known
+	 * issue/PR number for this repository. Used to short-circuit fetches for
+	 * numbers that came from arbitrary text (e.g. `#1234567890` in source code)
+	 * before they hit the network and produce noisy error telemetry.
+	 */
+	private async isPlausibleItemNumber(itemNumber: number): Promise<boolean> {
+		if (!Number.isFinite(itemNumber) || itemNumber <= 0) {
+			return false;
+		}
+		let max = await this.getCachedMaxItemNumber();
+		if (max === undefined) {
+			// Couldn't determine the max (e.g. network error); allow through.
+			return true;
+		}
+		if (itemNumber <= max + GitHubRepository.MAX_ITEM_NUMBER_BUFFER) {
+			return true;
+		}
+		// Number is above the cached max; refresh once before deciding to handle newly-created items.
+		max = await this.getCachedMaxItemNumber(true);
+		if (max === undefined) {
+			return true;
+		}
+		return itemNumber <= max + GitHubRepository.MAX_ITEM_NUMBER_BUFFER;
+	}
+
 	async getViewerPermission(): Promise<ViewerPermission> {
 		try {
 			Logger.debug(`Fetch viewer permission - enter`, this.id);
@@ -942,6 +1035,9 @@ export class GitHubRepository extends Disposable {
 			return parseGraphQLViewerPermission(data);
 		} catch (e) {
 			Logger.error(`Unable to fetch viewer permission: ${e}`, this.id);
+			if (isRateLimitError(e)) {
+				throw new RateLimitError();
+			}
 			return ViewerPermission.Unknown;
 		}
 	}
@@ -968,6 +1064,54 @@ export class GitHubRepository extends Disposable {
 			run_id: workflowRunId
 		});
 		return jobs.data.jobs;
+	}
+
+	async getCheckRunLogs(checkRunDatabaseId: number): Promise<string> {
+		Logger.debug(`Fetch check run logs - enter`, this.id);
+		const { octokit, remote } = await this.ensure();
+
+		// Try GitHub Actions logs first (works for Actions workflow runs)
+		try {
+			const result = await octokit.call(octokit.api.actions.downloadJobLogsForWorkflowRun, {
+				owner: remote.owner,
+				repo: remote.repositoryName,
+				job_id: checkRunDatabaseId,
+			});
+			Logger.debug(`Fetch check run logs via Actions API - done`, this.id);
+			return result.data as string;
+		} catch {
+			// Not a GitHub Actions job - fall through to Checks API
+		}
+
+		// Fall back to Checks API output (works for any GitHub App, e.g. Azure Pipelines)
+		try {
+			const result = await octokit.call(octokit.api.checks.get, {
+				owner: remote.owner,
+				repo: remote.repositoryName,
+				check_run_id: checkRunDatabaseId,
+			});
+			const output = result.data.output;
+			const parts: string[] = [];
+			if (output.title) {
+				parts.push(output.title);
+				parts.push('');
+			}
+			if (output.summary) {
+				parts.push(output.summary);
+				parts.push('');
+			}
+			if (output.text) {
+				parts.push(output.text);
+			}
+			if (parts.length === 0) {
+				return 'No log output available for this check run.';
+			}
+			Logger.debug(`Fetch check run logs via Checks API - done`, this.id);
+			return parts.join('\n');
+		} catch (e) {
+			Logger.error(`Unable to fetch check run logs: ${e}`, this.id);
+			throw e;
+		}
 	}
 
 	async fork(): Promise<string | undefined> {
@@ -1135,10 +1279,15 @@ export class GitHubRepository extends Disposable {
 		}
 	}
 
-	async getPullRequest(id: number, useCache: boolean = false): Promise<PullRequestModel | undefined> {
+	async getPullRequest(id: number, callerName: string, useCache: boolean = false, silent: boolean = false): Promise<PullRequestModel | undefined> {
 		if (useCache && this._pullRequestModelsByNumber.has(id)) {
 			Logger.debug(`Using cached pull request model for ${id}`, this.id);
 			return this._pullRequestModelsByNumber.get(id)!.model;
+		}
+
+		if (!(await this.isPlausibleItemNumber(id))) {
+			Logger.debug(`Skipping pull request fetch for implausible number ${id} (caller: ${callerName})`, this.id);
+			return;
 		}
 
 		try {
@@ -1159,8 +1308,14 @@ export class GitHubRepository extends Disposable {
 			}
 
 			Logger.debug(`Fetch pull request ${id} - done`, this.id);
-			const pr = this.createOrUpdatePullRequestModel(await parseGraphQLPullRequest(data.repository.pullRequest, this));
+			const pr = this.createOrUpdatePullRequestModel(await parseGraphQLPullRequest(data.repository.pullRequest, this), silent);
 			await pr.getLastUpdateTime(new Date(pr.item.updatedAt));
+			let repoIds = GitHubRepository._succeededPullRequests.get(id);
+			if (!repoIds) {
+				repoIds = new Set();
+				GitHubRepository._succeededPullRequests.set(id, repoIds);
+			}
+			repoIds.add(this._id);
 			return pr;
 		} catch (e) {
 			// `getPullRequest` is called from many surfaces, several of which
@@ -1176,6 +1331,29 @@ export class GitHubRepository extends Disposable {
 				recordObservedRateLimit(info);
 			}
 			Logger.error(`Unable to fetch PR: ${e}`, this.id);
+			const succeededRepos = GitHubRepository._succeededPullRequests.get(id);
+			const succeededInOtherRepo = succeededRepos ? succeededRepos.size > 0 && !succeededRepos.has(this._id) : false;
+			const properties: { succeededInOtherRepo: string; callerName: string; errorCode?: string } = {
+				succeededInOtherRepo: String(succeededInOtherRepo),
+				callerName
+			};
+			const errorCode = getErrorCode(e);
+			if (errorCode) {
+				properties.errorCode = errorCode;
+			}
+			/* __GDPR__
+				"pr.getPullRequestFailed" : {
+					"prNumber": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" },
+					"gitHubRepoCount": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" },
+					"succeededInOtherRepo": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" },
+					"errorCode": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" },
+					"callerName": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" }
+				}
+			*/
+			this.telemetry.sendTelemetryErrorEvent('pr.getPullRequestFailed', properties, {
+				prNumber: id,
+				gitHubRepoCount: GitHubRepository._allRepoIds.size
+			});
 			return;
 		}
 	}
@@ -1187,6 +1365,10 @@ export class GitHubRepository extends Disposable {
 				Logger.debug(`Using cached issue model for ${id}`, this.id);
 				return cached;
 			}
+		}
+		if (!(await this.isPlausibleItemNumber(id))) {
+			Logger.debug(`Skipping issue fetch for implausible number ${id}`, this.id);
+			return undefined;
 		}
 		try {
 			Logger.debug(`Fetch issue ${id} - enter`, this.id);
@@ -1283,6 +1465,14 @@ export class GitHubRepository extends Disposable {
 		return data.repository?.ref?.target.oid;
 	}
 
+	private branchesCacheKey(owner: string, repositoryName: string): string {
+		return `${owner}/${repositoryName}`;
+	}
+
+	getCachedBranches(owner: string, repositoryName: string): string[] | undefined {
+		return this._branchesCache.get(this.branchesCacheKey(owner, repositoryName));
+	}
+
 	async listBranches(owner: string, repositoryName: string, prefix: string | undefined): Promise<string[]> {
 		const { query, remote, schema } = await this.ensure();
 		Logger.debug(`List branches for ${owner}/${repositoryName} - enter`, this.id);
@@ -1323,6 +1513,10 @@ export class GitHubRepository extends Disposable {
 		Logger.debug(`List branches for ${owner}/${repositoryName} - done`, this.id);
 		if (!branches.includes(defaultBranch)) {
 			branches.unshift(defaultBranch);
+		}
+		// Cache results for unprefixed queries
+		if (!prefix) {
+			this._branchesCache.set(this.branchesCacheKey(owner, repositoryName), branches);
 		}
 		return branches;
 	}
@@ -1416,11 +1610,14 @@ export class GitHubRepository extends Disposable {
 		let after: string | null = null;
 		let hasNextPage = false;
 		const ret: IAccount[] = [];
+		// Once we fall back to the legacy assignableUsers query, the cursors are not compatible
+		// with suggestedActors, so stay on the legacy query for the rest of the pagination.
+		let useLegacyAssignableUsers = false;
 
 		do {
 			try {
-				let result: { data: AssignableUsersResponse | SuggestedActorsResponse } | undefined;
-				if (schema.GetSuggestedActors) {
+				let result: { data: AssignableUsersResponse | SuggestedActorsResponse | null } | undefined;
+				if (schema.GetSuggestedActors && !useLegacyAssignableUsers) {
 					result = await query<SuggestedActorsResponse>({
 						query: schema.GetSuggestedActors,
 						variables: {
@@ -1452,12 +1649,19 @@ export class GitHubRepository extends Disposable {
 					}, true); // we ignore SAML errors here because this query can happen at startup
 				}
 
-				if (result.data.repository === null) {
+				if (result.data?.repository === null) {
 					Logger.error('Unexpected null repository when getting assignable users', this.id);
 					return [];
 				}
 
 				const users = (result.data as AssignableUsersResponse).repository?.assignableUsers ?? (result.data as SuggestedActorsResponse).repository?.suggestedActors;
+
+				// If we got assignableUsers back (either because we already used the legacy query, or
+				// because the legacy fallback kicked in inside query()), the cursor is incompatible with
+				// suggestedActors. Stay on the legacy query for subsequent pages.
+				if ((result.data as AssignableUsersResponse).repository?.assignableUsers) {
+					useLegacyAssignableUsers = true;
+				}
 
 				ret.push(
 					...(users?.nodes.map(node => {
@@ -1469,6 +1673,20 @@ export class GitHubRepository extends Disposable {
 				after = users?.pageInfo.endCursor;
 			} catch (e) {
 				Logger.debug(`Unable to fetch assignable users: ${e}`, this.id);
+				const properties: { errorCode?: string; usedSuggestedActors: string } = {
+					usedSuggestedActors: String(!!schema.GetSuggestedActors),
+				};
+				const errorCode = getErrorCode(e);
+				if (errorCode) {
+					properties.errorCode = errorCode;
+				}
+				/* __GDPR__
+					"pr.getAssignableUsersFailed" : {
+						"errorCode": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" },
+						"usedSuggestedActors": { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" }
+					}
+				*/
+				this.telemetry.sendTelemetryErrorEvent('pr.getAssignableUsersFailed', properties);
 				if (
 					e.graphQLErrors &&
 					e.graphQLErrors.length > 0 &&
@@ -1713,6 +1931,7 @@ export class GitHubRepository extends Disposable {
 				if (isCheckRun(context)) {
 					return {
 						id: context.id,
+						databaseId: context.databaseId,
 						url: context.checkSuite?.app?.url,
 						avatarUrl:
 							context.checkSuite?.app?.logoUrl &&
@@ -1728,10 +1947,12 @@ export class GitHubRepository extends Disposable {
 						event: context.checkSuite?.workflowRun?.event,
 						targetUrl: context.detailsUrl,
 						isRequired: context.isRequired,
+						isCheckRun: true,
 					};
 				} else {
 					return {
 						id: context.id,
+						databaseId: undefined,
 						url: context.targetUrl ?? undefined,
 						avatarUrl: context.avatarUrl
 							? getAvatarWithEnterpriseFallback(context.avatarUrl, undefined, this.remote.isEnterprise)
@@ -1743,6 +1964,7 @@ export class GitHubRepository extends Disposable {
 						event: undefined,
 						targetUrl: context.targetUrl,
 						isRequired: context.isRequired,
+						isCheckRun: false,
 					};
 				}
 			}));
@@ -1763,6 +1985,7 @@ export class GitHubRepository extends Disposable {
 					checks.state = CheckState.Pending;
 					checks.statuses.push({
 						id: '',
+						databaseId: undefined,
 						url: undefined,
 						avatarUrl: undefined,
 						state: CheckState.Pending,
@@ -1771,7 +1994,8 @@ export class GitHubRepository extends Disposable {
 						workflowName: undefined,
 						event: undefined,
 						targetUrl: prUrl,
-						isRequired: true
+						isRequired: true,
+						isCheckRun: false
 					});
 				}
 			}
@@ -1838,9 +2062,13 @@ export class GitHubRepository extends Disposable {
 		const statusByContext = new Map<string, PullRequestCheckStatus>();
 
 		for (const status of statuses) {
-			const existing = statusByContext.get(status.context);
+			// Include event and workflowName in the key so that checks from different
+			// workflow events (e.g. "push" vs "pull_request") or different workflows
+			// are not incorrectly merged during deduplication.
+			const key = `${status.context}\0${status.event ?? ''}\0${status.workflowName ?? ''}`;
+			const existing = statusByContext.get(key);
 			if (!existing) {
-				statusByContext.set(status.context, status);
+				statusByContext.set(key, status);
 				continue;
 			}
 
@@ -1850,7 +2078,7 @@ export class GitHubRepository extends Disposable {
 
 			if (currentIsPending && !existingIsPending) {
 				// Current is pending, existing is completed - prefer current
-				statusByContext.set(status.context, status);
+				statusByContext.set(key, status);
 			} else if (!currentIsPending && existingIsPending) {
 				// Current is completed, existing is pending - keep existing
 				continue;
@@ -1858,7 +2086,7 @@ export class GitHubRepository extends Disposable {
 				// Both are same type (both pending or both completed)
 				// Prefer the one with a higher ID (more recent), as GitHub IDs are monotonically increasing
 				if (status.id > existing.id) {
-					statusByContext.set(status.context, status);
+					statusByContext.set(key, status);
 				}
 			}
 		}
@@ -1895,5 +2123,125 @@ export class GitHubRepository extends Disposable {
 			return CheckState.Pending;
 		}
 		return CheckState.Success;
+	}
+
+	/**
+	 * Upload a file to GitHub via the mobile upload policy API. Returns a markdown
+	 * snippet appropriate for embedding in an issue/PR comment.
+	 */
+	public async uploadFile(uri: vscode.Uri, fileName: string): Promise<string> {
+		// Guard against very large files: check size before reading the bytes into memory.
+		let fileSize: number | undefined;
+		try {
+			const stat = await vscode.workspace.fs.stat(uri);
+			fileSize = stat.size;
+		} catch {
+			// Fall through; readFile will surface a more specific error if needed.
+		}
+		if (fileSize !== undefined && fileSize > MAX_UPLOAD_SIZE_BYTES) {
+			throw new Error(`File "${fileName}" is too large to upload (${Math.round(fileSize / (1024 * 1024))} MB). The maximum allowed size is ${MAX_UPLOAD_SIZE_BYTES / (1024 * 1024)} MB.`);
+		}
+
+		const fileBytes = await vscode.workspace.fs.readFile(uri);
+		return this.uploadFileBytes(fileBytes, fileName);
+	}
+
+	/**
+	 * Upload a file's raw bytes to GitHub via the mobile upload policy API.
+	 * Returns a markdown snippet appropriate for embedding in an issue/PR comment.
+	 */
+	public async uploadFileBytes(fileBytes: Uint8Array, fileName: string): Promise<string> {
+		if (fileBytes.byteLength > MAX_UPLOAD_SIZE_BYTES) {
+			throw new Error(`File "${fileName}" is too large to upload (${Math.round(fileBytes.byteLength / (1024 * 1024))} MB). The maximum allowed size is ${MAX_UPLOAD_SIZE_BYTES / (1024 * 1024)} MB.`);
+		}
+		const contentType = guessContentType(fileName);
+
+		const { octokit } = await this.ensure();
+		const metadata = await this.getMetadata();
+		const repositoryId = metadata.id;
+
+		// Step 1: Get upload policy
+		const policyResponse = await octokit.api.request('POST /mobile/upload/policy', {
+			name: fileName,
+			size: fileBytes.byteLength,
+			content_type: contentType,
+			repository_id: repositoryId,
+			headers: { accept: 'application/json' },
+		});
+		const policy = policyResponse.data as {
+			upload_url: string;
+			form: Record<string, string>;
+			asset: { id: number; name: string; href: string };
+			asset_upload_url: string;
+		};
+
+		// Step 2: Upload bytes to the storage location returned by the policy.
+		// Pass the Uint8Array directly to Blob to avoid an extra full-size copy.
+		const formData = new FormData();
+		for (const [key, value] of Object.entries(policy.form)) {
+			formData.append(key, value);
+		}
+		// The DOM Blob types require Uint8Array<ArrayBuffer>, but vscode.workspace.fs.readFile
+		// returns Uint8Array<ArrayBufferLike>. The runtime accepts it, so cast via unknown to avoid a copy.
+		formData.append('file', new Blob([fileBytes as unknown as BlobPart], { type: contentType }), policy.asset.name);
+		const s3Response = await fetch(policy.upload_url, { method: 'POST', body: formData });
+		if (s3Response.status !== 204 && s3Response.status !== 201 && s3Response.status !== 200) {
+			throw new Error(`Storage upload failed with status ${s3Response.status}`);
+		}
+
+		// Step 3: Confirm the upload with GitHub
+		await octokit.api.request(`PUT ${policy.asset_upload_url}`, {
+			headers: { accept: 'application/json' },
+		});
+
+		const url = policy.asset.href;
+		const safeName = escapeMarkdownLinkText(fileName);
+		if (contentType.startsWith('image/')) {
+			return `![${safeName}](${url})`;
+		}
+		if (contentType.startsWith('video/')) {
+			return url;
+		}
+		return `[${safeName}](${url})`;
+	}
+}
+
+const MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
+
+/**
+ * Escape characters that would break a markdown link's text segment (`[text](url)`).
+ * Filenames may legally contain `[`, `]`, `\`, etc., which can corrupt the rendered link.
+ */
+function escapeMarkdownLinkText(text: string): string {
+	return text.replace(/([\\\[\]`])/g, '\\$1');
+}
+
+function guessContentType(fileName: string): string {
+	const lastDot = fileName.lastIndexOf('.');
+	const ext = lastDot >= 0 ? fileName.substring(lastDot).toLowerCase() : '';
+	switch (ext) {
+		case '.png': return 'image/png';
+		case '.jpg':
+		case '.jpeg': return 'image/jpeg';
+		case '.gif': return 'image/gif';
+		case '.webp': return 'image/webp';
+		case '.svg': return 'image/svg+xml';
+		case '.bmp': return 'image/bmp';
+		case '.heic': return 'image/heic';
+		case '.mp4': return 'video/mp4';
+		case '.mov': return 'video/quicktime';
+		case '.webm': return 'video/webm';
+		case '.pdf': return 'application/pdf';
+		case '.zip': return 'application/zip';
+		case '.gz': return 'application/gzip';
+		case '.tar': return 'application/x-tar';
+		case '.txt': return 'text/plain';
+		case '.md': return 'text/markdown';
+		case '.json': return 'application/json';
+		case '.log': return 'text/plain';
+		case '.docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+		case '.xlsx': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+		case '.pptx': return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+		default: return 'application/octet-stream';
 	}
 }

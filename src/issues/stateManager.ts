@@ -9,7 +9,7 @@ import { CurrentIssue } from './currentIssue';
 import { Repository } from '../api/api';
 import { GitApiImpl } from '../api/api1';
 import { AuthProvider } from '../common/authentication';
-import { parseRepositoryRemotes } from '../common/remote';
+import { parseRepositoryRemotesAsync } from '../common/remote';
 import {
 	DEFAULT,
 	DEV_MODE,
@@ -321,7 +321,7 @@ export class StateManager {
 			return;
 		}
 		singleRepoState.issueCollection.clear();
-		const enterpriseRemotes = parseRepositoryRemotes(folderManager.repository).filter(
+		const enterpriseRemotes = (await parseRepositoryRemotesAsync(folderManager.repository)).filter(
 			remote => remote.isEnterprise
 		);
 		const user = await this.getCurrentUser(enterpriseRemotes.length ? AuthProvider.githubEnterprise : AuthProvider.github);
@@ -342,23 +342,26 @@ export class StateManager {
 				singleRepoState.issueCollection.set(query.label, items);
 			}
 		}
-		singleRepoState.maxIssueNumber = await folderManager.getMaxIssue();
+		singleRepoState.maxIssueNumber = await folderManager.getMaxIssue(folderManager.repository);
 		singleRepoState.lastHead = folderManager.repository.state.HEAD?.commit;
 		singleRepoState.lastBranch = folderManager.repository.state.HEAD?.name;
 	}
 
-	private setIssues(folderManager: FolderRepositoryManager, query: string): Promise<IssueItem[] | undefined> {
-		return new Promise(async resolve => {
+	private async setIssues(folderManager: FolderRepositoryManager, query: string): Promise<IssueItem[] | undefined> {
+		try {
 			const issues = await folderManager.getIssues(query, { fetchNextPage: false, fetchOnePagePerRepo: true });
+			return issues?.items.map(item => {
+				const issueItem: IssueItem = item as IssueItem;
+				issueItem.uri = folderManager.repository.rootUri;
+				return issueItem;
+			});
+		} catch {
+			// Errors from fetching issues are expected (e.g. network failures).
+			// Return undefined so the tree shows an empty state for this query.
+			return undefined;
+		} finally {
 			this._onDidChangeIssueData.fire();
-			resolve(
-				issues?.items.map(item => {
-					const issueItem: IssueItem = item as IssueItem;
-					issueItem.uri = folderManager.repository.rootUri;
-					return issueItem;
-				}),
-			);
-		});
+		}
 	}
 
 	private async setCurrentIssueFromBranch(singleRepoState: SingleRepoState, branchName: string, silent: boolean = false) {

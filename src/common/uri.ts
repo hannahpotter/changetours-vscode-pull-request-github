@@ -649,7 +649,7 @@ export function fromRepoUri(uri: vscode.Uri): RepoUriParams | undefined {
 	} catch (e) { }
 }
 
-const ownerRegex = /^(?!-)(?!.*--)[a-zA-Z0-9-]+(?<!-)$/;
+const ownerRegex = /^(?!-)(?!.*--)[a-zA-Z0-9_-]+(?<!-)$/;
 const repoRegex = /^[a-zA-Z0-9_.-]+$/;
 
 function validateOpenWebviewParams(owner?: string, repo?: string, number?: string): boolean {
@@ -799,7 +799,8 @@ export enum Schemes {
 	Git = 'git', // File content from the git extension
 	PRQuery = 'prquery', // PR query tree item
 	GitHubCommit = 'githubcommit', // file content from GitHub for a commit
-	CommitsNode = 'commitsnode' // Commits tree node, for decorations
+	CommitsNode = 'commitsnode', // Commits tree node, for decorations
+	CheckRunLog = 'checkrunlog' // Check run log content
 }
 
 export function resolvePath(from: vscode.Uri, to: string) {

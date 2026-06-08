@@ -5,14 +5,15 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import { CloseResult } from '../../common/views';
+import { CloseResult, OpenLocalFileArgs } from '../../common/views';
 import { openPullRequestOnGitHub } from '../commands';
+import { decodeBase64, guessExtensionFromMime, pickFilesForUpload, placeholdersForNames, runFileUploads, runPendingUploads } from './fileUpload';
 import { FolderRepositoryManager } from './folderRepositoryManager';
 import { GithubItemStateEnum, IAccount, IMilestone, IProject, IProjectItem, RepoAccessAndMergeMethods } from './interface';
 import { IssueModel } from './issueModel';
 import { getAssigneesQuickPickItems, getLabelOptions, getMilestoneFromQuickPick, getProjectFromQuickPick } from './quickPicks';
-import { isInCodespaces, vscodeDevPrLink } from './utils';
-import { ChangeAssigneesReply, DisplayLabel, Issue, ProjectItemsReply, SubmitReviewReply, UnresolvedIdentity } from './views';
+import { isInCodespaces, processPermalinks, vscodeDevPrLink } from './utils';
+import { ChangeAssigneesReply, DisplayLabel, FileUploadCompletedMessage, Issue, ProjectItemsReply, SubmitReviewReply, UnresolvedIdentity, UploadFilesReply, UploadPastedFilesArgs } from './views';
 import { COPILOT_ACCOUNTS, IComment } from '../common/comment';
 import { emojify, ensureEmojis } from '../common/emoji';
 import Logger from '../common/logger';
@@ -42,29 +43,34 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 	protected _folderRepositoryManager: FolderRepositoryManager;
 	protected _scrollPosition = { x: 0, y: 0 };
 
+	protected static _getViewColumn(toTheSide: boolean, panel?: IssueOverviewPanel): number | undefined {
+		const tabViewColumn = vscode.window.tabGroups.activeTabGroup.viewColumn;
+		const activeColumn = toTheSide
+			? vscode.ViewColumn.Beside
+			: (panel ? undefined : tabViewColumn);
+		return activeColumn;
+	}
+
 	public static async createOrShow(
 		telemetry: ITelemetry,
 		extensionUri: vscode.Uri,
 		folderRepositoryManager: FolderRepositoryManager,
 		identity: UnresolvedIdentity,
 		issue?: IssueModel,
-		toTheSide: Boolean = false,
+		toTheSide: boolean = false,
 		_preserveFocus: boolean = true,
 		existingPanel?: vscode.WebviewPanel
 	) {
 		await ensureEmojis(folderRepositoryManager.context);
-		const activeColumn = toTheSide
-			? vscode.ViewColumn.Beside
-			: vscode.window.activeTextEditor
-				? vscode.window.activeTextEditor.viewColumn
-				: vscode.ViewColumn.One;
 
 		const key = panelKey(identity.owner, identity.repo, identity.number);
 		let panel = this._panels.get(key);
+		const activeColumn = IssueOverviewPanel._getViewColumn(toTheSide, panel);
+
 		if (panel) {
 			panel._panel.reveal(activeColumn, true);
 		} else {
-			const title = `Issue #${identity.number.toString()}`;
+			const title = `#${identity.number.toString()}`;
 			panel = new IssueOverviewPanel(
 				telemetry,
 				extensionUri,
@@ -108,6 +114,21 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 		return this._panels.get(panelKey(owner, repo, number));
 	}
 
+	/**
+	 * Build a short panel title: `#<number> <truncated title>`.
+	 * The item title is truncated to approximately `maxLength` characters on a
+	 * word boundary and suffixed with "..." when it doesn't fit in full.
+	 */
+	protected buildPanelTitle(itemNumber: number, itemTitle: string, maxLength: number = 20): string {
+		let truncated = itemTitle;
+		if (itemTitle.length > maxLength) {
+			const lastSpace = itemTitle.lastIndexOf(' ', maxLength);
+			const cutOff = lastSpace > 0 ? lastSpace : maxLength;
+			truncated = itemTitle.substring(0, cutOff) + '...';
+		}
+		return `#${itemNumber} ${truncated}`;
+	}
+
 	protected setPanelTitle(title: string): void {
 		try {
 			this._panel.title = title;
@@ -125,10 +146,13 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 		folderRepositoryManager: FolderRepositoryManager,
 		private readonly type: string = IssueOverviewPanel.viewType,
 		existingPanel?: vscode.WebviewPanel,
-		iconSubpath?: {
+		iconSubpath: {
 			light: string,
 			dark: string,
-		}
+		} = {
+				light: 'resources/icons/issue_webview.svg',
+				dark: 'resources/icons/dark/issue_webview.svg',
+			}
 	) {
 		super();
 		this._folderRepositoryManager = folderRepositoryManager;
@@ -144,12 +168,10 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 			enableFindWidget: true
 		}));
 
-		if (iconSubpath) {
-			this._panel.iconPath = {
-				dark: vscode.Uri.joinPath(_extensionUri, iconSubpath.dark),
-				light: vscode.Uri.joinPath(_extensionUri, iconSubpath.light)
-			};
-		}
+		this._panel.iconPath = {
+			dark: vscode.Uri.joinPath(_extensionUri, iconSubpath.dark),
+			light: vscode.Uri.joinPath(_extensionUri, iconSubpath.light)
+		};
 
 		this._webview = this._panel.webview;
 		super.initialize();
@@ -228,7 +250,7 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 		return isInCodespaces();
 	}
 
-	protected getInitializeContext(currentUser: IAccount, issue: IssueModel, timelineEvents: TimelineEvent[], repositoryAccess: RepoAccessAndMergeMethods, viewerCanEdit: boolean, assignableUsers: IAccount[]): Issue {
+	protected async getInitializeContext(currentUser: IAccount, issue: IssueModel, timelineEvents: TimelineEvent[], repositoryAccess: RepoAccessAndMergeMethods, viewerCanEdit: boolean, assignableUsers: IAccount[]): Promise<Issue> {
 		const hasWritePermission = repositoryAccess.hasWritePermission;
 		const canEdit = hasWritePermission || viewerCanEdit;
 		const labels = issue.item.labels.map(label => ({
@@ -245,12 +267,12 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 			url: issue.html_url,
 			createdAt: issue.createdAt,
 			body: issue.body,
-			bodyHTML: issue.bodyHTML,
+			bodyHTML: await this.processLinksInBodyHtml(issue.bodyHTML),
 			labels: labels,
 			author: issue.author,
 			state: issue.state,
 			stateReason: issue.stateReason,
-			events: timelineEvents,
+			events: await this.processTimelineEvents(timelineEvents),
 			continueOnGitHub: this.continueOnGitHub(),
 			canEdit,
 			hasWritePermission,
@@ -298,12 +320,15 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 			}
 
 			this._item = issue as TItem;
-			this.setPanelTitle(`Issue #${issueModel.number.toString()}`);
+			this.setPanelTitle(this.buildPanelTitle(issueModel.number, issueModel.title));
+
+			// Process permalinks in bodyHTML before sending to webview
+			const context = await this.getInitializeContext(currentUser, issue, timelineEvents, repositoryAccess, viewerCanEdit, assignableUsers[this._item.remote.remoteName] ?? []);
 
 			Logger.debug('pr.initialize', IssueOverviewPanel.ID);
 			this._postMessage({
 				command: 'pr.initialize',
-				pullrequest: this.getInitializeContext(currentUser, issue, timelineEvents, repositoryAccess, viewerCanEdit, assignableUsers[this._item.remote.remoteName] ?? []),
+				pullrequest: context,
 			});
 
 		} catch (e) {
@@ -424,8 +449,14 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 				return this.copyVscodeDevLink();
 			case 'pr.openOnGitHub':
 				return openPullRequestOnGitHub(this._item, this._telemetry);
+			case 'pr.open-local-file':
+				return this.openLocalFile(message);
 			case 'pr.debug':
 				return this.webviewDebug(message);
+			case 'pr.upload-files':
+				return this.uploadFiles(message);
+			case 'pr.upload-pasted-files':
+				return this.uploadPastedFiles(message);
 			default:
 				return this.MESSAGE_UNHANDLED;
 		}
@@ -547,16 +578,119 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 		Logger.debug(message.args, IssueOverviewPanel.ID);
 	}
 
-	private editDescription(message: IRequestMessage<{ text: string }>) {
-		this._item
-			.edit({ body: message.args.text })
-			.then(result => {
-				this._replyMessage(message, { body: result.body, bodyHTML: result.bodyHTML });
-			})
-			.catch(e => {
-				this._throwError(message, e);
-				vscode.window.showErrorMessage(`Editing description failed: ${formatError(e)}`);
-			});
+	private async uploadFiles(message: IRequestMessage<void>): Promise<void> {
+		const uploads = await pickFilesForUpload();
+		if (!uploads) {
+			const empty: UploadFilesReply = { uploads: [] };
+			return this._replyMessage(message, empty);
+		}
+
+		const reply: UploadFilesReply = { uploads: uploads.map(u => ({ name: u.name, placeholder: u.placeholder })) };
+		await this._replyMessage(message, reply);
+
+		runFileUploads(
+			this._item.githubRepository,
+			uploads,
+			IssueOverviewPanel.ID,
+			(placeholder, name, markdown) => this._postMessage({
+				command: 'pr.file-upload-completed',
+				placeholder,
+				name,
+				markdown,
+			} satisfies FileUploadCompletedMessage),
+			(placeholder, name, error) => this._postMessage({
+				command: 'pr.file-upload-completed',
+				placeholder,
+				name,
+				error,
+			} satisfies FileUploadCompletedMessage),
+		);
+	}
+
+	private async uploadPastedFiles(message: IRequestMessage<UploadPastedFilesArgs>): Promise<void> {
+		const files = message.args?.files ?? [];
+		if (files.length === 0) {
+			const empty: UploadFilesReply = { uploads: [] };
+			return this._replyMessage(message, empty);
+		}
+
+		const names = files.map(f => f.name.includes('.') ? f.name : `${f.name}${guessExtensionFromMime(f.type)}`);
+		const placeholders = placeholdersForNames(names);
+		const reply: UploadFilesReply = { uploads: placeholders };
+		await this._replyMessage(message, reply);
+
+		runPendingUploads(
+			this._item.githubRepository,
+			files.map((f, i) => ({
+				name: placeholders[i].name,
+				placeholder: placeholders[i].placeholder,
+				getBytes: () => Promise.resolve(decodeBase64(f.bytesBase64)),
+			})),
+			IssueOverviewPanel.ID,
+			(placeholder, name, markdown) => this._postMessage({
+				command: 'pr.file-upload-completed',
+				placeholder,
+				name,
+				markdown,
+			} satisfies FileUploadCompletedMessage),
+			(placeholder, name, error) => this._postMessage({
+				command: 'pr.file-upload-completed',
+				placeholder,
+				name,
+				error,
+			} satisfies FileUploadCompletedMessage),
+		);
+	}
+
+
+	/**
+	 * Process code reference links in bodyHTML. Can be overridden by subclasses (e.g., PullRequestOverviewPanel)
+	 * to provide custom processing logic for different item types.
+	 * Returns undefined if bodyHTML is undefined.
+	 */
+	protected async processLinksInBodyHtml(bodyHTML: string | undefined): Promise<string | undefined> {
+		if (!bodyHTML) {
+			return bodyHTML;
+		}
+		return processPermalinks(
+			bodyHTML,
+			this._item.githubRepository,
+			this._item.githubRepository.rootUri
+		);
+	}
+
+	/**
+	 * Process code reference links in timeline events (comments, reviews, commits).
+	 * Updates bodyHTML fields for all events that contain them.
+	 */
+	protected async processTimelineEvents(events: TimelineEvent[]): Promise<TimelineEvent[]> {
+		return Promise.all(events.map(async (event) => {
+			// Create a shallow copy to avoid mutating the original
+			const processedEvent = { ...event };
+
+			if (processedEvent.event === EventType.Commented || processedEvent.event === EventType.Reviewed || processedEvent.event === EventType.Committed) {
+				processedEvent.bodyHTML = await this.processLinksInBodyHtml(processedEvent.bodyHTML);
+				// ReviewEvent also has comments array
+				if (processedEvent.event === EventType.Reviewed && processedEvent.comments) {
+					processedEvent.comments = await Promise.all(processedEvent.comments.map(async (comment: IComment) => ({
+						...comment,
+						bodyHTML: await this.processLinksInBodyHtml(comment.bodyHTML)
+					})));
+				}
+			}
+			return processedEvent;
+		}));
+	}
+
+	private async editDescription(message: IRequestMessage<{ text: string }>) {
+		try {
+			const result = await this._item.edit({ body: message.args.text });
+			const bodyHTML = await this.processLinksInBodyHtml(result.bodyHTML);
+			this._replyMessage(message, { body: result.body, bodyHTML });
+		} catch (e) {
+			this._throwError(message, e);
+			vscode.window.showErrorMessage(`Editing description failed: ${formatError(e)}`);
+		}
 	}
 	private editTitle(message: IRequestMessage<{ text: string }>) {
 		return this._item
@@ -570,8 +704,9 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 			});
 	}
 
-	protected _getTimeline(): Promise<TimelineEvent[]> {
-		return this._item.getIssueTimelineEvents();
+	protected async _getTimeline(): Promise<TimelineEvent[]> {
+		const events = await this._item.getIssueTimelineEvents();
+		return this.processTimelineEvents(events);
 	}
 
 	private async changeAssignees(message: IRequestMessage<void>): Promise<void> {
@@ -705,18 +840,15 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 		return this._item.editIssueComment(comment, text);
 	}
 
-	private editComment(message: IRequestMessage<{ comment: IComment; text: string }>) {
-		this.editCommentPromise(message.args.comment, message.args.text)
-			.then(result => {
-				this._replyMessage(message, {
-					body: result.body,
-					bodyHTML: result.bodyHTML,
-				});
-			})
-			.catch(e => {
-				this._throwError(message, e);
-				vscode.window.showErrorMessage(formatError(e));
-			});
+	private async editComment(message: IRequestMessage<{ comment: IComment; text: string }>) {
+		try {
+			const result = await this.editCommentPromise(message.args.comment, message.args.text);
+			const bodyHTML = await this.processLinksInBodyHtml(result.bodyHTML);
+			this._replyMessage(message, { body: result.body, bodyHTML });
+		} catch (e) {
+			this._throwError(message, e);
+			vscode.window.showErrorMessage(formatError(e));
+		}
 	}
 
 	protected deleteCommentPromise(comment: IComment): Promise<void> {
@@ -738,6 +870,29 @@ export class IssueOverviewPanel<TItem extends IssueModel = IssueModel> extends W
 						});
 				}
 			});
+	}
+
+	protected async openLocalFile(message: IRequestMessage<OpenLocalFileArgs>): Promise<void> {
+		try {
+			const { file, startLine, endLine } = message.args;
+			// Resolve relative path to absolute using repository root
+			const fileUri = vscode.Uri.joinPath(
+				this._item.githubRepository.rootUri,
+				file
+			);
+			const selection = new vscode.Range(
+				new vscode.Position(startLine - 1, 0),
+				new vscode.Position(endLine - 1, Number.MAX_SAFE_INTEGER)
+			);
+			await vscode.window.showTextDocument(fileUri, {
+				selection,
+				viewColumn: vscode.ViewColumn.One
+			});
+		} catch (e) {
+			Logger.error(`Open local file failed: ${formatError(e)}`, IssueOverviewPanel.ID);
+			// Fallback to opening external URL
+			await vscode.env.openExternal(vscode.Uri.parse(message.args.href));
+		}
 	}
 
 	protected async close(message: IRequestMessage<string>) {

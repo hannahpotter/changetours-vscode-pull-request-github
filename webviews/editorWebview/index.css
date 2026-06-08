@@ -43,6 +43,105 @@ textarea:focus,
 	outline: 1px solid var(--vscode-focusBorder);
 }
 
+/* Sticky Header */
+
+.sticky-header {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	z-index: 200;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 32px;
+	background: var(--vscode-editor-background);
+	border-bottom: 1px solid var(--vscode-editorWidget-border);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+	transform: translateY(-100%);
+	opacity: 0;
+	transition: transform 0.2s ease, opacity 0.2s ease;
+	pointer-events: none;
+}
+
+.vscode-high-contrast .sticky-header {
+	box-shadow: none;
+}
+
+.sticky-header.visible {
+	transform: translateY(0);
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.sticky-header-left {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.sticky-header-left #sticky-status {
+	flex-shrink: 0;
+	box-sizing: border-box;
+	line-height: 18px;
+	color: var(--vscode-button-foreground);
+	border-radius: 18px;
+	padding: 2px 10px;
+	font-weight: 600;
+	font-size: 12px;
+	display: flex;
+	gap: 4px;
+	align-items: center;
+}
+
+.sticky-header-left #sticky-status svg path {
+	fill: var(--vscode-button-foreground);
+}
+
+.vscode-high-contrast .sticky-header-left #sticky-status {
+	border: 1px solid var(--vscode-contrastBorder);
+	background-color: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+}
+
+.vscode-high-contrast .sticky-header-left #sticky-status svg path {
+	fill: var(--vscode-button-foreground);
+}
+
+.sticky-header-title {
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+
+.sticky-header-number {
+	flex-shrink: 0;
+	color: var(--vscode-textLink-foreground);
+	white-space: nowrap;
+}
+
+.sticky-header-number:hover {
+	color: var(--vscode-textLink-activeForeground);
+}
+
+.sticky-header .icon-button {
+	color: var(--vscode-foreground);
+}
+
+.sticky-header .icon-button:hover,
+.sticky-header .icon-button:focus {
+	background-color: var(--vscode-toolbar-hoverBackground);
+	cursor: pointer;
+}
+
+.sticky-header .icon-button:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
 .title-text {
 	margin-right: 5px;
 }
@@ -237,6 +336,12 @@ body .comment-container .review-comment-header {
 
 .status-check > div:not(.status-check-details) {
 	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.view-check-logs-placeholder {
+	width: 20px;
 }
 
 #merge-on-github {
@@ -356,6 +461,10 @@ button.input-box {
 	cursor: pointer;
 }
 
+#status-checks .icon-button:hover,
+#status-checks .icon-button:focus {
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
 #status-checks summary {
 	display: flex;
 	align-items: center;
@@ -527,12 +636,12 @@ body button .icon {
 
 .subtitle .avatar,
 .subtitle .avatar-icon svg {
+	margin-top: 2px;
 	margin-right: 6px;
 }
 
 .subtitle .author {
 	display: flex;
-	align-items: center;
 }
 
 .merge-branches {
@@ -752,7 +861,7 @@ button.secondary.change-base {
 
 .commit .commit-message .avatar-container,
 .merged .merged-message .avatar-container {
-	margin-right: 4px;
+	margin-right: 6px;
 	flex-shrink: 0;
 }
 
@@ -902,12 +1011,33 @@ textarea {
 .textarea-wrapper {
 	position: relative;
 	display: flex;
+	flex-direction: column;
 	width: 100%;
+	box-sizing: border-box;
+	border: 1px solid var(--vscode-dropdown-border);
+	background-color: var(--vscode-input-background);
+	border-radius: 4px;
+	margin-bottom: 4px;
+	overflow: hidden;
+	resize: vertical;
+}
+
+.textarea-wrapper:focus-within {
+	outline: 1px solid var(--vscode-focusBorder);
 }
 
 .textarea-wrapper textarea {
 	flex: 1;
+	width: 100%;
+	box-sizing: border-box;
+	border: none;
+	background: transparent;
+	border-radius: 0;
+	outline: none;
+	margin: 0;
+	resize: none;
 	padding-right: 40px;
+	padding-bottom: 28px;
 }
 
 .textarea-wrapper .title-action {
@@ -945,6 +1075,39 @@ textarea {
 	padding: 2px;
 }
 
+.textarea-wrapper .comment-upload-button {
+	position: absolute;
+	left: 6px;
+	bottom: 4px;
+	border: none;
+	background: none;
+	padding: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 4px;
+	color: var(--vscode-foreground);
+}
+
+.textarea-wrapper .comment-upload-button:hover:not(:disabled) {
+	cursor: pointer;
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.textarea-wrapper .comment-upload-button:focus {
+	outline-style: none;
+}
+
+.textarea-wrapper .comment-upload-button:focus-visible {
+	outline-width: 1px;
+	outline-style: solid;
+	outline-offset: -1px;
+	outline-color: var(--vscode-focusBorder);
+}
+
+.textarea-wrapper .comment-upload-button:disabled {
+	opacity: 0.5;
+}
 .editing-form {
 	padding: 5px 0;
 	display: flex;

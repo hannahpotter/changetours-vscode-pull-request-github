@@ -11,6 +11,7 @@ import {
 	ILabel,
 	IMilestone,
 	IProjectItem,
+	IssueReference,
 	MergeMethod,
 	MergeMethodsAvailability,
 	MergeQueueState,
@@ -115,6 +116,7 @@ export interface PullRequest extends Issue {
 	loadingCommit?: string;
 	generateDescriptionTitle?: string;
 	hasChangeTour?: boolean;
+	closingIssues?: IssueReference[];
 }
 
 export interface ChangedFileInfo {
@@ -206,6 +208,27 @@ export interface ChangeTemplateReply {
 
 export interface CancelCodingAgentReply {
 	events: TimelineEvent[];
+}
+
+export interface FileUploadPlaceholder {
+	name: string;
+	placeholder: string;
+}
+
+export interface UploadFilesReply {
+	uploads: FileUploadPlaceholder[];
+}
+
+export interface UploadPastedFilesArgs {
+	files: { name: string; type: string; bytesBase64: string }[];
+}
+
+export interface FileUploadCompletedMessage {
+	command: 'pr.file-upload-completed';
+	name: string;
+	placeholder: string;
+	markdown?: string;
+	error?: string;
 }
 
 export interface BaseContext {

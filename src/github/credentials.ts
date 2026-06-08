@@ -62,6 +62,12 @@ export class CredentialStore extends Disposable {
 	private _scopes: string[] = SCOPES_OLD;
 	private _scopesEnterprise: string[] = SCOPES_OLD;
 	private _isSamling: boolean = false;
+	private _handlingAuthError: Map<AuthProvider, Promise<AuthResult>> = new Map();
+	private _lastAuthErrorHandledAt: Map<AuthProvider, number> = new Map();
+	// Cooldown long enough to absorb retries from in-flight requests that were
+	// issued with the now-invalid token, but short enough that a token that
+	// is invalidated again soon after re-auth will still trigger another prompt.
+	private static readonly AUTH_ERROR_COOLDOWN_MS = 60_000;
 
 	private _onDidChangeSessions: vscode.EventEmitter<vscode.AuthenticationSessionsChangeEvent> = new vscode.EventEmitter();
 	public readonly onDidChangeSessions = this._onDidChangeSessions.event;
@@ -131,6 +137,32 @@ export class CredentialStore extends Disposable {
 		await this.context.globalState.update(LAST_USED_SCOPES_GITHUB_KEY, this._scopes);
 		await this.context.globalState.update(LAST_USED_SCOPES_ENTERPRISE_KEY, this._scopesEnterprise);
 	}
+
+	private async tryInitializeFromEnvironmentToken(authProviderId: AuthProvider): Promise<AuthResult | undefined> {
+		if (isEnterprise(authProviderId)) {
+			return undefined;
+		}
+		const token = process.env.GITHUB_OAUTH_TOKEN;
+		if (!token) {
+			return undefined;
+		}
+		Logger.debug('Attempting authentication using GITHUB_OAUTH_TOKEN environment variable.', CredentialStore.ID);
+		try {
+			const github = await this.createHub(token, authProviderId);
+			this._githubAPI = github;
+			this._sessionId = 'environment-token';
+			if (!this._isInitialized) {
+				this._isInitialized = true;
+				this._onDidInitialize.fire();
+			}
+			Logger.appendLine('Successfully authenticated using GITHUB_OAUTH_TOKEN environment variable.', CredentialStore.ID);
+			return { canceled: false };
+		} catch (e) {
+			Logger.error(`Failed to authenticate using GITHUB_OAUTH_TOKEN: ${e.message}`, CredentialStore.ID);
+			return undefined;
+		}
+	}
+
 	private async initialize(authProviderId: AuthProvider, getAuthSessionOptions: vscode.AuthenticationGetSessionOptions = {}, scopes: string[] = (!isEnterprise(authProviderId) ? this._scopes : this._scopesEnterprise), requireScopes?: boolean): Promise<AuthResult> {
 		Logger.debug(`Initializing GitHub${getGitHubSuffix(authProviderId)} authentication provider.`, 'Authentication');
 		if (isEnterprise(authProviderId)) {
@@ -138,6 +170,11 @@ export class CredentialStore extends Disposable {
 				Logger.debug(`GitHub Enterprise provider selected without URI.`, 'Authentication');
 				return { canceled: false };
 			}
+		}
+
+		const envResult = await this.tryInitializeFromEnvironmentToken(authProviderId);
+		if (envResult) {
+			return envResult;
 		}
 
 		if (getAuthSessionOptions.createIfNone === undefined && getAuthSessionOptions.forceNewSession === undefined) {
@@ -253,6 +290,51 @@ export class CredentialStore extends Disposable {
 
 	public async recreate(reason?: string): Promise<AuthResult> {
 		return this.doCreate({ forceNewSession: reason ? { detail: reason } : true });
+	}
+
+	/**
+	 * Handles authentication errors that surface from API calls (e.g. "Bad credentials"
+	 * or 401 Unauthorized). Triggers a re-authentication prompt for the affected
+	 * provider, deduplicating concurrent requests so we don't show multiple prompts
+	 * when many in-flight calls fail at once.
+	 */
+	public async handleAuthError(authProviderId: AuthProvider): Promise<AuthResult> {
+		// Only prompt if we currently believe we are authenticated for this provider.
+		// Otherwise the regular sign-in flow will handle it.
+		if (!this.isAuthenticated(authProviderId)) {
+			return { canceled: true };
+		}
+		const inFlight = this._handlingAuthError.get(authProviderId);
+		if (inFlight) {
+			return inFlight;
+		}
+		// In-flight requests that were issued with the now-invalid token may continue
+		// to fail with auth errors for a short period after a successful re-auth.
+		// Suppress re-prompting for a cooldown window to avoid repeatedly nagging the
+		// user.
+		const lastHandled = this._lastAuthErrorHandledAt.get(authProviderId);
+		if (lastHandled !== undefined && (Date.now() - lastHandled) < CredentialStore.AUTH_ERROR_COOLDOWN_MS) {
+			return { canceled: true };
+		}
+		Logger.appendLine(`Detected invalid GitHub${getGitHubSuffix(authProviderId)} credentials; prompting for re-authentication.`, CredentialStore.ID);
+		/* __GDPR__
+			"auth.badCredentials" : {}
+		*/
+		this._telemetry.sendTelemetryEvent('auth.badCredentials');
+		const reason = vscode.l10n.t('Your GitHub{0} authentication session is no longer valid. Please sign in again.', getGitHubSuffix(authProviderId));
+		const promise = (async () => {
+			try {
+				// Force re-auth only for the affected provider, not both. Going through
+				// recreate()/doCreate() would prompt re-auth for both GitHub.com and
+				// GitHub Enterprise when both are configured.
+				return await this.initialize(authProviderId, { forceNewSession: { detail: reason } });
+			} finally {
+				this._handlingAuthError.delete(authProviderId);
+				this._lastAuthErrorHandledAt.set(authProviderId, Date.now());
+			}
+		})();
+		this._handlingAuthError.set(authProviderId, promise);
+		return promise;
 	}
 
 	public async reset() {
@@ -562,7 +644,9 @@ export class CredentialStore extends Disposable {
 			},
 		});
 
-		const rateLogger = new RateLogger(this._telemetry, isEnterprise(authProviderId));
+		const rateLogger = new RateLogger(this._telemetry, isEnterprise(authProviderId), (_e) => {
+			void this.handleAuthError(authProviderId);
+		});
 		const github: GitHub = {
 			octokit: new LoggingOctokit(octokit, rateLogger),
 			graphql: new LoggingApolloClient(graphql, rateLogger),

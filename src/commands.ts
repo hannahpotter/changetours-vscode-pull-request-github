@@ -25,6 +25,7 @@ import { ensureChangeTourDir, findExistingChangeTour, getChangeTourUri } from '.
 import { appendWholeFileExclusionMarker, dropTourHunkNodes, findTourHunksMatchingMarker, parseCodeTourMarkdown, serializeCodeTourMarkdown, type TourHunkNode } from './github/codeTourMarkdown';
 import { CrossChatSessionWithPR } from './github/copilotApi';
 import { CopilotRemoteAgentManager, SessionIdForPr } from './github/copilotRemoteAgent';
+import { guessExtensionFromMime, pickFilesForUpload, placeholdersForNames, runFileUploads, runPendingUploads } from './github/fileUpload';
 import { FolderRepositoryManager } from './github/folderRepositoryManager';
 import { GitHubRepository } from './github/githubRepository';
 import { Issue } from './github/interface';
@@ -38,10 +39,12 @@ import { formatRateLimitMessage, getRecentRateLimit } from './github/rateLimitEr
 import { RepositoriesManager } from './github/repositoriesManager';
 import { codespacesPrLink, getIssuesUrl, getPullsUrl, isInCodespaces, ISSUE_OR_URL_EXPRESSION, parseIssueExpressionOutput, vscodeDevPrLink } from './github/utils';
 import { BaseContext, OverviewContext } from './github/views';
+import { checkoutPRInWorktree } from './github/worktree';
 import { IssueChatContextItem } from './lm/issueContextProvider';
 import { PRChatContextItem } from './lm/pullRequestContextProvider';
 import { isNotificationTreeItem, NotificationTreeItem } from './notifications/notificationItem';
 import { NotificationsManager } from './notifications/notificationsManager';
+import { CreatePullRequestDataModel } from './view/createPullRequestDataModel';
 import { PullRequestsTreeDataProvider } from './view/prsTreeDataProvider';
 import { PrsTreeModel } from './view/prsTreeModel';
 import { ReviewCommentController } from './view/reviewCommentController';
@@ -1244,6 +1247,47 @@ export function registerCommands(
 		),
 	);
 
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.pickInWorktree', async (pr: PRNode | PullRequestModel | unknown) => {
+			if (pr === undefined) {
+				Logger.error('Unexpectedly received undefined when picking a PR for worktree checkout.', logId);
+				return vscode.window.showErrorMessage(vscode.l10n.t('No pull request was selected to checkout, please try again.'));
+			}
+
+			let pullRequestModel: PullRequestModel;
+			let repository: Repository | undefined;
+
+			if (pr instanceof PRNode) {
+				pullRequestModel = pr.pullRequestModel;
+				repository = pr.repository;
+			} else if (pr instanceof PullRequestModel) {
+				pullRequestModel = pr;
+			} else {
+				Logger.error('Unexpectedly received unknown type when picking a PR for worktree checkout.', logId);
+				return vscode.window.showErrorMessage(vscode.l10n.t('No pull request was selected to checkout, please try again.'));
+			}
+
+			// Get the folder manager to access the repository
+			const folderManager = reposManager.getManagerForIssueModel(pullRequestModel);
+			if (!folderManager) {
+				return vscode.window.showErrorMessage(vscode.l10n.t('Unable to find repository for this pull request.'));
+			}
+
+			return checkoutPRInWorktree(telemetry, folderManager, pullRequestModel, repository);
+		}),
+	);
+
+	context.subscriptions.push(vscode.commands.registerCommand('pr.pickInWorktreeFromDescription', async (ctx: BaseContext | undefined) => {
+		if (!ctx) {
+			return vscode.window.showErrorMessage(vscode.l10n.t('No pull request context provided for checkout.'));
+		}
+		const resolved = await resolvePr(ctx);
+		if (!resolved) {
+			return vscode.window.showErrorMessage(vscode.l10n.t('Unable to resolve pull request for checkout.'));
+		}
+		return checkoutPRInWorktree(telemetry, resolved.folderManager, resolved.pr, undefined);
+	}));
+
 	context.subscriptions.push(vscode.commands.registerCommand('pr.checkoutOnVscodeDevFromDescription', async (context: BaseContext | undefined) => {
 		if (!context) {
 			return vscode.window.showErrorMessage(vscode.l10n.t('No pull request context provided for checkout.'));
@@ -1754,6 +1798,167 @@ ${contents}
 \`\`\``);
 			});
 		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.uploadFile', async (reply: CommentReply | GHPRComment | undefined) => {
+			/* __GDPR__
+			"pr.uploadFile" : {}
+			*/
+			telemetry.sendTelemetryEvent('pr.uploadFile');
+
+			let potentialThread: GHPRCommentThread | undefined;
+			if (reply === undefined) {
+				potentialThread = findActiveHandler()?.commentController.activeCommentThread as vscode.CommentThread2 as GHPRCommentThread | undefined;
+			} else {
+				potentialThread = reply instanceof GHPRComment ? reply.parent : reply?.thread;
+			}
+
+			if (!potentialThread) {
+				return;
+			}
+			const thread = potentialThread;
+
+			const commentEditor = vscode.window.activeTextEditor?.document.uri.scheme === Schemes.Comment ? vscode.window.activeTextEditor
+				: vscode.window.visibleTextEditors.find(visible => (visible.document.uri.scheme === Schemes.Comment) && (visible.document.uri.query === ''));
+			if (!commentEditor) {
+				Logger.error('No comment editor visible for uploading a file.', logId);
+				vscode.window.showErrorMessage(vscode.l10n.t('No available comment editor to upload a file in.'));
+				return;
+			}
+			const commentEditorUri = commentEditor.document.uri.toString();
+
+			const folderManager = reposManager.getManagerForFile(thread.uri);
+			const githubRepository = folderManager?.activePullRequest?.githubRepository
+				?? folderManager?.gitHubRepositories[0];
+			if (!githubRepository) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Cannot upload files: no GitHub repository found for this comment.'));
+				return;
+			}
+
+			const uploads = await pickFilesForUpload();
+			if (!uploads) {
+				return;
+			}
+
+			// Insert placeholders at the current cursor position
+			const placeholdersText = uploads.map(u => u.placeholder).join('\n');
+			const cursor = commentEditor.selection.end;
+			const before = commentEditor.document.getText(new vscode.Range(new vscode.Position(0, 0), cursor));
+			const separator = before.length > 0 && !before.endsWith('\n') ? '\n' : '';
+			await commentEditor.edit(editBuilder => {
+				editBuilder.insert(cursor, `${separator}${placeholdersText}\n`);
+			});
+
+			const replacePlaceholder = async (placeholder: string, replacement: string) => {
+				const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === commentEditorUri);
+				if (!editor) {
+					return;
+				}
+				const text = editor.document.getText();
+				const idx = text.indexOf(placeholder);
+				if (idx < 0) {
+					return;
+				}
+				const start = editor.document.positionAt(idx);
+				const end = editor.document.positionAt(idx + placeholder.length);
+				await editor.edit(editBuilder => {
+					editBuilder.replace(new vscode.Range(start, end), replacement);
+				});
+			};
+
+			runFileUploads(
+				githubRepository,
+				uploads,
+				logId,
+				(placeholder, _name, markdown) => replacePlaceholder(placeholder, markdown),
+				(placeholder, name, error) => {
+					vscode.window.showErrorMessage(vscode.l10n.t('Failed to upload {0}: {1}', name, error));
+					return replacePlaceholder(placeholder, '');
+				},
+			);
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.languages.registerDocumentPasteEditProvider(
+			{ scheme: Schemes.Comment },
+			{
+				async provideDocumentPasteEdits(document, ranges, dataTransfer, _context, token) {
+					const files: { name: string; getBytes: () => Thenable<Uint8Array> }[] = [];
+					let counter = 0;
+					for (const [mime, item] of dataTransfer) {
+						const file = item.asFile();
+						if (!file) {
+							continue;
+						}
+						const name = file.name || `pasted-file-${++counter}${guessExtensionFromMime(mime)}`;
+						files.push({ name, getBytes: () => file.data() });
+					}
+					if (files.length === 0 || token.isCancellationRequested) {
+						return;
+					}
+
+					const potentialThread = findActiveHandler()?.commentController.activeCommentThread as vscode.CommentThread2 as GHPRCommentThread | undefined;
+					if (!potentialThread) {
+						return;
+					}
+					const folderManager = reposManager.getManagerForFile(potentialThread.uri);
+					const githubRepository = folderManager?.activePullRequest?.githubRepository
+						?? folderManager?.gitHubRepositories[0];
+					if (!githubRepository) {
+						return;
+					}
+
+					const placeholders = placeholdersForNames(files.map(f => f.name));
+					const placeholdersText = placeholders.map(p => p.placeholder).join('\n');
+
+					const documentUri = document.uri.toString();
+					const replacePlaceholder = async (placeholder: string, replacement: string) => {
+						const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === documentUri);
+						if (!editor) {
+							return;
+						}
+						const text = editor.document.getText();
+						const idx = text.indexOf(placeholder);
+						if (idx < 0) {
+							return;
+						}
+						const start = editor.document.positionAt(idx);
+						const end = editor.document.positionAt(idx + placeholder.length);
+						await editor.edit(editBuilder => {
+							editBuilder.replace(new vscode.Range(start, end), replacement);
+						});
+					};
+
+					runPendingUploads(
+						githubRepository,
+						files.map((f, i) => ({
+							name: placeholders[i].name,
+							placeholder: placeholders[i].placeholder,
+							getBytes: f.getBytes,
+						})),
+						logId,
+						(placeholder, _name, markdown) => replacePlaceholder(placeholder, markdown),
+						(placeholder, name, error) => {
+							vscode.window.showErrorMessage(vscode.l10n.t('Failed to upload {0}: {1}', name, error));
+							return replacePlaceholder(placeholder, '');
+						},
+					);
+
+					const edit = new vscode.DocumentPasteEdit(
+						placeholdersText,
+						vscode.l10n.t('Upload as GitHub attachment'),
+						vscode.DocumentDropOrPasteEditKind.Empty.append('github', 'attachment'),
+					);
+					return [edit];
+				},
+			},
+			{
+				providedPasteEditKinds: [vscode.DocumentDropOrPasteEditKind.Empty.append('github', 'attachment')],
+				pasteMimeTypes: ['files', 'image/*'],
+			},
+		),
 	);
 
 	context.subscriptions.push(
@@ -2321,9 +2526,31 @@ ${contents}
 
 			const isThread = GHPRCommentThread.is(comment);
 			const commentThread = isThread ? comment : comment.parent;
-			const commentBody = isThread ? comment.comments[0].body : comment.body;
+			const firstComment = isThread ? comment.comments[0] : comment;
 			commentThread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
-			const message = commentBody instanceof vscode.MarkdownString ? commentBody.value : commentBody;
+			let commentBody: string;
+			let filePath: string | undefined;
+			if (firstComment instanceof GHPRComment) {
+				commentBody = firstComment.rawComment.body;
+				filePath = firstComment.rawComment.path;
+			} else {
+				commentBody = firstComment.body instanceof vscode.MarkdownString ? firstComment.body.value : firstComment.body;
+				filePath = undefined;
+			}
+			const range = commentThread.range;
+			let message: string;
+			if (filePath && range) {
+				const startLine = range.start.line + 1;
+				const endLine = range.end.line + 1;
+				const lineRef = startLine === endLine
+					? vscode.l10n.t('line {0}', startLine)
+					: vscode.l10n.t('lines {0}-{1}', startLine, endLine);
+				message = vscode.l10n.t('There is a code review comment for file {0} at {1}:\n{2}', filePath, lineRef, commentBody);
+			} else if (filePath) {
+				message = vscode.l10n.t('There is a code review comment for file {0}:\n{1}', filePath, commentBody);
+			} else {
+				message = commentBody;
+			}
 
 			if (isThread) {
 				// For threads, open the Chat view instead of inline chat
@@ -2517,5 +2744,67 @@ ${contents}
 				return vscode.env.clipboard.writeText(pr.html_url);
 			}
 		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.generateTitleAndDescription', async (args: { rootUri: vscode.Uri; baseBranch: string; compareBranch: string }) => {
+			if (!args?.rootUri || !args?.baseBranch || !args?.compareBranch) {
+				Logger.error('Missing required arguments for pr.generateTitleAndDescription', logId);
+				return undefined;
+			}
+
+			const folderManager = reposManager.getManagerForFile(args.rootUri);
+			if (!folderManager) {
+				Logger.error('Unable to find a repository for the provided rootUri.', logId);
+				return undefined;
+			}
+
+			const origin = await folderManager.getOrigin();
+			const defaults = await folderManager.getPullRequestDefaults();
+
+			const model = new CreatePullRequestDataModel(
+				folderManager,
+				defaults.owner,
+				args.baseBranch,
+				origin.remote.owner,
+				args.compareBranch,
+				origin.remote.repositoryName,
+			);
+
+			try {
+				const { commitMessages, patches } = await model.getCommitsAndPatches();
+				const issues = await model.findIssueContext(commitMessages);
+				const template = await folderManager.getPullRequestTemplateBody(defaults.owner);
+
+				const provider = folderManager.getTitleAndDescriptionProvider();
+				if (!provider) {
+					Logger.error('No title and description provider available.', logId);
+					return undefined;
+				}
+
+				const tokenSource = new vscode.CancellationTokenSource();
+				const result = await provider.provider.provideTitleAndDescription(
+					{ commitMessages, patches, issues, template, compareBranch: args.compareBranch },
+					tokenSource.token,
+				);
+
+				/* __GDPR__
+					"pr.generatedTitleAndDescription" : {
+						"providerTitle" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+						"source" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
+					}
+				*/
+				telemetry.sendTelemetryEvent('pr.generatedTitleAndDescription', { providerTitle: provider?.title, source: 'command' });
+
+				tokenSource.dispose();
+
+				return result ? { title: result.title, description: result.description } : undefined;
+			} catch (e) {
+				Logger.error(`Error generating title and description: ${formatError(e)}`, logId);
+				return undefined;
+			} finally {
+				model.dispose();
+			}
+		}),
 	);
 }

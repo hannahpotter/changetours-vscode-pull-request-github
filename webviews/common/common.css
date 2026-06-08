@@ -179,6 +179,32 @@ input[type='checkbox']:indeterminate {
 	left: 5px;
 }
 
+/*
+ * Task list items rendered from markdown (e.g. `- [x] done`) produce
+ * `<li class="task-list-item"><input type="checkbox" checked disabled> ...</li>`
+ * without a `.checkbox-wrapper`, so the wrapper-based checkmark above does
+ * not apply. Pseudo-elements cannot be placed on `<input>` elements, so we
+ * draw the checkmark on the parent `<li>` using `:has()`, positioned over
+ * the checkbox.
+ */
+.task-list-item {
+	position: relative;
+}
+
+.task-list-item:has(> input[type='checkbox']:checked)::before,
+.task-list-item:has(> p > input[type='checkbox']:checked)::before {
+	content: '';
+	position: absolute;
+	top: 5px;
+	left: 6px;
+	width: 5px;
+	height: 10px;
+	border: solid var(--vscode-checkbox-foreground);
+	border-width: 0 1px 1px 0;
+	transform: rotate(45deg);
+	pointer-events: none;
+}
+
 input[type='checkbox']:focus {
 	outline: 1px solid var(--vscode-focusBorder);
 	outline-offset: 1px;
@@ -262,7 +288,7 @@ body img.avatar {
 }
 
 .section-item .avatar-link {
-	margin-right: 8px;
+	margin-right: 6px;
 }
 
 .section-item .avatar-container {
@@ -299,6 +325,35 @@ body img.avatar {
 	fill: var(--vscode-issues-open);
 }
 
+.section-icon.issue-open svg path {
+	fill: var(--vscode-issues-open);
+}
+
+.section-icon.issue-closed svg path {
+	fill: var(--vscode-issues-closed);
+}
+
+.issue-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--vscode-foreground);
+	text-decoration: none;
+	overflow: hidden;
+}
+
+.issue-item:hover {
+	text-decoration: underline;
+	color: var(--vscode-foreground);
+}
+
+.issue-item-text {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	flex: 1;
+	min-width: 0;
+}
 .reviewer-icons {
 	display: flex;
 	gap: 4px;
@@ -441,6 +496,11 @@ button.split-left {
 	display: flex;
 	border: 1px solid var(--vscode-button-border, transparent);
 	border-right: none;
+}
+
+button.split-left:only-child {
+	border-radius: 4px;
+	border-right: 1px solid var(--vscode-button-border, transparent);
 }
 
 .split {

@@ -11,8 +11,8 @@ import { ConflictModel } from './conflictGuide';
 import { ConflictResolutionCoordinator } from './conflictResolutionCoordinator';
 import { Conflict, ConflictResolutionModel } from './conflictResolutionModel';
 import { CredentialStore } from './credentials';
-import { CopilotWorkingStatus, GitHubRepository, ItemsData, PULL_REQUEST_PAGE_SIZE, PullRequestChangeEvent, PullRequestData, TeamReviewerRefreshKind, ViewerPermission } from './githubRepository';
-import { PullRequestResponse, PullRequestState } from './graphql';
+import { CopilotWorkingStatus, GitHubRepository, isRateLimitError, ItemsData, PULL_REQUEST_PAGE_SIZE, PullRequestChangeEvent, PullRequestData, TeamReviewerRefreshKind, ViewerPermission } from './githubRepository';
+import { PullRequestState } from './graphql';
 import { IAccount, ILabel, IMilestone, IProject, IPullRequestsPagingOptions, Issue, ITeam, MergeMethod, PRType, PullRequestMergeability, RepoAccessAndMergeMethods, User } from './interface';
 import { IssueModel } from './issueModel';
 import { PullRequestGitHelper, PullRequestMetadata } from './pullRequestGitHelper';
@@ -24,7 +24,6 @@ import {
 	getPRFetchQuery,
 	getStateFromQuery,
 	loginComparator,
-	parseGraphQLPullRequest,
 	teamComparator,
 	variableSubstitution,
 } from './utils';
@@ -35,17 +34,18 @@ import { AuthProvider, GitHubServerType } from '../common/authentication';
 import { commands, contexts } from '../common/executeCommands';
 import { InMemFileChange, SlimFileChange } from '../common/file';
 import { findLocalRepoRemoteFromGitHubRef } from '../common/githubRef';
-import { unwrapCommitMessageBody } from '../common/gitUtils';
+import { stripCoAuthoredByTrailers, unwrapCommitMessageBody } from '../common/gitUtils';
 import { Disposable, disposeAll } from '../common/lifecycle';
 import Logger from '../common/logger';
 import { Protocol, ProtocolType } from '../common/protocol';
-import { GitHubRemote, parseRemote, parseRepositoryRemotes, parseRepositoryRemotesAsync, Remote } from '../common/remote';
+import { GitHubRemote, parseRemote, parseRepositoryRemotesAsync, Remote } from '../common/remote';
 import {
 	ALLOW_FETCH,
 	AUTO_STASH,
 	CHAT_SETTINGS_NAMESPACE,
 	CHECKOUT_DEFAULT_BRANCH,
 	CHECKOUT_PULL_REQUEST_BASE_BRANCH,
+	DEFAULT_DELETION_METHOD,
 	DISABLE_AI_FEATURES,
 	GIT,
 	POST_DONE,
@@ -53,6 +53,7 @@ import {
 	PULL_BEFORE_CHECKOUT,
 	PULL_BRANCH,
 	REMOTES,
+	SELECT_WORKTREE,
 	UPSTREAM_REMOTE,
 } from '../common/settingKeys';
 import { ITelemetry } from '../common/telemetry';
@@ -226,6 +227,7 @@ export class FolderRepositoryManager extends Disposable {
 	readonly onDidDispose: vscode.Event<void> = this._onDidDispose.event;
 
 	private _sessionIgnoredRemoteNames: Set<string> = new Set();
+	private _inaccessibleRepos: Set<string> = new Set();
 
 	constructor(
 		private readonly _id: number,
@@ -239,7 +241,7 @@ export class FolderRepositoryManager extends Disposable {
 	) {
 		super();
 		this._githubRepositories = [];
-		this._githubManager = new GitHubManager();
+		this._githubManager = new GitHubManager(this.telemetry);
 
 		this._register(
 			vscode.workspace.onDidChangeConfiguration(async e => {
@@ -744,7 +746,7 @@ export class FolderRepositoryManager extends Disposable {
 			return globalStateMentionableUsers ?? this._fetchMentionableUsersPromise;
 		}
 
-		return this._fetchMentionableUsersPromise;
+		return globalStateMentionableUsers ?? this._fetchMentionableUsersPromise;
 	}
 
 	async getAssignableUsers(clearCache?: boolean): Promise<{ [key: string]: IAccount[] }> {
@@ -781,7 +783,7 @@ export class FolderRepositoryManager extends Disposable {
 			return globalStateAssignableUsers ?? this._fetchAssignableUsersPromise;
 		}
 
-		return this._fetchAssignableUsersPromise;
+		return globalStateAssignableUsers ?? this._fetchAssignableUsersPromise;
 	}
 
 	async getTeamReviewers(refreshKind: TeamReviewerRefreshKind): Promise<{ [key: string]: ITeam[] }> {
@@ -950,7 +952,7 @@ export class FolderRepositoryManager extends Disposable {
 					);
 
 					if (githubRepo) {
-						const pullRequest: PullRequestModel | undefined = await githubRepo.getPullRequest(prNumber);
+						const pullRequest: PullRequestModel | undefined = await githubRepo.getPullRequest(prNumber, 'FolderRepositoryManager.getLocalPullRequests');
 
 						if (pullRequest) {
 							pullRequest.localBranchName = localBranchName;
@@ -1305,7 +1307,7 @@ export class FolderRepositoryManager extends Disposable {
 	async getPullRequestsForCategory(githubRepository: GitHubRepository, categoryQuery: string, page?: number): Promise<PullRequestData | undefined> {
 		try {
 			Logger.debug(`Fetch pull request category ${categoryQuery} - enter`, this.id);
-			const { octokit, query, schema } = await githubRepository.ensure();
+			const { octokit } = await githubRepository.ensure();
 
 			/* __GDPR__
 				"pr.search.category" : {
@@ -1321,18 +1323,14 @@ export class FolderRepositoryManager extends Disposable {
 				page: page || 1,
 			});
 
-			const promises: Promise<{ data: PullRequestResponse, repo: GitHubRepository } | undefined>[] = data.items.map(async (item) => {
+			const promises: Promise<{ data: PullRequestModel | undefined, repo: GitHubRepository } | undefined>[] = data.items.map(async (item) => {
 				const protocol = new Protocol(item.repository_url);
 
 				const prRepo = await this.createGitHubRepositoryFromOwnerName(protocol.owner, protocol.repositoryName);
-				const { data } = await query<PullRequestResponse>({
-					query: schema.PullRequest,
-					variables: {
-						owner: prRepo.remote.owner,
-						name: prRepo.remote.repositoryName,
-						number: item.number
-					}
-				});
+				if (!prRepo) {
+					return undefined;
+				}
+				const data = await prRepo.getPullRequest(item.number, 'FolderRepositoryManager.getPullRequestsForCategory', false, true);
 				return { data, repo: prRepo };
 			});
 
@@ -1341,16 +1339,12 @@ export class FolderRepositoryManager extends Disposable {
 
 			const pullRequests = (await Promise.all(pullRequestResponses
 				.map(async response => {
-					if (!response?.data.repository) {
+					if (!response?.data) {
 						Logger.appendLine('Pull request doesn\'t appear to exist.', this.id);
 						return null;
 					}
 
-					// Pull requests fetched with a query can be from any repo.
-					// We need to use the correct GitHubRepository for this PR.
-					return response.repo.createOrUpdatePullRequestModel(
-						await parseGraphQLPullRequest(response.data.repository.pullRequest, response.repo), true
-					);
+					return response.data;
 				})))
 				.filter(item => item !== null) as PullRequestModel[];
 
@@ -1460,16 +1454,28 @@ export class FolderRepositoryManager extends Disposable {
 		}
 	}
 
-	async getMaxIssue(): Promise<number> {
-		const maxIssues = await Promise.all(
-			this._githubRepositories.map(repository => {
-				return repository.getMaxIssue();
-			}),
-		);
-		let max: number = 0;
-		for (const issueNumber of maxIssues) {
-			if (issueNumber !== undefined) {
-				max = Math.max(max, issueNumber);
+	async getMaxIssue(repository: Repository): Promise<number> {
+		const remoteNames = new Set(repository.state.remotes.map(remote => remote.name));
+		const ghRepo = this._githubRepositories.find(repo => remoteNames.has(repo.remote.remoteName));
+		if (!ghRepo) {
+			return 0;
+		}
+
+		const reposToCheck: GitHubRepository[] = [ghRepo];
+		const metadata = await ghRepo.getMetadata();
+		if (metadata.fork) {
+			for (const repo of this._githubRepositories) {
+				if (repo !== ghRepo && repo.remote.repositoryName === ghRepo.remote.repositoryName) {
+					reposToCheck.push(repo);
+				}
+			}
+		}
+
+		const maxIssues = await Promise.all(reposToCheck.map(repo => repo.getMaxIssue()));
+		let max = 0;
+		for (const value of maxIssues) {
+			if (value !== undefined) {
+				max = Math.max(max, value);
 			}
 		}
 		return max;
@@ -2148,35 +2154,89 @@ export class FolderRepositoryManager extends Disposable {
 				quickPick.items = [{ label: vscode.l10n.t('No local branches to delete'), picked: false }];
 			}
 
-			let firstStep = true;
+			let step: 'branches' | 'worktrees' | 'remotes' = 'branches';
+			let nonExistantBranches = new Set<string>();
+			let branchPicks: readonly vscode.QuickPickItem[] = [];
+
+			const showWorktreeStep = (worktreeItems: (vscode.QuickPickItem & { worktreePath: string })[]) => {
+				quickPick.canSelectMany = true;
+				quickPick.value = '';
+				quickPick.placeholder = vscode.l10n.t('Do you want to delete the associated worktrees?');
+				quickPick.items = worktreeItems;
+				quickPick.selectedItems = worktreeItems.filter(item => item.picked);
+				step = 'worktrees';
+			};
+
+			const deleteBranchesAndShowRemoteStep = async () => {
+				if (branchPicks.length) {
+					await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Cleaning up') }, async (progress) => {
+						try {
+							await this.deleteBranches(branchPicks, nonExistantBranches, progress, branchPicks.length, 0, []);
+						} catch (e) {
+							quickPick.hide();
+							vscode.window.showErrorMessage(vscode.l10n.t('Deleting branches failed: {0} {1}', e.message, e.stderr));
+						}
+					});
+				}
+
+				const remoteItems = await this.getRemoteDeletionItems(nonExistantBranches);
+				if (remoteItems && remoteItems.length) {
+					quickPick.canSelectMany = true;
+					quickPick.placeholder = vscode.l10n.t('Choose remotes you want to delete permanently');
+					quickPick.items = remoteItems;
+					quickPick.selectedItems = remoteItems.filter(item => item.picked);
+					step = 'remotes';
+				} else {
+					quickPick.hide();
+				}
+			};
+
 			quickPick.onDidAccept(async () => {
 				quickPick.busy = true;
 
-				if (firstStep) {
-					const picks = quickPick.selectedItems;
-					const nonExistantBranches = new Set<string>();
+				if (step === 'branches') {
+					branchPicks = quickPick.selectedItems;
+					nonExistantBranches = new Set<string>();
+
+					// Find which selected branches have worktrees (must be deleted before the branch)
+					const preferredWorktreeDeletion = !!vscode.workspace
+						.getConfiguration(PR_SETTINGS_NAMESPACE)
+						.get<boolean>(`${DEFAULT_DELETION_METHOD}.${SELECT_WORKTREE}`);
+					const worktreeItems: (vscode.QuickPickItem & { worktreePath: string })[] = [];
+					for (const pick of branchPicks) {
+						const worktreeUri = this.getWorktreeForBranch(pick.label);
+						if (worktreeUri && !vscode.workspace.workspaceFolders?.some(folder =>
+							folder.uri.fsPath === worktreeUri.fsPath ||
+							(process.platform === 'win32' && folder.uri.fsPath.toLowerCase() === worktreeUri.fsPath.toLowerCase())
+						)) {
+							worktreeItems.push({
+								label: pick.label,
+								description: worktreeUri.fsPath,
+								picked: preferredWorktreeDeletion,
+								worktreePath: worktreeUri.fsPath,
+							});
+						}
+					}
+
+					if (worktreeItems.length && this.repository.deleteWorktree) {
+						showWorktreeStep(worktreeItems);
+					} else {
+						await deleteBranchesAndShowRemoteStep();
+					}
+				} else if (step === 'worktrees') {
+					const picks = quickPick.selectedItems as readonly (vscode.QuickPickItem & { worktreePath: string })[];
 					if (picks.length) {
-						await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Cleaning up') }, async (progress) => {
-							try {
-								await this.deleteBranches(picks, nonExistantBranches, progress, picks.length, 0, []);
-							} catch (e) {
-								quickPick.hide();
-								vscode.window.showErrorMessage(vscode.l10n.t('Deleting branches failed: {0} {1}', e.message, e.stderr));
+						await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Deleting {0} worktrees...', picks.length) }, async () => {
+							for (const pick of picks) {
+								try {
+									await this.removeWorktree(pick.worktreePath);
+								} catch (e) {
+									Logger.error(`Failed to delete worktree ${pick.worktreePath}: ${e}`, this.id);
+								}
 							}
 						});
 					}
-
-					firstStep = false;
-					const remoteItems = await this.getRemoteDeletionItems(nonExistantBranches);
-
-					if (remoteItems && remoteItems.length) {
-						quickPick.canSelectMany = true;
-						quickPick.placeholder = vscode.l10n.t('Choose remotes you want to delete permanently');
-						quickPick.items = remoteItems;
-						quickPick.selectedItems = remoteItems.filter(item => item.picked);
-					} else {
-						quickPick.hide();
-					}
+					await deleteBranchesAndShowRemoteStep();
 				} else {
 					// batch deleting the remotes to avoid consuming all available resources
 					const picks = quickPick.selectedItems;
@@ -2296,7 +2356,7 @@ export class FolderRepositoryManager extends Disposable {
 		const githubRepo = await this.resolveItem(owner, repositoryName);
 		Logger.trace(`Found GitHub repo for pr #${pullRequestNumber}: ${githubRepo ? 'yes' : 'no'}`, this.id);
 		if (githubRepo) {
-			const pr = await githubRepo.getPullRequest(pullRequestNumber, useCache);
+			const pr = await githubRepo.getPullRequest(pullRequestNumber, 'FolderRepositoryManager.resolvePullRequest', useCache);
 			Logger.trace(`Found GitHub pr repo for pr #${pullRequestNumber}: ${pr ? 'yes' : 'no'}`, this.id);
 			return pr;
 		}
@@ -2323,7 +2383,7 @@ export class FolderRepositoryManager extends Disposable {
 	async resolveUser(owner: string, repositoryName: string, login: string): Promise<User | undefined> {
 		Logger.debug(`Fetch user ${login}`, this.id);
 		const githubRepository = await this.createGitHubRepositoryFromOwnerName(owner, repositoryName);
-		return githubRepository.resolveUser(login);
+		return githubRepository?.resolveUser(login);
 	}
 
 	async getMatchingPullRequestMetadataForBranch() {
@@ -2450,6 +2510,35 @@ export class FolderRepositoryManager extends Disposable {
 		return await PullRequestGitHelper.getBranchNRemoteForPullRequest(this.repository, pullRequest);
 	}
 
+	getWorktreeForBranch(branchName: string): vscode.Uri | undefined {
+		const worktrees = this.repository.state.worktrees;
+		if (!worktrees) {
+			return undefined;
+		}
+		const refsHeadsPrefix = 'refs/heads/';
+		const worktree = worktrees.find(wt => {
+			if (wt.main) {
+				return false;
+			}
+			const ref = wt.ref.startsWith(refsHeadsPrefix) ? wt.ref.substring(refsHeadsPrefix.length) : wt.ref;
+			return ref === branchName;
+		});
+		return worktree ? vscode.Uri.file(worktree.path) : undefined;
+	}
+
+	async removeWorktree(worktreePath: string): Promise<void> {
+		if (!this.repository.deleteWorktree) {
+			Logger.error(`deleteWorktree is not available on this repository`, this.id);
+			return;
+		}
+		try {
+			await this.repository.deleteWorktree(worktreePath);
+		} catch (e) {
+			Logger.error(`Failed to remove worktree ${worktreePath}: ${e}`, this.id);
+			throw e;
+		}
+	}
+
 	async fetchAndCheckout(pullRequest: PullRequestModel, progress: vscode.Progress<{ message?: string; increment?: number }>): Promise<void> {
 		await PullRequestGitHelper.fetchAndCheckout(this.repository, this._allGitHubRemotes, pullRequest, progress);
 	}
@@ -2473,7 +2562,8 @@ export class FolderRepositoryManager extends Disposable {
 			}
 			let continueWithMerge = true;
 			if (pullRequest.item.mergeable === PullRequestMergeability.Conflict) {
-				const githubRepos = await Promise.all([this.createGitHubRepositoryFromOwnerName(pullRequest.head!.owner, pullRequest.head!.repositoryCloneUrl.repositoryName), this.createGitHubRepositoryFromOwnerName(pullRequest.base.owner, pullRequest.base.repositoryCloneUrl.repositoryName)]);
+				const githubRepoResults = await Promise.all([this.createGitHubRepositoryFromOwnerName(pullRequest.head!.owner, pullRequest.head!.repositoryCloneUrl.repositoryName), this.createGitHubRepositoryFromOwnerName(pullRequest.base.owner, pullRequest.base.repositoryCloneUrl.repositoryName)]);
+				const githubRepos = githubRepoResults.filter((r): r is GitHubRepository => !!r);
 				const coordinator = new ConflictResolutionCoordinator(this.telemetry, conflictModel, githubRepos);
 				continueWithMerge = await coordinator.enterConflictResolutionAndWaitForExit();
 				coordinator.dispose();
@@ -2486,7 +2576,7 @@ export class FolderRepositoryManager extends Disposable {
 			}
 		}
 
-		if (pullRequest.item.mergeable !== PullRequestMergeability.Conflict) {
+		if (pullRequest.item.mergeable !== PullRequestMergeability.Conflict && !pullRequest.githubRepository.remote.isEnterprise) {
 			const result = await vscode.window.withProgress(
 				{ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Updating branch...') },
 				async () => {
@@ -2547,7 +2637,7 @@ export class FolderRepositoryManager extends Disposable {
 	}
 
 	async fetchById(githubRepo: GitHubRepository, id: number): Promise<PullRequestModel | undefined> {
-		const pullRequest = await githubRepo.getPullRequest(id);
+		const pullRequest = await githubRepo.getPullRequest(id, 'FolderRepositoryManager.fetchById');
 		if (pullRequest) {
 			return pullRequest;
 		} else {
@@ -2815,15 +2905,39 @@ export class FolderRepositoryManager extends Disposable {
 		});
 	}
 
-	async createGitHubRepositoryFromOwnerName(owner: string, repositoryName: string): Promise<GitHubRepository> {
+	async createGitHubRepositoryFromOwnerName(owner: string, repositoryName: string): Promise<GitHubRepository | undefined> {
 		const existing = this.findExistingGitHubRepository({ owner, repositoryName });
 		if (existing) {
 			return existing;
 		}
-		const gitRemotes = parseRepositoryRemotes(this.repository);
+		const repoKey = `${owner.toLowerCase()}/${repositoryName.toLowerCase()}`;
+		if (this._inaccessibleRepos.has(repoKey)) {
+			Logger.debug(`Skipping inaccessible repository: ${owner}/${repositoryName}`, this.id);
+			return undefined;
+		}
+		const gitRemotes = await parseRepositoryRemotesAsync(this.repository);
 		const gitRemote = gitRemotes.find(r => r.owner === owner && r.repositoryName === repositoryName);
 		const uri = gitRemote?.url ?? `https://github.com/${owner}/${repositoryName}`;
-		return this.createAndAddGitHubRepository(new Remote(gitRemote?.remoteName ?? repositoryName, uri, new Protocol(uri)), this._credentialStore);
+		const repo = await this.createAndAddGitHubRepository(new Remote(gitRemote?.remoteName ?? repositoryName, uri, new Protocol(uri)), this._credentialStore);
+		let reason: string;
+		try {
+			await repo.getMetadata();
+			return repo;
+		} catch (e) {
+			reason = 'error';
+			Logger.appendLine(`Repository ${owner}/${repositoryName} is not accessible: ${e}`, this.id);
+		}
+		Logger.appendLine(`Repository ${owner}/${repositoryName} is not accessible.`, this.id);
+		this._inaccessibleRepos.add(repoKey);
+		this.removeGitHubRepository(repo.remote);
+		/* __GDPR__
+			"repository.inaccessible" : {
+				"hasLocalRemote" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+				"reason" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
+			}
+		*/
+		this.telemetry.sendTelemetryEvent('repository.inaccessible', { hasLocalRemote: (!!gitRemote).toString(), reason });
+		return undefined;
 	}
 
 	async findUpstreamForItem(item: {
@@ -2957,7 +3071,16 @@ export class FolderRepositoryManager extends Disposable {
 			pushRemote,
 			this.credentialStore,
 		);
-		const permission = await githubRepo.getViewerPermission();
+		let permission: ViewerPermission;
+		try {
+			permission = await githubRepo.getViewerPermission();
+		} catch (e) {
+			if (isRateLimitError(e)) {
+				vscode.window.showErrorMessage(vscode.l10n.t('GitHub API rate limit exceeded. Please wait and try again.'), { modal: true });
+				return;
+			}
+			throw e;
+		}
 		let selectedRemote: GitHubRemote | undefined;
 		if (
 			permission === ViewerPermission.Read ||
@@ -3090,7 +3213,7 @@ export const titleAndBodyFrom = async (promise: Promise<string | undefined>): Pr
 	}
 	const idxLineBreak = message.indexOf('\n');
 	const hasBody = idxLineBreak !== -1;
-	const rawBody = hasBody ? message.slice(idxLineBreak + 1).trim() : '';
+	const rawBody = hasBody ? stripCoAuthoredByTrailers(message.slice(idxLineBreak + 1)).trim() : '';
 	return {
 		title: hasBody ? message.slice(0, idxLineBreak) : message,
 

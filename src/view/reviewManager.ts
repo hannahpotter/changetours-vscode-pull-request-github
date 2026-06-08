@@ -68,7 +68,24 @@ export class ReviewManager extends Disposable {
 	};
 
 	private _switchingToReviewMode: boolean;
+	private _stateValidated: boolean = false;
 	private _changesSinceLastReviewProgress: ProgressHelper = new ProgressHelper();
+	/**
+	 * Cached max PR numbers per repo, keyed by `owner/repo`.
+	 * Used to skip expensive `checkGitHubForPrBranch` calls when no new PRs
+	 * have been created since the last check for the current branch.
+	 */
+	private _cachedMaxPRNumbers: Map<string, number> | undefined;
+	private _cachedBranchName: string | undefined;
+	/**
+	 * Tracks branches for which we've already performed the one-shot GitHub
+	 * re-check after detecting existing local PR metadata. This allows stale
+	 * `branch.<name>.github-pr-owner-number` entries (e.g. pointing at a
+	 * closed PR) to self-heal once, without bypassing the
+	 * branch-change/new-PR cache on every subsequent `validateState` call.
+	 */
+	private readonly _staleMetadataCheckedBranches = new Set<string>();
+	private _pollHandle: NodeJS.Timeout | undefined;
 	/**
 	 * Flag set when the "Checkout" action is used and cleared on the next git
 	 * state update, once review mode has been entered. Used to disambiguate
@@ -128,6 +145,13 @@ export class ReviewManager extends Disposable {
 		if (_gitApi.state === 'initialized') {
 			this.updateState(true);
 		}
+		this.pollForStateChange();
+		this._register(toDisposable(() => {
+			if (this._pollHandle) {
+				clearTimeout(this._pollHandle);
+				this._pollHandle = undefined;
+			}
+		}));
 	}
 
 	private registerListeners(): void {
@@ -203,6 +227,26 @@ export class ReviewManager extends Disposable {
 		}));
 
 		this._register(GitHubCreatePullRequestLinkProvider.registerProvider(this, this._folderRepoManager));
+	}
+
+	private pollForStateChange() {
+		this._pollHandle = setTimeout(async () => {
+			if (this.isDisposed) {
+				return;
+			}
+			Logger.appendLine('Polling for state change...', this.id);
+			try {
+				if (!this._validateStatusInProgress && !this._folderRepoManager.activePullRequest) {
+					await this.updateState();
+				}
+			} catch (e) {
+				Logger.warn(`Polling for state change failed: ${formatError(e)}`, this.id);
+			} finally {
+				if (!this.isDisposed) {
+					this.pollForStateChange();
+				}
+			}
+		}, 1000 * 60 * 5);
 	}
 
 	private async updateBaseBranchMetadata(oldHead: Branch, newHead: Branch) {
@@ -325,13 +369,19 @@ export class ReviewManager extends Disposable {
 
 		const validatePromise = new Promise<void>(resolve => {
 			this.validateStateAndResetPromise(silent, updateLayout).then(() => {
-				vscode.commands.executeCommand('setContext', 'github:stateValidated', true).then(() => {
+				const done = () => {
 					if (timeout) {
 						clearTimeout(timeout);
 						timeout = undefined;
 					}
 					resolve();
-				});
+				};
+				if (!this._stateValidated) {
+					this._stateValidated = true;
+					commands.setContext('github:stateValidated', true).then(done);
+				} else {
+					done();
+				}
 			});
 		});
 
@@ -397,6 +447,78 @@ export class ReviewManager extends Disposable {
 		}
 	}
 
+	/**
+	 * Returns the GitHub repos relevant to the current branch: the head repo
+	 * (matching the branch's remote) and its parent repos (for forks, the upstream).
+	 */
+	private async getRelevantGitHubRepos(): Promise<GitHubRepository[]> {
+		const remoteName = this._repository.state.HEAD?.remote ?? this._repository.state.HEAD?.upstream?.remote;
+		if (!remoteName) {
+			return [];
+		}
+		const headRepo = this._folderRepoManager.gitHubRepositories.find(
+			repo => repo.remote.remoteName === remoteName,
+		);
+		if (!headRepo) {
+			return [];
+		}
+		try {
+			const metadata = await headRepo.getMetadata();
+			if (!metadata?.owner) {
+				return [headRepo];
+			}
+			const parentRepos = this._folderRepoManager.gitHubRepositories.filter(repo => {
+				if (metadata.fork) {
+					return repo.remote.owner === metadata.parent?.owner?.login && repo.remote.repositoryName === metadata.parent?.name;
+				} else {
+					return repo.remote.owner === metadata.owner?.login && repo.remote.repositoryName === metadata.name;
+				}
+			});
+			// Include both head and parent repos, deduplicated
+			const result = new Set<GitHubRepository>(parentRepos);
+			result.add(headRepo);
+			return [...result];
+		} catch (e) {
+			Logger.warn(`Failed to get metadata for relevant repos: ${formatError(e)}`, this.id);
+			return [headRepo];
+		}
+	}
+
+	private async getMaxPullRequestNumbers(): Promise<Map<string, number>> {
+		const result = new Map<string, number>();
+		const repos = await this.getRelevantGitHubRepos();
+		await Promise.all(repos.map(async repo => {
+			const max = await repo.getMaxPullRequest();
+			if (max !== undefined) {
+				result.set(`${repo.remote.owner}/${repo.remote.repositoryName}`, max);
+			}
+		}));
+		return result;
+	}
+
+	private async hasNewPullRequests(): Promise<boolean> {
+		if (!this._cachedMaxPRNumbers) {
+			this._cachedMaxPRNumbers = await this.getMaxPullRequestNumbers();
+			return true;
+		}
+		const current = await this.getMaxPullRequestNumbers();
+		// If we couldn't determine max PR for any repo, assume there may be new PRs,
+		// but keep the last known good cache so transient failures do not discard it.
+		if (current.size === 0) {
+			return true;
+		}
+		let result = false;
+		for (const [key, value] of current) {
+			const cached = this._cachedMaxPRNumbers.get(key);
+			if (cached === undefined || value > cached) {
+				result = true;
+				break;
+			}
+		}
+		this._cachedMaxPRNumbers = current;
+		return result;
+	}
+
 	private async checkGitHubForPrBranch(branch: Branch): Promise<(PullRequestMetadata & { model: PullRequestModel }) | undefined> {
 		try {
 			let branchToCheck: Branch;
@@ -430,7 +552,7 @@ export class ReviewManager extends Disposable {
 			Logger.appendLine('Resolving pull request', this.id);
 			let pr = await this._folderRepoManager.resolvePullRequest(owner, repositoryName, metadata.prNumber, useCache);
 
-			if (!pr || !pr.isResolved() || !(await pr.githubRepository.hasBranch(pr.base.name))) {
+			if (!pr || !pr.isResolved() || !(await pr.githubRepository.hasBranch(pr.base.ref))) {
 				await this.clear(true);
 				this._prNumber = undefined;
 				Logger.appendLine('This PR is no longer valid', this.id);
@@ -471,11 +593,27 @@ export class ReviewManager extends Disposable {
 		}
 
 		let matchingPullRequestMetadata = await this._folderRepoManager.getMatchingPullRequestMetadataForBranch();
-
 		if (!matchingPullRequestMetadata) {
 			Logger.appendLine(`No matching pull request metadata found locally for current branch ${branch.name}`, this.id);
-			matchingPullRequestMetadata = await this.checkGitHubForPrBranch(branch);
 		}
+
+		// One-shot self-heal: when local metadata exists for this branch, re-check GitHub once
+		// (per branch) in case the local metadata points to a stale closed PR. If GitHub returns
+		// a result, it overwrites the local metadata via associateBranchWithPullRequest. Subsequent
+		// checks for the same branch fall back to the branch-change/new-PR cache.
+		const needsStaleMetadataCheck = !!matchingPullRequestMetadata && !!branch.name && !this._staleMetadataCheckedBranches.has(branch.name);
+		if (this._cachedBranchName !== branch.name || await this.hasNewPullRequests() || needsStaleMetadataCheck) {
+			const metadataFromGithub = await this.checkGitHubForPrBranch(branch);
+			if (metadataFromGithub) {
+				matchingPullRequestMetadata = metadataFromGithub;
+			}
+			if (needsStaleMetadataCheck && branch.name) {
+				this._staleMetadataCheckedBranches.add(branch.name);
+			}
+		} else {
+			Logger.appendLine(`Skipping GitHub check for branch ${branch.name}: no new PRs since last check`, this.id);
+		}
+		this._cachedBranchName = branch.name;
 
 		if (!matchingPullRequestMetadata) {
 			Logger.appendLine(

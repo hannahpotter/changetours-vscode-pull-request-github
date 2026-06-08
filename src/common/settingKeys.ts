@@ -36,6 +36,7 @@ export const DEFAULT_MERGE_METHOD = 'defaultMergeMethod';
 export const DEFAULT_DELETION_METHOD = 'defaultDeletionMethod';
 export const SELECT_LOCAL_BRANCH = 'selectLocalBranch';
 export const SELECT_REMOTE = 'selectRemote';
+export const SELECT_WORKTREE = 'selectWorktree';
 export const DELETE_BRANCH_AFTER_MERGE = 'deleteBranchAfterMerge';
 export const REMOTES = 'remotes';
 export const PULL_PR_BRANCH_BEFORE_CHECKOUT = 'pullPullRequestBranchBeforeCheckout';
@@ -43,6 +44,8 @@ export type PullPRBranchVariants = 'never' | 'pull' | 'pullAndMergeBase' | 'pull
 export const UPSTREAM_REMOTE = 'upstreamRemote';
 export const DEFAULT_CREATE_OPTION = 'defaultCreateOption';
 export const CREATE_BASE_BRANCH = 'createDefaultBaseBranch';
+export const AUTO_REPO_DETECTION = 'autoRepositoryDetection';
+export type AutoRepoDetectionVariants = 'workspace' | true;
 
 export const ISSUES_SETTINGS_NAMESPACE = 'githubIssues';
 export const ASSIGN_WHEN_WORKING = 'assignWhenWorking';
@@ -69,6 +72,10 @@ export const EXPERIMENTAL_NOTIFICATIONS_PAGE_SIZE = 'experimental.notificationsV
 export const EXPERIMENTAL_NOTIFICATIONS_SCORE = 'experimental.notificationsScore';
 export const WEBVIEW_REFRESH_INTERVAL = 'webviewRefreshInterval';
 export const DEV_MODE = 'devMode';
+
+export const PULL_REQUEST_AVATAR_DISPLAY = 'pullRequestAvatarDisplay';
+export type IssueAvatarDisplay = 'author' | 'assignee' | 'state' | 'generic';
+export type PullRequestAvatarDisplay = 'author' | 'state' | 'generic';
 
 // git
 export const GIT = 'git';
