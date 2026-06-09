@@ -1,5 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Modified by Hannah Potter 2026.
+ *  Copyright (c) 2026 Hannah Potter.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -138,7 +140,8 @@ input[type='checkbox'] {
 	outline: none;
 }
 
-input[type='checkbox']:checked {
+input[type='checkbox']:checked,
+input[type='checkbox']:indeterminate {
 	background-color: var(--vscode-checkbox-selectBackground, var(--vscode-checkbox-background));
 }
 
@@ -164,6 +167,16 @@ input[type='checkbox']:checked {
 
 .checkbox-wrapper:has(input:checked)::after {
 	opacity: 1;
+}
+
+.checkbox-wrapper:has(input:indeterminate)::after {
+	opacity: 1;
+	transform: none;
+	width: 8px;
+	height: 0;
+	border-width: 0 0 2px 0;
+	top: 8px;
+	left: 5px;
 }
 
 /*

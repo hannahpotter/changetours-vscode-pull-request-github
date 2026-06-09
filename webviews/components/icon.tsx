@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Modified by Hannah Potter 2026.
+ *  Copyright (c) 2026 Hannah Potter.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-
 
 import * as React from 'react';
 
@@ -20,23 +21,36 @@ export const chevronDownIcon = <Icon src={require('../../resources/icons/codicon
 export const circleFilledIcon = <Icon src={require('../../resources/icons/codicons/circle-filled.svg')} className='pending' />;
 export const closeIcon = <Icon src={require('../../resources/icons/codicons/close.svg')} className='close' />;
 export const cloudUploadIcon = <Icon src={require('../../resources/icons/codicons/cloud-upload.svg')} />;
+export const codeIcon = <Icon src={require('../../resources/icons/codicons/code.svg')} />;
+export const codeReviewIcon = <Icon src={require('../../resources/icons/codicons/code-review.svg')} />;
 export const commentIcon = <Icon src={require('../../resources/icons/codicons/comment.svg')} />;
 export const copilotIcon = <Icon src={require('../../resources/icons/codicons/copilot.svg')} />;
 export const copyIcon = <Icon src={require('../../resources/icons/codicons/copy.svg')} />;
+export const diffIcon = <Icon src={require('../../resources/icons/codicons/diff.svg')} />;
+export const diffSingleIcon = <Icon src={require('../../resources/icons/codicons/diff-single.svg')} />;
 export const editIcon = <Icon src={require('../../resources/icons/codicons/edit.svg')} />;
 export const errorIcon = <Icon src={require('../../resources/icons/codicons/error.svg')} />;
+export const eyeIcon = <Icon src={require('../../resources/icons/codicons/eye.svg')} />;
+export const eyeClosedIcon = <Icon src={require('../../resources/icons/codicons/eye-closed.svg')} />;
+export const ellipsisIcon = <Icon src={require('../../resources/icons/codicons/ellipsis.svg')} />;
 export const feedbackIcon = <Icon src={require('../../resources/icons/codicons/feedback.svg')} />;
+export const foldIcon = <Icon src={require('../../resources/icons/codicons/fold.svg')} />;
+export const unfoldIcon = <Icon src={require('../../resources/icons/codicons/unfold.svg')} />;
 export const gitCommitIcon = <Icon src={require('../../resources/icons/codicons/git-commit.svg')} />;
 export const gitCompareIcon = <Icon src={require('../../resources/icons/codicons/git-compare.svg')} />;
 export const gitMergeIcon = <Icon src={require('../../resources/icons/codicons/git-merge.svg')} />;
 export const gitPullRequestClosedIcon = <Icon src={require('../../resources/icons/codicons/git-pull-request-closed.svg')} />;
 export const gitPullRequestDraftIcon = <Icon src={require('../../resources/icons/codicons/git-pull-request-draft.svg')} />;
 export const gitPullRequestIcon = <Icon src={require('../../resources/icons/codicons/git-pull-request.svg')} />;
+export const gripperIcon = <Icon src={require('../../resources/icons/codicons/gripper.svg')} />;
 export const issuescon = <Icon src={require('../../resources/icons/codicons/issues.svg')} />;
+export const listTree = <Icon src={require('../../resources/icons/codicons/list-tree.svg')} />;
 export const loadingIcon = <Icon className='loading' src={require('../../resources/icons/codicons/loading.svg')} />;
 export const milestoneIcon = <Icon src={require('../../resources/icons/codicons/milestone.svg')} />;
+export const newCollectionIcon = <Icon src={require('../../resources/icons/codicons/new-collection.svg')} />;
 export const notebookTemplate = <Icon src={require('../../resources/icons/codicons/notebook-template.svg')} />;
 export const passIcon = <Icon src={require('../../resources/icons/codicons/pass.svg')} />;
+export const pinnedIcon = <Icon src={require('../../resources/icons/codicons/pinned.svg')} />;
 export const projectIcon = <Icon src={require('../../resources/icons/codicons/github-project.svg')} />;
 export const quoteIcon = <Icon src={require('../../resources/icons/codicons/quote.svg')} />;
 export const requestChangesIcon = <Icon src={require('../../resources/icons/codicons/request-changes.svg')} />;
@@ -44,10 +58,13 @@ export const settingsIcon = <Icon src={require('../../resources/icons/codicons/s
 export const sparkleIcon = <Icon src={require('../../resources/icons/codicons/sparkle.svg')} />;
 export const stopCircleIcon = <Icon src={require('../../resources/icons/codicons/stop-circle.svg')} />;
 export const syncIcon = <Icon src={require('../../resources/icons/codicons/sync.svg')} />;
+export const symbolStringIcon = <Icon src={require('../../resources/icons/codicons/symbol-string.svg')} />;
 export const tagIcon = <Icon src={require('../../resources/icons/codicons/tag.svg')} />;
+export const terminalIcon = <Icon src={require('../../resources/icons/codicons/terminal.svg')} />;
 export const tasklistIcon = <Icon src={require('../../resources/icons/codicons/tasklist.svg')} />;
 export const threeBars = <Icon src={require('../../resources/icons/codicons/three-bars.svg')} />;
 export const trashIcon = <Icon src={require('../../resources/icons/codicons/trash.svg')} />;
+export const unpinIcon	= <Icon src={require('../../resources/icons/codicons/unpin.svg')} />;
 export const warningIcon = <Icon src={require('../../resources/icons/codicons/warning.svg')} />;
 export const prMergeIcon = <Icon src={require('../../resources/icons/codicons/merge.svg')} />;
 export const outputIcon = <Icon src={require('../../resources/icons/codicons/output.svg')} />;

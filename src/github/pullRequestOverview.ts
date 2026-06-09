@@ -8,6 +8,7 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { OpenCommitChangesArgs, OpenLocalFileArgs } from '../../common/views';
 import { openPullRequestOnGitHub } from '../commands';
+import { findExistingChangeTour } from './codeTourFileLocator';
 import { getCopilotApi } from './copilotApi';
 import { SessionIdForPr } from './copilotRemoteAgent';
 import { FolderRepositoryManager } from './folderRepositoryManager';
@@ -142,6 +143,14 @@ export class PullRequestOverviewPanel extends IssueOverviewPanel<PullRequestMode
 	 */
 	public static override findPanel(owner: string, repo: string, number: number): PullRequestOverviewPanel | undefined {
 		return super.findPanel(owner, repo, number) as PullRequestOverviewPanel | undefined;
+	}
+
+	/**
+	 * Push a hasChangeTour update to the webview so the checkout dropdown
+	 * swaps between "New" and "View / Edit" without requiring a full reload.
+	 */
+	public notifyHasChangeTourChanged(hasChangeTour: boolean): void {
+		this._postMessage({ command: 'pr.update-hasChangeTour', hasChangeTour });
 	}
 
 	/**
@@ -460,6 +469,11 @@ export class PullRequestOverviewPanel extends IssueOverviewPanel<PullRequestMode
 				revertable: pullRequest.state === GithubItemStateEnum.Merged,
 				isCopilotOnMyBehalf: await isCopilotOnMyBehalf(pullRequest, currentUser, coAuthors),
 				generateDescriptionTitle: this.getGenerateDescriptionTitle(),
+				hasChangeTour: !!(await findExistingChangeTour(
+					this._folderRepositoryManager.repository.rootUri,
+					pullRequest.number,
+					pullRequest.title,
+				)),
 				closingIssues: await (async () => {
 					const enterpriseUri = pullRequest.remote.isEnterprise ? getEnterpriseUri() : undefined;
 					const issueOrUrlExpression = getIssueOrURLExpression(enterpriseUri);

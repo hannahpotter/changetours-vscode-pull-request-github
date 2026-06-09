@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { throttling } from '@octokit/plugin-throttling';
 import { Octokit } from '@octokit/rest';
 import { ApolloClient, InMemoryCache } from 'apollo-boost';
 import { setContext } from 'apollo-link-context';
@@ -588,13 +589,44 @@ export class CredentialStore extends Disposable {
 			};
 		}
 
-		const octokit = new Octokit({
+		// Attach @octokit/plugin-throttling so the REST client transparently
+		// backs off on primary and secondary rate limits instead of throwing.
+		// The previous behavior was: any rate-limit response surfaces as a
+		// 403/429 to the caller, which then either swallowed it silently or
+		// turned it into a cryptic error message. With the plugin, callers
+		// see successful responses after a brief wait (up to two retries),
+		// and the user only sees the rate-limit banner on the third strike.
+		// Secondary (abuse) limits in particular are usually short - seconds
+		// to a minute - and almost always recoverable by waiting.
+		const ThrottledOctokit = Octokit.plugin(throttling);
+		const octokit = new ThrottledOctokit({
 			request: { agent, fetch: fetchCore },
 			userAgent: 'GitHub VSCode Pull Requests',
 			// `shadow-cat-preview` is required for Draft PR API access -- https://developer.github.com/v3/previews/#draft-pull-requests
 			previews: ['shadow-cat-preview', 'merge-info-preview'],
 			auth: `${token || ''}`,
 			baseUrl: baseUrl,
+			throttle: {
+				onRateLimit: (retryAfter, options, _o, retryCount) => {
+					Logger.warn(
+						`Primary rate limit hit on ${(options as { method?: string; url?: string }).method} ${(options as { method?: string; url?: string }).url}; retryAfter=${retryAfter}s retryCount=${retryCount}`,
+						'OctokitThrottle',
+					);
+					// Retry up to twice, then let the error bubble so our
+					// rate-limit banner can render with the reset time. Each
+					// retry is automatically delayed by `retryAfter` seconds.
+					return retryCount < 2;
+				},
+				onSecondaryRateLimit: (retryAfter, options, _o, retryCount) => {
+					Logger.warn(
+						`Secondary rate limit hit on ${(options as { method?: string; url?: string }).method} ${(options as { method?: string; url?: string }).url}; retryAfter=${retryAfter}s retryCount=${retryCount}`,
+						'OctokitThrottle',
+					);
+					// Secondary limits are usually short; one retry is plenty
+					// to absorb most of them transparently.
+					return retryCount < 1;
+				},
+			},
 		});
 
 		let graphQLBaseUrl = baseUrl;

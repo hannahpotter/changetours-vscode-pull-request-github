@@ -1,0 +1,274 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 Hannah Potter. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* Expand/collapse toggle icon shared by code tour views */
+.expand-icon {
+	display: inline-block;
+	transition: transform 0.15s ease;
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	width: 16px;
+	height: 16px;
+}
+
+.expand-icon.closed {
+	transform: rotate(-90deg);
+}
+
+/* Diff table */
+.diff-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--vscode-editor-font-size, 13px);
+	line-height: 1.5;
+	table-layout: fixed;
+}
+
+.diff-line {
+	border: none;
+}
+
+.diff-line-num {
+	width: 86px;
+	min-width: 86px;
+	text-align: right;
+	color: var(--vscode-editorLineNumber-foreground, #858585);
+	font-size: 12px;
+	user-select: none;
+	vertical-align: top;
+	border-right: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+}
+
+.diff-line-content {
+	padding: 0 12px;
+	white-space: pre-wrap;
+	word-break: break-all;
+	tab-size: 4;
+}
+
+.diff-line-prefix {
+	display: inline-block;
+	width: 1ch;
+	user-select: none;
+}
+
+/* Hunk header */
+.diff-hunk-header {
+	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(90, 130, 180, 0.1));
+}
+
+.diff-search-match {
+	background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.18));
+}
+
+.diff-hunk-header.diff-search-match {
+	box-shadow: inset 0 0 0 1px var(--vscode-editor-findMatchBorder, var(--vscode-focusBorder));
+}
+
+.diff-hunk-header.draggable-hunk {
+	cursor: grab;
+}
+
+.diff-hunk-header.draggable-hunk:active {
+	cursor: grabbing;
+}
+
+.diff-hunk-header .diff-line-content {
+	display: flex;
+	justify-content: space-between;
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
+	font-size: 12px;
+}
+
+.diff-line.diff-search-match .diff-line-content {
+	box-shadow: inset 0 0 0 1px var(--vscode-editor-findMatchBorder, var(--vscode-focusBorder));
+}
+
+.diff-hunk-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	height: fit-content;
+	color: var(--vscode-button-background);
+	flex-shrink: 0;
+}
+
+.diff-hunk-actions .icon {
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	line-height: 0;
+	flex-shrink: 0;
+}
+
+.diff-hunk-actions .icon svg {
+	width: 16px;
+	height: 16px;
+	display: block;
+}
+
+.diff-hunk-covered {
+	opacity: 0.5;
+	filter: grayscale(100%);
+}
+
+/* Addition */
+.diff-add {
+	background: var(--vscode-diffEditor-insertedLineBackground, rgba(40, 167, 69, 0.15));
+}
+
+.diff-add .diff-line-content {
+	color: var(--vscode-gitDecoration-addedResourceForeground, #28a745);
+}
+
+/* Deletion */
+.diff-delete {
+	background: var(--vscode-diffEditor-removedLineBackground, rgba(215, 58, 73, 0.15));
+}
+
+.diff-delete .diff-line-content {
+	color: var(--vscode-gitDecoration-deletedResourceForeground, #d73a49);
+}
+
+/* Context (unchanged) */
+.diff-context .diff-line-content {
+	color: var(--vscode-editor-foreground);
+}
+
+/* - Side-by-side layout --------------------------------------------------- *
+ * In side-by-side mode the row is { leftLineNum | leftContent | rightLineNum | rightContent }.
+ * Column widths come from <colgroup> so the hunk-header row (a single colspan=4
+ * cell) doesn't collapse the rest of the table into one column. Background
+ * colors are applied per-cell so each side can be tinted independently. */
+.diff-table-side-by-side {
+	table-layout: fixed;
+}
+
+.diff-table-side-by-side .diff-col-num {
+	width: 72px;
+}
+
+/* Override the inline-mode 86px so the line-num cells match the colgroup
+ * width even if the browser falls back from <col> sizing. The 72px width
+ * accommodates the hunk-header actions row (chevron + select checkbox +
+ * overflow-menu trigger) without bleeding into the title cell; regular
+ * line-number cells get a touch of extra padding which still reads naturally. */
+.diff-table-side-by-side .diff-line-num,
+.diff-table-side-by-side .diff-line-num-left,
+.diff-table-side-by-side .diff-line-num-right,
+.diff-table-side-by-side .diff-line-num-empty {
+	width: 72px;
+	min-width: 72px;
+}
+
+.diff-table-side-by-side .diff-line-num-left,
+.diff-table-side-by-side .diff-line-num-right {
+	border-right: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+}
+
+/* The hunk-header chevron sits in a single line-num cell; line up the
+ * action span the same way the inline header does. */
+.diff-table-side-by-side .diff-hunk-header-actions {
+	border-right: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+	text-align: left;
+	padding-left: 4px;
+}
+
+/* The inline-mode `.diff-hunk-header .diff-line-content { display: flex }`
+ * rule above breaks colSpan on the title cell in side-by-side mode (the cell
+ * leaves table-cell layout and only fills one column). Force it back so the
+ * colSpan={3} title actually spans the right side too. */
+.diff-table-side-by-side .diff-hunk-header .diff-line-content {
+	display: table-cell;
+	font-style: italic;
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.diff-table-side-by-side .diff-line-content.diff-add {
+	background: var(--vscode-diffEditor-insertedLineBackground, rgba(40, 167, 69, 0.15));
+	color: var(--vscode-gitDecoration-addedResourceForeground, #28a745);
+}
+
+.diff-table-side-by-side .diff-line-content.diff-delete {
+	background: var(--vscode-diffEditor-removedLineBackground, rgba(215, 58, 73, 0.15));
+	color: var(--vscode-gitDecoration-deletedResourceForeground, #d73a49);
+}
+
+.diff-table-side-by-side .diff-line-content.diff-context {
+	color: var(--vscode-editor-foreground);
+}
+
+.diff-table-side-by-side .diff-line-empty {
+	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(127, 127, 127, 0.05));
+}
+
+.diff-table-side-by-side .diff-line-num-empty {
+	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(127, 127, 127, 0.05));
+}
+
+.diff-table-side-by-side .diff-line.diff-hunk-header td {
+	background: var(--vscode-diffEditor-unchangedCodeBackground, rgba(90, 130, 180, 0.1));
+}
+
+/* Per-side paragraph highlights. The full-row .diff-line-highlighted rule
+ * (defined in index.css) handles context rows where both sides are highlighted;
+ * these rules cover change rows where only one side may be highlighted.
+ *
+ * Uses CSS variables so adjacent-row collapse can set top and bottom edges
+ * independently - a middle row in a run ends up with both transparent and
+ * the box-shadow paints nothing, leaving a single continuous bracket. */
+.diff-line-highlighted-left {
+	--hl-left-edge: rgba(0, 144, 241, 0.7);
+	--hl-left-top: var(--hl-left-edge);
+	--hl-left-bottom: var(--hl-left-edge);
+}
+
+.diff-line-highlighted-right {
+	--hl-right-edge: rgba(0, 144, 241, 0.7);
+	--hl-right-top: var(--hl-right-edge);
+	--hl-right-bottom: var(--hl-right-edge);
+}
+
+.diff-line-highlighted-left > td:nth-child(1),
+.diff-line-highlighted-left > td:nth-child(2) {
+	box-shadow:
+		inset 0 1px 0 var(--hl-left-top, transparent),
+		inset 0 -1px 0 var(--hl-left-bottom, transparent);
+}
+
+.diff-line-highlighted-right > td:nth-child(3),
+.diff-line-highlighted-right > td:nth-child(4) {
+	box-shadow:
+		inset 0 1px 0 var(--hl-right-top, transparent),
+		inset 0 -1px 0 var(--hl-right-bottom, transparent);
+}
+
+.diff-line-highlighted-left > td:nth-child(1) {
+	background: rgba(0, 144, 241, 0.15);
+}
+
+.diff-line-highlighted-right > td:nth-child(3) {
+	background: rgba(0, 144, 241, 0.15);
+}
+
+/* Collapse internal edges between adjacent same-side highlight rows. */
+.diff-line-highlighted-left + .diff-line-highlighted-left {
+	--hl-left-top: transparent;
+}
+
+.diff-line-highlighted-left:has(+ .diff-line-highlighted-left) {
+	--hl-left-bottom: transparent;
+}
+
+.diff-line-highlighted-right + .diff-line-highlighted-right {
+	--hl-right-top: transparent;
+}
+
+.diff-line-highlighted-right:has(+ .diff-line-highlighted-right) {
+	--hl-right-bottom: transparent;
+}

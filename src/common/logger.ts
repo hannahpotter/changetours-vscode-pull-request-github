@@ -17,7 +17,7 @@ class Log extends Disposable {
 
 	constructor() {
 		super();
-		this._outputChannel = this._register(vscode.window.createOutputChannel('GitHub Pull Request', { log: true }));
+		this._outputChannel = this._register(vscode.window.createOutputChannel('Change Tours', { log: true }));
 	}
 
 	public startPerfMarker(marker: string) {
@@ -67,6 +67,15 @@ class Log extends Disposable {
 
 	public error(message: string | Error | Stringish | Object, component: string) {
 		this._outputChannel.error(this.logString(message, component));
+	}
+
+	/**
+	 * Reveal the "GitHub Pull Request" output channel. Used by UI surfaces
+	 * (e.g. the Change Tour rate-limit banner's "View log" link) to send the
+	 * user to a place where the diagnostic context for the failure lives.
+	 */
+	public show(preserveFocus?: boolean): void {
+		this._outputChannel.show(preserveFocus);
 	}
 }
 

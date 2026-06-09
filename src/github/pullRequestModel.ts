@@ -765,7 +765,7 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 		}
 
 		if (!data.addPullRequestReviewThread.thread) {
-			throw new Error('File has been deleted.');
+			throw new Error(`Cannot add comment: "${commentPath}" is not part of this pull request. If the file is untracked or uncommitted (e.g., a new Change Tour), commit and push it to the pull request first.`);
 		}
 
 		if (!suppressDraftModeUpdate) {
@@ -1495,9 +1495,22 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 		}
 	}
 
-	async getReviewThreads(): Promise<IReviewThread[]> {
+	async getReviewThreads(useCache: boolean = false): Promise<IReviewThread[]> {
+		// `useCache: true` skips the GraphQL fetch when the cache is already
+		// populated. Mirrors the same pattern as `GitHubRepository.getPullRequest`.
+		// The Change Tour viewer reloads threads on every mount, so this saves
+		// a query on every editor reopen for the same tour file.
+		if (useCache && this._reviewThreadsCacheInitialized && this._reviewThreadsCache) {
+			return this._reviewThreadsCache;
+		}
 		const raw = await this.getRawReviewComments();
-		return this.setReviewThreadCacheFromRaw(raw);
+		const threads = this.setReviewThreadCacheFromRaw(raw);
+		// Mark the cache as initialized so subsequent `useCache: true` calls
+		// can short-circuit. `setReviewThreadCacheFromRaw` populates
+		// `_reviewThreadsCache` but `initializeReviewThreadCache` is what
+		// historically set the `Initialized` flag - bring them in sync.
+		this._reviewThreadsCacheInitialized = true;
+		return threads;
 	}
 
 	/**
@@ -1675,7 +1688,9 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 		pullRequestModel: PullRequestModel,
 		change: SlimFileChange | InMemFileChange,
 		diffTitle: string,
-		line?: number
+		line?: number,
+		viewColumn?: vscode.ViewColumn,
+		preview?: boolean,
 	): Promise<void> {
 		let headUri, baseUri: vscode.Uri;
 		if (!pullRequestModel.equals(folderManager.activePullRequest)) {
@@ -1734,7 +1749,11 @@ export class PullRequestModel extends IssueModel<PullRequest> implements IPullRe
 			baseUri,
 			headUri,
 			`${diffTitle} (Pull Request)`,
-			line ? { selection: { start: { line, character: 0 }, end: { line, character: 0 } } } : {},
+			{
+				...(line && { selection: { start: { line, character: 0 }, end: { line, character: 0 } } }),
+				viewColumn,
+				preview
+			},
 		);
 	}
 

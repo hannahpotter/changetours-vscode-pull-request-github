@@ -2,7 +2,7 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-
+// Modified by Hannah Potter 2026.
 // Largely copied from https://github.com/microsoft/vscode/blob/72208d7bbb0e151a54f012ffb382095f0f4c5ba4/build/hygiene.js
 
 const filter = require('gulp-filter');
@@ -14,9 +14,23 @@ const fs = require('fs');
 const pall = require('p-all');
 const { all, tsFormattingFilter, copyrightFilter, unicodeFilter, indentationFilter } = require('./filters');
 
-const copyrightHeaderLines = [
+const microsoftCopyrightHeaderLines = [
 	'/*---------------------------------------------------------------------------------------------',
 	' *  Copyright (c) Microsoft Corporation. All rights reserved.',
+	' *  Licensed under the MIT License. See License.txt in the project root for license information.',
+	' *--------------------------------------------------------------------------------------------*/',
+];
+const hannahModifiedCopyrightHeaderLines = [
+	'/*---------------------------------------------------------------------------------------------',
+	' *  Copyright (c) Microsoft Corporation. All rights reserved.',
+	' *  Modified by Hannah Potter 2026.',
+	' *  Copyright (c) 2026 Hannah Potter.',
+	' *  Licensed under the MIT License. See License.txt in the project root for license information.',
+	' *--------------------------------------------------------------------------------------------*/',
+];
+const hannahCopyrightHeaderLines = [
+	'/*---------------------------------------------------------------------------------------------',
+	' *  Copyright (c) 2026 Hannah Potter. All rights reserved.',
 	' *  Licensed under the MIT License. See License.txt in the project root for license information.',
 	' *--------------------------------------------------------------------------------------------*/',
 ];
@@ -79,12 +93,33 @@ function hygiene(some) {
 	const copyrights = es.through(function (file) {
 		const lines = file.__lines;
 
-		for (let i = 0; i < copyrightHeaderLines.length; i++) {
-			if (lines[i] !== copyrightHeaderLines[i]) {
-				console.error(file.relative + ': Missing or bad copyright statement');
-				errorCount++;
+		let missingMicrosoftCopyright = false;
+		for (let i = 0; i < microsoftCopyrightHeaderLines.length; i++) {
+			if (lines[i] !== microsoftCopyrightHeaderLines[i]) {
+				missingMicrosoftCopyright = true;
 				break;
 			}
+		}
+
+		let missingHannahCopyright = false;
+		for (let i = 0; i < hannahCopyrightHeaderLines.length; i++) {
+			if (lines[i] !== hannahCopyrightHeaderLines[i]) {
+				missingHannahCopyright = true;
+				break;
+			}
+		}
+
+		let missingHannahModifiedCopyright = false;
+		for (let i = 0; i < hannahModifiedCopyrightHeaderLines.length; i++) {
+			if (lines[i] !== hannahModifiedCopyrightHeaderLines[i]) {
+				missingHannahModifiedCopyright = true;
+				break;
+			}
+		}
+
+		if (missingMicrosoftCopyright && missingHannahCopyright && missingHannahModifiedCopyright) {
+			console.error(file.relative + ': Missing or bad copyright statement');
+			errorCount++;
 		}
 
 		this.emit('data', file);

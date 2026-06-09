@@ -21,6 +21,8 @@ export interface SimpleFileChange {
 	readonly fileName: string;
 	readonly blobUrl: string | undefined;
 	readonly diffHunks?: DiffHunk[];
+	/** Git blob SHA of the new-side file at the head of the PR. Optional - present when the PR file API supplied it. */
+	readonly blobSha?: string;
 }
 
 export class InMemFileChange implements SimpleFileChange {
@@ -32,6 +34,7 @@ export class InMemFileChange implements SimpleFileChange {
 		public readonly patch: string,
 		public readonly diffHunks: DiffHunk[] | undefined,
 		public readonly blobUrl: string,
+		public readonly blobSha?: string,
 	) { }
 }
 
@@ -42,5 +45,6 @@ export class SlimFileChange implements SimpleFileChange {
 		public readonly status: GitChangeType,
 		public readonly fileName: string,
 		public readonly previousFileName: string | undefined,
+		public readonly blobSha?: string,
 	) { }
 }

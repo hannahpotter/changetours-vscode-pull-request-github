@@ -1,5 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Modified by Hannah Potter 2026.
+ *  Copyright (c) 2026 Hannah Potter.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -113,7 +115,36 @@ export interface PullRequest extends Issue {
 	busy?: boolean;
 	loadingCommit?: string;
 	generateDescriptionTitle?: string;
+	hasChangeTour?: boolean;
 	closingIssues?: IssueReference[];
+}
+
+export interface ChangedFileInfo {
+	fileName: string;
+	status: string;
+	additions?: number;
+	deletions?: number;
+	previousFileName?: string;
+	patch?: string;
+	/** Git blob SHA of the file at the PR head. Used to stamp `baseBlob` on hunks. */
+	blobSha?: string;
+}
+
+/**
+ * Snapshot of the bound PR's file changes that the extension posts to the
+ * change-tour editor webview as `codeTourEditor.changesData`. Carries the
+ * outer PR metadata plus the per-file diff entries; consumed by both the
+ * Changes overview (which spreads the whole object as props) and the
+ * editor's Excluded outline section (which only reads `files`).
+ */
+export interface ChangeTourChangesData {
+	title: string;
+	number: number;
+	owner: string;
+	repo: string;
+	baseSha?: string;
+	headSha?: string;
+	files: ChangedFileInfo[];
 }
 
 export interface ProjectItemsReply {
@@ -210,6 +241,7 @@ export interface BaseContext {
 
 export interface OverviewContext extends BaseContext {
 	'github:checkoutMenu': true;
+	'github:prHasChangeTour': boolean;
 }
 
 export interface ReadyForReviewContext extends BaseContext {

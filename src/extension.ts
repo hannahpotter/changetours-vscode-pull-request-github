@@ -1,5 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Modified by Hannah Potter 2026.
+ *  Copyright (c) 2026 Hannah Potter.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -22,6 +24,8 @@ import { Schemes } from './common/uri';
 import { isDescendant } from './common/utils';
 import { EXTENSION_ID, FOCUS_REVIEW_MODE } from './constants';
 import { createExperimentationService, ExperimentationTelemetry } from './experimentationService';
+import { CodeTourEditorProvider } from './github/codeTourEditorProvider';
+import { CodeTourStepsTreeView } from './github/codeTourStepsTreeView';
 import { CopilotRemoteAgentManager } from './github/copilotRemoteAgent';
 import { CredentialStore } from './github/credentials';
 import { FolderRepositoryManager } from './github/folderRepositoryManager';
@@ -35,6 +39,9 @@ import { StateManager } from './issues/stateManager';
 import { IssueContextProvider } from './lm/issueContextProvider';
 import { PullRequestContextProvider, WorkspaceContextProvider } from './lm/pullRequestContextProvider';
 import { registerTools } from './lm/tools/tools';
+import { registerExternalIntegrationCommands } from './lm/tourAssistant/claudeCodeBridge';
+import { registerChangeTourChatParticipant } from './lm/tourAssistant/participant';
+import { registerTourAssistantTools } from './lm/tourAssistant/tools';
 import { migrate } from './migrations';
 import { NotificationsFeatureRegister } from './notifications/notificationsFeatureRegistar';
 import { NotificationsManager } from './notifications/notificationsManager';
@@ -320,6 +327,21 @@ function initChat(context: vscode.ExtensionContext, credentialStore: CredentialS
 	} else {
 		initBasedOnSettingChange(PR_SETTINGS_NAMESPACE, EXPERIMENTAL_CHAT, chatEnabled, () => registerTools(context, credentialStore, reposManager), context.subscriptions);
 	}
+
+	// Change Tour assistant - independent of EXPERIMENTAL_CHAT, gated on its own setting.
+	const TOUR_ASSISTANT_NAMESPACE = 'changeTour.assistant';
+	const TOUR_ASSISTANT_ENABLED = 'enabled';
+	const tourAssistantEnabled = () => vscode.workspace.getConfiguration(TOUR_ASSISTANT_NAMESPACE).get<boolean>(TOUR_ASSISTANT_ENABLED, true);
+	const initTourAssistant = () => {
+		registerTourAssistantTools(context, reposManager);
+		context.subscriptions.push(registerChangeTourChatParticipant(context, reposManager));
+		registerExternalIntegrationCommands(context);
+	};
+	if (tourAssistantEnabled()) {
+		initTourAssistant();
+	} else {
+		initBasedOnSettingChange(TOUR_ASSISTANT_NAMESPACE, TOUR_ASSISTANT_ENABLED, tourAssistantEnabled, initTourAssistant, context.subscriptions);
+	}
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<GitApiImpl> {
@@ -499,6 +521,24 @@ async function deferredActivate(context: vscode.ExtensionContext, showPRControll
 	const githubFilesystemProvider = new GitHubCommitFileSystemProvider(reposManager, apiImpl, credentialStore);
 	context.subscriptions.push(vscode.workspace.registerFileSystemProvider(Schemes.GitHubCommit, githubFilesystemProvider, { isReadonly: new vscode.MarkdownString(vscode.l10n.t('GitHub commits cannot be edited')) }));
 	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(Schemes.CheckRunLog, new CheckRunLogContentProvider(reposManager)));
+
+	context.subscriptions.push(CodeTourEditorProvider.register(context, reposManager));
+
+	const codeTourStepsTreeView = new CodeTourStepsTreeView(reposManager);
+	context.subscriptions.push(codeTourStepsTreeView);
+	context.subscriptions.push(vscode.commands.registerCommand('codetour.scrollToSection', (uri, id) => CodeTourEditorProvider.scrollToNode(uri, id)));
+	context.subscriptions.push(vscode.commands.registerCommand('codetour.treeItem.openDiff', (node) => {
+		if (node && node.hunk) {
+			vscode.commands.executeCommand('codetour.openDiff', node.hunk);
+		}
+	}));
+	context.subscriptions.push(vscode.commands.registerCommand('codetour.treeItem.checkoutPR', () => {
+		const CodeTourStepsTreeView = require('./github/codeTourStepsTreeView').CodeTourStepsTreeView;
+		const node = CodeTourStepsTreeView.currentPRParams;
+		if (node && node.prNumber && node.prOwner && node.prRepo && CodeTourEditorProvider.activeDocumentTracker) {
+			vscode.commands.executeCommand('pr.checkoutFromCodeTour', node.prNumber, node.prOwner, node.prRepo, CodeTourEditorProvider.activeDocumentTracker.uri);
+		}
+	}));
 
 	await init(context, apiImpl, credentialStore, repositories, prTree, liveshareApiPromise, showPRController, reposManager, createPrHelper, copilotRemoteAgentManager, themeWatcher, prsTreeModel);
 	return apiImpl;

@@ -349,6 +349,7 @@ export async function parseDiff(
 					gitChangeType,
 					review.filename,
 					review.previous_filename,
+					review.sha,
 				),
 			);
 			continue;
@@ -363,7 +364,8 @@ export async function parseDiff(
 				review.previous_filename,
 				review.patch ?? '',
 				diffHunks,
-				review.blob_url
+				review.blob_url,
+				review.sha,
 			),
 		);
 	}

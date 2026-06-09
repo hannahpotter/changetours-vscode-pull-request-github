@@ -1,5 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Modified by Hannah Potter 2026.
+ *  Copyright (c) 2026 Hannah Potter.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 'use strict';
@@ -18,6 +20,9 @@ import { SessionLinkInfo } from './common/timelineEvent';
 import { asTempStorageURI, fromPRUri, fromReviewUri, Schemes, toPRUri } from './common/uri';
 import { formatError } from './common/utils';
 import { EXTENSION_ID } from './constants';
+import { CodeTourEditorProvider } from './github/codeTourEditorProvider';
+import { ensureChangeTourDir, findExistingChangeTour, getChangeTourUri } from './github/codeTourFileLocator';
+import { appendWholeFileExclusionMarker, dropTourHunkNodes, findTourHunksMatchingMarker, parseCodeTourMarkdown, serializeCodeTourMarkdown, type TourHunkNode } from './github/codeTourMarkdown';
 import { CrossChatSessionWithPR } from './github/copilotApi';
 import { CopilotRemoteAgentManager, SessionIdForPr } from './github/copilotRemoteAgent';
 import { guessExtensionFromMime, pickFilesForUpload, placeholdersForNames, runFileUploads, runPendingUploads } from './github/fileUpload';
@@ -30,6 +35,7 @@ import { GHPRComment, GHPRCommentThread, TemporaryComment } from './github/prCom
 import { PullRequestModel } from './github/pullRequestModel';
 import { PullRequestOverviewPanel } from './github/pullRequestOverview';
 import { chooseItem } from './github/quickPicks';
+import { formatRateLimitMessage, getRecentRateLimit } from './github/rateLimitError';
 import { RepositoriesManager } from './github/repositoriesManager';
 import { codespacesPrLink, getIssuesUrl, getPullsUrl, isInCodespaces, ISSUE_OR_URL_EXPRESSION, parseIssueExpressionOutput, vscodeDevPrLink } from './github/utils';
 import { BaseContext, OverviewContext } from './github/views';
@@ -146,6 +152,46 @@ export function registerCommands(
 	const logId = 'RegisterCommands';
 
 	PullRequestOverviewPanel.registerGlobalCommands(context, telemetry);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			'codetour.openDiff',
+			async (hunk: any) => {
+				const folderManager = reposManager.folderManagers[0];
+				if (!folderManager) {
+					return;
+				}
+
+				const activePR = folderManager.activePullRequest;
+
+				// If the hunk is associated with a PR and that PR is currently active, open the diff view through the PR to ensure comments are properly loaded and linked.
+				if (activePR && hunk.prNumber === activePR.number && hunk.prOwner === activePR.remote.owner && hunk.prRepo === activePR.remote.repositoryName) {
+					const changes = await activePR.getFileChangesInfo();
+					const changeModel = changes.find(c => c.fileName === hunk.file);
+
+					if (changeModel) {
+						await PullRequestModel.openDiff(folderManager, activePR, changeModel, hunk.file, hunk.startLine, vscode.ViewColumn.Beside, true);
+						return;
+					}
+				}
+
+
+				// Otherwise, open a simple diff view without comments.
+				const leftUri = vscode.Uri.file(pathLib.resolve(folderManager.repository.rootUri.fsPath, hunk.previousFile || hunk.file));
+				const rightUri = vscode.Uri.file(pathLib.resolve(folderManager.repository.rootUri.fsPath, hunk.file));
+
+				const options = {
+					selection: {
+						start: { line: hunk.startLine, character: 0 },
+						end: { line: hunk.endLine, character: 0 }
+					},
+					viewColumn: vscode.ViewColumn.Beside,
+					preview: true
+				};
+				await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, `${hunk.file} (Tour Diff)`, options);
+			}
+		)
+	);
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
@@ -462,7 +508,7 @@ export function registerCommands(
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('pr.pick', async (pr: PRNode | RepositoryChangesNode | PullRequestModel) => {
+		vscode.commands.registerCommand('pr.pick', async (pr: PRNode | RepositoryChangesNode | PullRequestModel, options?: { openChangesToTheSide?: boolean }) => {
 			if (pr === undefined) {
 				// This is unexpected, but has happened a few times.
 				Logger.error('Unexpectedly received undefined when picking a PR.', logId);
@@ -486,7 +532,7 @@ export function registerCommands(
 			}
 
 			const fromDescriptionPage = pr instanceof PullRequestModel;
-			return reviewsManager.switchToPr(folderManager, pullRequestModel, repository, fromDescriptionPage);
+			return reviewsManager.switchToPr(folderManager, pullRequestModel, repository, fromDescriptionPage, options);
 
 		}));
 
@@ -761,6 +807,380 @@ export function registerCommands(
 			}
 			return PullRequestModel.openChanges(folderReposManager, pullRequestModel);
 		}),
+	);
+
+	// View Change Tour: open the existing tour file for the PR in view mode.
+	// Falls back to a file picker only when invoked without a PR context (e.g. from the
+	// command palette without an active PR overview).
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.openCodeTour', async (ctx: BaseContext | undefined) => {
+			if (ctx) {
+				const resolved = await resolvePr(ctx);
+				if (!resolved) {
+					return;
+				}
+				const repoRoot = resolved.folderManager.repository.rootUri;
+				const existing = await findExistingChangeTour(repoRoot, resolved.pr.number, resolved.pr.title);
+				if (!existing) {
+					vscode.window.showInformationMessage(
+						vscode.l10n.t('No Change Tour exists for pull request #{0} yet. Use "New Change Tour" to create one.', resolved.pr.number),
+					);
+					return;
+				}
+				CodeTourEditorProvider.requestInitialMode(existing, 'view');
+				await vscode.commands.executeCommand('vscode.openWith', existing, 'codeTourEditor', { preview: false });
+				return;
+			}
+
+			// No PR context - keep the file-picker fallback for ad-hoc use.
+			const uris = await vscode.window.showOpenDialog({
+				canSelectFiles: true,
+				canSelectFolders: false,
+				canSelectMany: false,
+				filters: {
+					'Change Tours': ['changetour.md']
+				},
+				defaultUri: vscode.workspace.workspaceFolders?.[0].uri
+			});
+			if (uris && uris.length > 0) {
+				CodeTourEditorProvider.requestInitialMode(uris[0], 'view');
+				await vscode.commands.executeCommand('vscode.openWith', uris[0], 'codeTourEditor', { preview: false });
+			}
+		}),
+	);
+
+	// New Change Tour: create the canonical tour file for this PR (under
+	// <repo-root>/.changetours/<prNumber>-<sanitized-title>.changetour.md) and open it
+	// in edit mode. If a tour already exists for the PR, just opens it in edit mode.
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.newCodeTour', async (ctx: BaseContext | undefined) => {
+			if (!ctx) {
+				return;
+			}
+			const resolved = await resolvePr(ctx);
+			if (!resolved) {
+				return;
+			}
+			const repoRoot = resolved.folderManager.repository.rootUri;
+
+			let uri = await findExistingChangeTour(repoRoot, resolved.pr.number, resolved.pr.title);
+			const created = !uri;
+			if (!uri) {
+				uri = getChangeTourUri(repoRoot, resolved.pr.number, resolved.pr.title);
+				await ensureChangeTourDir(repoRoot);
+				// Stamp the PR's current base/head SHAs so the future
+				// outdated-detection feature can diff `headSha..currentHead`
+				// without having to recover them from elsewhere.
+				const baseSha = resolved.pr.base?.sha;
+				const headSha = resolved.pr.head?.sha;
+				const frontmatterLines = [
+					'---',
+					'schemaVersion: 1',
+					`prNumber: ${resolved.pr.number}`,
+					`prOwner: ${resolved.pr.remote.owner}`,
+					`prRepo: ${resolved.pr.remote.repositoryName}`,
+				];
+				if (baseSha) frontmatterLines.push(`baseSha: ${baseSha}`);
+				if (headSha) frontmatterLines.push(`headSha: ${headSha}`);
+				frontmatterLines.push('---');
+				const content = `${frontmatterLines.join('\n')}\n\n# ${resolved.pr.title}\n\n`;
+				await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+			}
+
+			CodeTourEditorProvider.requestInitialMode(uri, 'edit');
+			await vscode.commands.executeCommand('vscode.openWith', uri, 'codeTourEditor', { preview: false });
+
+			// If we just created the file, push a partial update to the PR overview so its
+			// dropdown swaps from "New Change Tour" to "View / Edit Change Tour" immediately.
+			if (created) {
+				PullRequestOverviewPanel
+					.findPanel(resolved.pr.remote.owner, resolved.pr.remote.repositoryName, resolved.pr.number)
+					?.notifyHasChangeTourChanged(true);
+			}
+		}),
+	);
+
+	// Edit Change Tour: open the existing tour file in edit mode. Errors if no tour exists
+	// (callers should show "New Change Tour" instead in that case via the menu's when clause).
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.editCodeTour', async (ctx: BaseContext | undefined) => {
+			if (!ctx) {
+				return;
+			}
+			const resolved = await resolvePr(ctx);
+			if (!resolved) {
+				return;
+			}
+			const repoRoot = resolved.folderManager.repository.rootUri;
+			const existing = await findExistingChangeTour(repoRoot, resolved.pr.number, resolved.pr.title);
+			if (!existing) {
+				vscode.window.showInformationMessage(
+					vscode.l10n.t('No Change Tour exists for pull request #{0} yet. Use "New Change Tour" to create one.', resolved.pr.number),
+				);
+				return;
+			}
+			CodeTourEditorProvider.requestInitialMode(existing, 'edit');
+			await vscode.commands.executeCommand('vscode.openWith', existing, 'codeTourEditor', { preview: false });
+		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.openOverviewFromCodeTour', async (uri?: unknown) => {
+			let docUri: vscode.Uri | undefined;
+			if (uri instanceof vscode.Uri) {
+				docUri = uri;
+			} else if (uri && typeof uri === 'object') {
+				// sometimes passed as { uri: vscode.Uri }
+				const obj = uri as { uri?: unknown };
+				if (obj.uri instanceof vscode.Uri) {
+					docUri = obj.uri;
+				}
+			}
+
+			if (!docUri) {
+				docUri = vscode.window.activeTextEditor?.document.uri;
+			}
+			if (!docUri) {
+				vscode.window.showErrorMessage(vscode.l10n.t('No active Change Tour document found.'));
+				return;
+			}
+			if (!docUri.path.endsWith('.changetour.md')) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Current document is not a .changetour.md file.'));
+				return;
+			}
+
+			try {
+				let text = '';
+				if (docUri.scheme === 'file') {
+					const data = await vscode.workspace.fs.readFile(docUri);
+					text = new TextDecoder().decode(data);
+				} else {
+					const document = await vscode.workspace.openTextDocument(docUri);
+					text = document.getText();
+				}
+
+				const parsed = parseCodeTourMarkdown(text);
+				if (parsed.prOwner && parsed.prRepo && parsed.prNumber) {
+					const { prOwner, prRepo, prNumber } = parsed;
+					const folderManager = reposManager.getManagerForRepository(prOwner, prRepo);
+					if (folderManager) {
+						await PullRequestOverviewPanel.createOrShow(
+							telemetry,
+							context.extensionUri,
+							folderManager,
+							{ owner: prOwner, repo: prRepo, number: Number(prNumber) }
+						);
+					} else {
+						vscode.window.showErrorMessage(vscode.l10n.t('Could not find repository {0}/{1}', prOwner, prRepo));
+					}
+				} else {
+					vscode.window.showErrorMessage(vscode.l10n.t('Change Tour does not contain valid pull request metadata.'));
+				}
+			} catch (e) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to read change tour: {0}', e instanceof Error ? e.message : 'Unknown error'));
+			}
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.codeTourEditor.toggleEditMode', (uri?: unknown) => {
+			let docUri: vscode.Uri | undefined;
+			if (uri instanceof vscode.Uri) {
+				docUri = uri;
+			} else if (uri && typeof uri === 'object') {
+				const obj = uri as { uri?: unknown };
+				if (obj.uri instanceof vscode.Uri) {
+					docUri = obj.uri;
+				}
+			}
+
+			if (!docUri) {
+				docUri = vscode.window.activeTextEditor?.document.uri;
+			}
+			console.log('Toggling edit mode for:', docUri);
+			CodeTourEditorProvider.toggleEditMode(docUri);
+		})
+	);
+
+	// Command palette entry for whole-file / glob exclusion. The author types
+	// a literal path or a glob pattern (e.g. `src/generated/**`) plus an
+	// optional reason; the marker is appended to the active tour's
+	// `## Excluded Changes` section.
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.changeTourExcludeByPattern', async () => {
+			// The Change Tour editor is a custom webview editor, so
+			// `vscode.window.activeTextEditor` is empty when it's focused. Use
+			// the provider's active-tour tracker first; fall back to a plain
+			// text editor if the tour was opened as raw markdown.
+			const activeTextDoc = vscode.window.activeTextEditor?.document;
+			const document = CodeTourEditorProvider.activeDocumentTracker
+				?? (activeTextDoc?.fileName.endsWith('.changetour.md') ? activeTextDoc : undefined);
+			if (!document) {
+				vscode.window.showErrorMessage('Open a Change Tour (.changetour.md) before excluding by pattern.');
+				return;
+			}
+			const pattern = await vscode.window.showInputBox({
+				title: 'Exclude PR hunks from Change Tour by pattern',
+				prompt: 'File path or glob (* matches one path segment; ** matches across segments)',
+				placeHolder: 'e.g. src/generated/**, **/*.d.ts, dist/bundle.js',
+				ignoreFocusOut: true,
+				validateInput: v => (v && v.trim().length > 0) ? undefined : 'Pattern cannot be empty.',
+			});
+			if (!pattern) return;
+			const trimmedPattern = pattern.trim();
+			// No-overlap guard: if the new marker would cover any hunk that's
+			// already in the tour, warn the user and offer to drop those tour
+			// hunks before writing the marker. Cancelling at the warning aborts
+			// the whole operation; confirming leads to a single atomic edit
+			// that removes the conflicts AND appends the marker.
+			const parsedDoc = parseCodeTourMarkdown(document.getText());
+			const conflicts: TourHunkNode[] = findTourHunksMatchingMarker(parsedDoc.children, { file: trimmedPattern });
+			if (conflicts.length > 0) {
+				// Deduplicate the displayed sample so a hunk appearing N times in
+				// the tour shows up once (annotated with the count) instead of N
+				// identical lines. The full conflicts array still drives the
+				// downstream drop, so every copy is removed.
+				const occurrences = new Map<string, number>();
+				const orderedKeys: string[] = [];
+				for (const n of conflicts) {
+					const key = `${n.hunk.file}:${n.hunk.startLine}-${n.hunk.endLine}`;
+					if (!occurrences.has(key)) orderedKeys.push(key);
+					occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+				}
+				const sample = orderedKeys
+					.slice(0, 5)
+					.map(key => occurrences.get(key)! > 1 ? `${key} (×${occurrences.get(key)})` : key)
+					.join(', ');
+				const more = orderedKeys.length > 5 ? `, plus ${orderedKeys.length - 5} more` : '';
+				const countSummary = conflicts.length === orderedKeys.length
+					? `${conflicts.length} hunk(s) currently in the tour would be covered by this pattern`
+					: `${orderedKeys.length} distinct hunk(s) currently in the tour would be covered by this pattern (${conflicts.length} total occurrence(s))`;
+				const detail = `${countSummary}:\n${sample}${more}\n\nMove them out of the tour and into the excluded list? All copies will be removed.`;
+				const choice = await vscode.window.showWarningMessage(
+					`Exclude pattern \`${trimmedPattern}\`?`,
+					{ modal: true, detail },
+					'Move to Excluded',
+				);
+				if (choice !== 'Move to Excluded') {
+					return;
+				}
+			}
+			const reason = await vscode.window.showInputBox({
+				title: `Exclude ${trimmedPattern}`,
+				prompt: 'Optional reason (visible in viewer and drift report)',
+				placeHolder: 'e.g. autogenerated, build output, vendored',
+				ignoreFocusOut: true,
+			});
+			if (reason === undefined) return; // cancelled (empty string is allowed -> no reason)
+			let newText: string;
+			if (conflicts.length > 0) {
+				// Drop the conflicting tour hunks and append the marker in one
+				// edit. Re-parse + match by (file, range) since the previous
+				// parse's node references are stale after re-parsing.
+				const freshDoc = parseCodeTourMarkdown(document.getText());
+				const targetKeys = new Set(conflicts.map(n => `${n.hunk.file}|${n.hunk.startLine}|${n.hunk.endLine}`));
+				const freshTargets = new Set<TourHunkNode>();
+				const collect = (nodes: ReadonlyArray<{ type: string } & Record<string, unknown>>) => {
+					for (const n of nodes) {
+						if (n.type === 'hunk') {
+							const h = n as unknown as TourHunkNode;
+							if (targetKeys.has(`${h.hunk.file}|${h.hunk.startLine}|${h.hunk.endLine}`)) freshTargets.add(h);
+						} else if (n.type === 'group') {
+							collect((n as unknown as { children: Array<{ type: string } & Record<string, unknown>> }).children);
+						}
+					}
+				};
+				collect(freshDoc.children as unknown as Array<{ type: string } & Record<string, unknown>>);
+				freshDoc.children = dropTourHunkNodes(freshDoc.children, freshTargets);
+				freshDoc.exclusions = [...(freshDoc.exclusions ?? []), { file: trimmedPattern, reason: reason || undefined }];
+				newText = serializeCodeTourMarkdown(freshDoc);
+			} else {
+				newText = appendWholeFileExclusionMarker(document.getText(), trimmedPattern, reason || undefined);
+			}
+			if (newText !== document.getText()) {
+				const edit = new vscode.WorkspaceEdit();
+				edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), newText);
+				await vscode.workspace.applyEdit(edit);
+			}
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.codeTourEditor.toggleDiffLayout', (uri?: unknown) => {
+			let docUri: vscode.Uri | undefined;
+			if (uri instanceof vscode.Uri) {
+				docUri = uri;
+			} else if (uri && typeof uri === 'object') {
+				const obj = uri as { uri?: unknown };
+				if (obj.uri instanceof vscode.Uri) {
+					docUri = obj.uri;
+				}
+			}
+
+			if (!docUri) {
+				docUri = vscode.window.activeTextEditor?.document.uri;
+			}
+			CodeTourEditorProvider.toggleDiffLayout(docUri);
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.openCodeTourViewFromEditor', async (uri?: unknown) => {
+			let docUri: vscode.Uri | undefined;
+			if (uri instanceof vscode.Uri) {
+				docUri = uri;
+			} else if (uri && typeof uri === 'object') {
+				const obj = uri as { uri?: unknown };
+				if (obj.uri instanceof vscode.Uri) {
+					docUri = obj.uri;
+				}
+			}
+
+			if (!docUri) {
+				docUri = vscode.window.activeTextEditor?.document.uri;
+			}
+			if (!docUri) {
+				vscode.window.showErrorMessage(vscode.l10n.t('No active Change Tour document found.'));
+				return;
+			}
+			if (!docUri.path.endsWith('.changetour.md')) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Current document is not a .changetour.md file.'));
+				return;
+			}
+
+			try {
+				let text = '';
+				if (docUri.scheme === 'file') {
+					const data = await vscode.workspace.fs.readFile(docUri);
+					text = new TextDecoder().decode(data);
+				} else {
+					const document = await vscode.workspace.openTextDocument(docUri);
+					text = document.getText();
+				}
+
+				const parsed = parseCodeTourMarkdown(text);
+				if (parsed.prOwner && parsed.prRepo && parsed.prNumber) {
+					const { prOwner, prRepo, prNumber } = parsed;
+					const folderManager = reposManager.getManagerForRepository(prOwner, prRepo);
+					if (folderManager) {
+						vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Loading Change Tour Pull Request') }, async () => {
+							const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber));
+							if (prModel) {
+								CodeTourEditorProvider.toggleChangesForDocument(docUri);
+							} else {
+								vscode.window.showErrorMessage(vscode.l10n.t('Pull Request not found.'));
+							}
+						});
+					} else {
+						vscode.window.showErrorMessage(vscode.l10n.t('Could not find repository {0}/{1}', prOwner, prRepo));
+					}
+				} else {
+					vscode.window.showErrorMessage(vscode.l10n.t('Change Tour does not contain valid pull request metadata.'));
+				}
+			} catch (e) {
+				vscode.window.showErrorMessage(vscode.l10n.t('Failed to read change tour: {0}', e instanceof Error ? e.message : 'Unknown error'));
+			}
+		})
 	);
 
 	let isCheckingOutFromReadonlyFile = false;
@@ -2002,6 +2422,60 @@ ${contents}
 				quickPick.dispose();
 			}
 		}));
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('pr.checkoutFromCodeTour', async (prNumber: number, owner: string, repo: string, docUri: vscode.Uri) => {
+			const folderManager = reposManager.getManagerForFile(docUri) ?? reposManager.folderManagers[0];
+			if (!folderManager || folderManager.gitHubRepositories.length === 0) {
+				return vscode.window.showErrorMessage(vscode.l10n.t('No repository found for this Change Tour.'));
+			}
+
+			// Try to find the exact PullRequestModel from cache first, prioritizing the already properly loaded upstream PR.
+			let targetPR: PullRequestModel | undefined;
+
+			for (const githubRepo of folderManager.gitHubRepositories) {
+				targetPR = githubRepo.pullRequestModels.find(model => model.number === prNumber);
+				if (targetPR) {
+					break;
+				}
+			}
+
+			// If not cached, attempt resolving from the primary workspace repository (upstream)
+			if (!targetPR) {
+				const primaryRepo = folderManager.gitHubRepositories.find(r => r.remote.owner.toLowerCase() !== owner?.toLowerCase()) || folderManager.gitHubRepositories[0];
+				targetPR = await folderManager.resolvePullRequest(
+					primaryRepo.remote.owner,
+					primaryRepo.remote.repositoryName,
+					prNumber,
+					true
+				);
+			}
+
+			// Fallback exactly to what the Change Tour provided just in case it truly lives on the fork or another repository
+			if (!targetPR) {
+				targetPR = await folderManager.resolvePullRequest(owner, repo, prNumber, true);
+			}
+
+			if (targetPR) {
+				// Use pr.pick to precisely checkout the PullRequestModel
+				return vscode.commands.executeCommand('pr.pick', targetPR, { openChangesToTheSide: true });
+			}
+
+			// `resolvePullRequest` -> `getPullRequest` swallows all errors into
+			// `undefined`, so a rate-limit failure here looks identical to "the
+			// PR really doesn't exist." Consult the global rate-limit tracker
+			// (`rateLimitError.ts`) before falling back to the generic message
+			// - the user gets actionable text instead of a misleading "unable
+			// to resolve" error.
+			const rateLimit = getRecentRateLimit();
+			if (rateLimit) {
+				return vscode.window.showErrorMessage(
+					`${formatRateLimitMessage(rateLimit)} Try again after the reset.`,
+				);
+			}
+			return vscode.window.showErrorMessage(vscode.l10n.t('Unable to resolve pull request for Change Tour checkout.'));
+		})
+	);
 
 	function chooseRepoToOpen() {
 		const githubRepositories: GitHubRepository[] = [];

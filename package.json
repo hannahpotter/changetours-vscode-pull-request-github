@@ -1,14 +1,14 @@
 {
-	"name": "vscode-pull-request-github",
+	"name": "changetours-vscode-pull-request-github",
 	"displayName": "%displayName%",
 	"description": "%description%",
 	"icon": "resources/icons/github_logo.png",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/Microsoft/vscode-pull-request-github"
+		"url": "https://github.com/hannahpotter/changetours-vscode-pull-request-github"
 	},
 	"bugs": {
-		"url": "https://github.com/Microsoft/vscode-pull-request-github/issues"
+		"url": "https://github.com/hannahpotter/changetours-vscode-pull-request-github/issues"
 	},
 	"enabledApiProposals": [
 		"activeComment",
@@ -41,8 +41,8 @@
 		"treeItemMarkdownLabel",
 		"treeViewMarkdownMessage"
 	],
-	"version": "0.146.0",
-	"publisher": "GitHub",
+	"version": "0.1.0-alpha.1",
+	"publisher": "hannahpotter",
 	"engines": {
 		"node": ">=20",
 		"vscode": "^1.121.0"
@@ -89,6 +89,50 @@
 				"displayName": "GitHub Issues"
 			}
 		],
+		"chatParticipants": [
+			{
+				"id": "changeTour.assistant",
+				"fullName": "Change Tour",
+				"name": "change-tour",
+				"description": "Author Change Tours for your pull requests with LLM assistance.",
+				"isSticky": true,
+				"commands": [
+					{
+						"name": "generate",
+						"description": "Generate a complete Change Tour for the active pull request."
+					},
+					{
+						"name": "suggest",
+						"description": "Suggest the next hunk or narration to add to the current tour."
+					},
+					{
+						"name": "narrate",
+						"description": "Draft narration text for a hunk."
+					},
+					{
+						"name": "improve",
+						"description": "Polish the current Change Tour - tighten narration, add highlights, suggest regroupings."
+					},
+					{
+						"name": "update",
+						"description": "Update the tour to match the current state of the pull request - refresh drifted hunks, adjust narration, add new-in-PR hunks."
+					}
+				],
+				"when": "config.changeTour.assistant.enabled"
+			}
+		],
+		"customEditors": [
+			{
+				"viewType": "codeTourEditor",
+				"displayName": "Change Tour Editor",
+				"selector": [
+					{
+						"filenamePattern": "*.changetour.md"
+					}
+				],
+				"priority": "default"
+			}
+		],
 		"configuration": {
 			"type": "object",
 			"title": "GitHub Pull Requests",
@@ -103,7 +147,6 @@
 						"ask"
 					],
 					"enumDescriptions": [
-						"Use the latest commit message",
 						"Use the branch name",
 						"Specify a custom title",
 						"Ask which of the above methods to use"
@@ -866,6 +909,37 @@
 					"type": "boolean",
 					"default": false,
 					"description": "%githubIssues.alwaysPromptForNewIssueRepo.description%"
+				},
+				"changeTour.assistant.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Enable the Change Tour LLM assistant (the @change-tour chat participant, editor toolbar AI buttons, and language model tools)."
+				},
+				"changeTour.assistant.provider": {
+					"type": "string",
+					"enum": [
+						"auto",
+						"vscode-lm",
+						"anthropic"
+					],
+					"enumDescriptions": [
+						"Prefer the VS Code language model API (Copilot or any registered provider); fall back to direct Anthropic API if a key is stored.",
+						"Always use the VS Code language model API. Requires GitHub Copilot or another chat-model provider extension to be installed.",
+						"Always use the direct Anthropic API. Requires an API key set via the 'Change Tour: Set Anthropic API Key' command."
+					],
+					"default": "auto",
+					"description": "Which backend the Change Tour assistant uses."
+				},
+				"changeTour.assistant.anthropicModel": {
+					"type": "string",
+					"default": "claude-sonnet-4-5",
+					"description": "Model used by the direct Anthropic API backend (ignored when the VS Code language model API is selected)."
+				},
+				"changeTour.assistant.maxAgentTurns": {
+					"type": "number",
+					"default": 25,
+					"minimum": 1,
+					"description": "Safety cap on the number of turns the Change Tour assistant's agent loop can take before stopping."
 				}
 			}
 		},
@@ -949,6 +1023,12 @@
 					"initialSize": 1
 				},
 				{
+					"id": "codetour:steps",
+					"name": "Change Tour Steps",
+					"when": "activeCodeTour",
+					"icon": "$(list-tree)"
+				},
+				{
 					"id": "github:compareChangesCommits",
 					"name": "%view.github.compare.changesCommits.name%",
 					"when": "github:createPullRequest",
@@ -1010,6 +1090,82 @@
 				"title": "%command.pr.openChanges.title%",
 				"category": "%command.pull.request.category%",
 				"icon": "$(diff-multiple)"
+			},
+			{
+				"command": "pr.openCodeTour",
+				"title": "%command.pr.openCodeTour.title%",
+				"category": "%command.pull.request.category%"
+			},
+			{
+				"command": "pr.newCodeTour",
+				"title": "%command.pr.newCodeTour.title%",
+				"category": "%command.pull.request.category%"
+			},
+			{
+				"command": "pr.editCodeTour",
+				"title": "%command.pr.editCodeTour.title%",
+				"category": "%command.pull.request.category%"
+			},
+			{
+				"command": "pr.editTourWithClaudeCode",
+				"title": "%command.pr.editTourWithClaudeCode.title%",
+				"category": "%command.change.tour.category%",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "pr.updateTourWithClaudeCode",
+				"title": "%command.pr.updateTourWithClaudeCode.title%",
+				"category": "%command.change.tour.category%",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "pr.setAnthropicApiKey",
+				"title": "%command.pr.setAnthropicApiKey.title%",
+				"category": "%command.change.tour.category%"
+			},
+			{
+				"command": "pr.openOverviewFromCodeTour",
+				"title": "%command.pr.openOverviewFromCodeTour.title%",
+				"category": "%command.change.tour.category%",
+				"icon": "$(code-review)"
+			},
+			{
+				"command": "pr.openCodeTourViewFromEditor",
+				"title": "%command.pr.openCodeTourViewFromEditor.title%",
+				"category": "%command.change.tour.category%",
+				"icon": "$(diff-multiple)"
+			},
+			{
+				"command": "pr.codeTourEditor.toggleEditMode",
+				"title": "%command.pr.codeTourEditor.toggleEditMode.title%",
+				"category": "%command.change.tour.category%",
+				"icon": "$(edit)"
+			},
+			{
+				"command": "pr.codeTourEditor.toggleDiffLayout",
+				"title": "%command.pr.codeTourEditor.toggleDiffLayout.title%",
+				"category": "%command.change.tour.category%",
+				"icon": "$(diff)"
+			},
+			{
+				"command": "pr.changeTourExcludeByPattern",
+				"title": "%command.pr.changeTourExcludeByPattern.title%",
+				"category": "%command.change.tour.category%",
+				"icon": "$(eye-closed)"
+			},
+			{
+				"command": "codetour.scrollToSection",
+				"title": "Scroll to Section"
+			},
+			{
+				"command": "codetour.treeItem.openDiff",
+				"title": "Go to diff",
+				"icon": "$(git-compare)"
+			},
+			{
+				"command": "codetour.treeItem.checkoutPR",
+				"title": "%codetour.checkoutPR%",
+				"icon": "$(git-branch)"
 			},
 			{
 				"command": "pr.pickOnVscodeDev",
@@ -2105,6 +2261,30 @@
 					"when": "false"
 				},
 				{
+					"command": "pr.openCodeTour",
+					"when": "false"
+				},
+				{
+					"command": "pr.newCodeTour",
+					"when": "false"
+				},
+				{
+					"command": "pr.editCodeTour",
+					"when": "false"
+				},
+				{
+					"command": "pr.changeTourExcludeByPattern",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/"
+				},
+				{
+					"command": "pr.updateTourWithClaudeCode",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/ && config.changeTour.assistant.enabled"
+				},
+				{
+					"command": "codetour.scrollToSection",
+					"when": "false"
+				},
+				{
 					"command": "pr.pickOnVscodeDev",
 					"when": "false"
 				},
@@ -2751,157 +2931,16 @@
 			],
 			"view/title": [
 				{
-					"command": "pr.create",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == pr:github",
-					"group": "navigation@1"
-				},
-				{
-					"command": "pr.refreshList",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == pr:github",
-					"group": "navigation@2"
-				},
-				{
-					"command": "pr.openPullsWebsite",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == pr:github",
-					"group": "overflow@1"
-				},
-				{
-					"command": "pr.checkoutByNumber",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == pr:github",
-					"group": "overflow@2"
-				},
-				{
-					"command": "pr.configurePRViewlet",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == pr:github",
-					"group": "overflow@3"
-				},
-				{
-					"command": "pr.refreshChanges",
-					"when": "view == prStatus:github",
-					"group": "navigation@2"
-				},
-				{
-					"command": "pr.setFileListLayoutAsTree",
-					"when": "view == prStatus:github && fileListLayout:flat",
-					"group": "navigation1"
-				},
-				{
-					"command": "pr.setFileListLayoutAsFlat",
-					"when": "view == prStatus:github && !fileListLayout:flat",
-					"group": "navigation1"
-				},
-				{
-					"command": "pr.toggleHideViewedFiles",
-					"when": "view == prStatus:github",
-					"group": "navigation1"
-				},
-				{
-					"command": "pr.toggleEditorCommentingOn",
-					"when": "view == prStatus:github && !commentingEnabled",
-					"group": "navigation@0"
-				},
-				{
-					"command": "pr.toggleEditorCommentingOff",
-					"when": "view == prStatus:github && commentingEnabled",
-					"group": "navigation@0"
-				},
-				{
-					"command": "issue.createIssue",
-					"when": "view == issues:github && github:hasGitHubRemotes",
-					"group": "navigation@1"
-				},
-				{
-					"command": "issue.refresh",
-					"when": "view == issues:github",
-					"group": "navigation@2"
-				},
-				{
-					"command": "issues.openIssuesWebsite",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == issues:github",
-					"group": "overflow@1"
-				},
-				{
-					"command": "issues.configureIssuesViewlet",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == issues:github",
-					"group": "overflow@2"
-				},
-				{
-					"command": "pr.refreshActivePullRequest",
-					"when": "view == github:activePullRequest && github:hasGitHubRemotes",
-					"group": "navigation@1"
-				},
-				{
-					"command": "pr.openDescription",
-					"when": "view == github:activePullRequest && github:hasGitHubRemotes",
-					"group": "navigation@2"
-				},
-				{
-					"command": "pr.openPullRequestOnGitHub",
-					"when": "view == github:activePullRequest && github:hasGitHubRemotes",
-					"group": "navigation@3"
-				},
-				{
-					"command": "pr.addAssigneesToNewPr",
-					"when": "view == github:createPullRequestWebview && github:createPrPermissions != READ && github:createPrPermissions",
-					"group": "navigation@1"
-				},
-				{
-					"command": "pr.addReviewersToNewPr",
-					"when": "view == github:createPullRequestWebview && github:createPrPermissions != READ && github:createPrPermissions",
-					"group": "navigation@2"
-				},
-				{
-					"command": "pr.addLabelsToNewPr",
-					"when": "view == github:createPullRequestWebview && github:createPrPermissions != READ && github:createPrPermissions",
-					"group": "navigation@3"
-				},
-				{
-					"command": "pr.addMilestoneToNewPr",
-					"when": "view == github:createPullRequestWebview && github:createPrPermissions != READ && github:createPrPermissions",
-					"group": "navigation@4"
-				},
-				{
-					"command": "pr.addProjectsToNewPr",
-					"when": "view == github:createPullRequestWebview && github:createPrPermissions != READ && github:createPrPermissions",
-					"group": "navigation@5"
-				},
-				{
-					"command": "pr.refreshComments",
-					"when": "view == workbench.panel.comments",
-					"group": "navigation"
-				},
-				{
-					"command": "notifications.sortByTimestamp",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == notifications:github",
-					"group": "sortNotifications@1"
-				},
-				{
-					"command": "notifications.sortByPriority",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == notifications:github",
-					"group": "sortNotifications@2"
-				},
-				{
-					"command": "notifications.configureNotificationsViewlet",
-					"when": "view == notifications:github",
-					"group": "sortNotifications@3"
-				},
-				{
-					"command": "notifications.markPullRequestsAsRead",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == notifications:github && config.githubPullRequests.experimental.notificationsMarkPullRequests == markAsRead",
-					"group": "navigation@0"
-				},
-				{
-					"command": "notifications.markPullRequestsAsDone",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == notifications:github && config.githubPullRequests.experimental.notificationsMarkPullRequests == markAsDone",
-					"group": "navigation@0"
-				},
-				{
-					"command": "notifications.refresh",
-					"when": "gitHubOpenRepositoryCount != 0 && github:initialized && view == notifications:github",
-					"group": "navigation@1"
+					"command": "codetour.treeItem.checkoutPR",
+					"when": "view == codetour:steps && codetour:checkoutAvailable"
 				}
 			],
 			"view/item/context": [
+				{
+					"command": "codetour.treeItem.openDiff",
+					"when": "view == codetour:steps && viewItem == codetourHunkCheckedOut",
+					"group": "inline"
+				},
 				{
 					"command": "pr.pick",
 					"when": "view == pr:github && viewItem =~ /(pullrequest(:local)?:nonactive)/",
@@ -3209,6 +3248,31 @@
 				}
 			],
 			"editor/title": [
+				{
+					"command": "pr.openOverviewFromCodeTour",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/"
+				},
+				{
+					"command": "pr.openCodeTourViewFromEditor",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/ && changeTourEditMode"
+				},
+				{
+					"command": "pr.codeTourEditor.toggleEditMode",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/"
+				},
+				{
+					"command": "pr.codeTourEditor.toggleDiffLayout",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/"
+				},
+				{
+					"command": "pr.editTourWithClaudeCode",
+					"group": "navigation",
+					"when": "resourceFilename =~ /\\.changetour\\.md$/ && config.changeTour.assistant.enabled"
+				},
 				{
 					"command": "review.openFile",
 					"group": "navigation",
@@ -3686,23 +3750,38 @@
 					"when": "(webviewId == 'github:activePullRequest') && github:readyForReviewMenu && github:readyForReviewMenuWithMerge"
 				},
 				{
-					"command": "pr.openChanges",
+					"command": "pr.openCodeTour",
 					"group": "checkout@0",
-					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu && github:prHasChangeTour"
 				},
 				{
-					"command": "pr.pickInWorktreeFromDescription",
+					"command": "pr.editCodeTour",
 					"group": "checkout@1",
-					"when": "webviewId == PullRequestOverview && github:checkoutMenu && !isWeb"
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu && github:prHasChangeTour"
 				},
 				{
-					"command": "pr.checkoutOnVscodeDevFromDescription",
+					"command": "pr.newCodeTour",
+					"group": "checkout@0",
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu && !github:prHasChangeTour"
+				},
+				{
+					"command": "pr.openChanges",
 					"group": "checkout@2",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{
-					"command": "pr.checkoutOnCodespacesFromDescription",
+					"command": "pr.pickInWorktreeFromDescription",
 					"group": "checkout@3",
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu && !isWeb"
+				},
+				{
+					"command": "pr.checkoutOnVscodeDevFromDescription",
+					"group": "checkout@4",
+					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
+				},
+				{
+					"command": "pr.checkoutOnCodespacesFromDescription",
+					"group": "checkout@5",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{
@@ -4097,6 +4176,98 @@
 				"when": "config.githubPullRequests.experimental.chat"
 			},
 			{
+				"name": "changeTour_getCurrentTour",
+				"tags": [
+					"change tour"
+				],
+				"toolReferenceName": "currentTour",
+				"displayName": "Get Current Change Tour",
+				"modelDescription": "Read the currently open Change Tour document as JSON (title, PR metadata, and node tree with IDs). Always call this before mutating the tour so you reference current node IDs.",
+				"icon": "$(notebook)",
+				"canBeReferencedInPrompt": true,
+				"inputSchema": {
+					"type": "object",
+					"properties": {}
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_getAvailablePRHunks",
+				"tags": [
+					"change tour"
+				],
+				"toolReferenceName": "tourPRHunks",
+				"displayName": "Get Available PR Hunks (Change Tour)",
+				"modelDescription": "List every changed file and hunk in the pull request that the active Change Tour is bound to. Returns file paths, status, and hunk line ranges with a preview.",
+				"icon": "$(diff)",
+				"canBeReferencedInPrompt": true,
+				"inputSchema": {
+					"type": "object",
+					"properties": {}
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_getDriftReport",
+				"tags": [
+					"change tour"
+				],
+				"toolReferenceName": "tourDriftReport",
+				"displayName": "Get Change Tour Drift Report",
+				"modelDescription": "Deterministic drift + coverage report for the active Change Tour. Returns three lists: hunks in the tour whose patch content no longer matches any current PR hunk (drifted), PR hunks no tour hunk covers by content (missingInTour), and tour hunks whose file is no longer in the PR diff (removedFromPR). Call this FIRST in the update flow - it is the ground truth for what needs to change.",
+				"icon": "$(diff-modified)",
+				"canBeReferencedInPrompt": true,
+				"inputSchema": {
+					"type": "object",
+					"properties": {}
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_addSectionToTour",
+				"tags": [
+					"change tour"
+				],
+				"displayName": "Add Section (Change Tour)",
+				"modelDescription": "Insert a new section (heading) into the Change Tour at the given anchor. Sections group related text and hunks.",
+				"icon": "$(symbol-folder)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"title": {
+							"type": "string",
+							"description": "Section heading text."
+						},
+						"level": {
+							"type": "number",
+							"description": "Heading level 2-6 (default 2). Use 3+ for sub-sections."
+						},
+						"anchor": {
+							"type": "object",
+							"description": "Where to insert. Provide exactly ONE of these fields.",
+							"properties": {
+								"after": {
+									"type": "string",
+									"description": "ID of the existing node to insert immediately after."
+								},
+								"before": {
+									"type": "string",
+									"description": "ID of the existing node to insert immediately before."
+								},
+								"endOfGroup": {
+									"type": "string",
+									"description": "ID of a group; the new node is appended as the last child of that group."
+								},
+								"endOfDocument": {
+									"type": "boolean",
+									"description": "If true, append at the end of the document."
+								}
+							}
+						}
+					}
+				}
+			},
+			{
 				"name": "github-pull-request_create_pull_request",
 				"tags": [
 					"github",
@@ -4152,10 +4323,288 @@
 					},
 					"required": [
 						"title",
-						"head"
+						"anchor"
 					]
 				},
-				"when": "config.githubPullRequests.experimental.chat"
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_addTextNodeToTour",
+				"tags": [
+					"change tour"
+				],
+				"displayName": "Add Narration (Change Tour)",
+				"modelDescription": "Insert a narration paragraph into the Change Tour at the given anchor. Keep narration short (1-3 sentences) and explain WHY a change is there.",
+				"icon": "$(symbol-string)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"content": {
+							"type": "string",
+							"description": "Markdown content of the narration."
+						},
+						"anchor": {
+							"type": "object",
+							"properties": {
+								"after": {
+									"type": "string"
+								},
+								"before": {
+									"type": "string"
+								},
+								"endOfGroup": {
+									"type": "string"
+								},
+								"endOfDocument": {
+									"type": "boolean"
+								}
+							}
+						}
+					},
+					"required": [
+						"content",
+						"anchor"
+					]
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_addHunkToTour",
+				"tags": [
+					"change tour"
+				],
+				"displayName": "Add Hunk (Change Tour)",
+				"modelDescription": "Insert a hunk reference into the Change Tour at the given anchor. Identify the hunk by `file` + `startLine` + `endLine` - these MUST come verbatim from a `hunks[]` entry returned by changeTour_getAvailablePRHunks. The tool resolves ref/patch/previousFile from the active pull request automatically; passing a file/range that does not match a real hunk fails the call.",
+				"icon": "$(diff-single)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"file": {
+							"type": "string",
+							"description": "Repo-relative file path. Must match a file changed by the bound pull request."
+						},
+						"startLine": {
+							"type": "number",
+							"description": "First line on the new side (1-indexed). Must match `startLine` of a hunk in getAvailablePRHunks output."
+						},
+						"endLine": {
+							"type": "number",
+							"description": "Last line on the new side (inclusive). Must match `endLine` of the same hunk."
+						},
+						"highlights": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"properties": {
+									"side": {
+										"type": "string",
+										"enum": [
+											"old",
+											"new"
+										]
+									},
+									"start": {
+										"type": "number"
+									},
+									"end": {
+										"type": "number"
+									}
+								},
+								"required": [
+									"side",
+									"start",
+									"end"
+								]
+							}
+						},
+						"anchor": {
+							"type": "object",
+							"properties": {
+								"after": {
+									"type": "string"
+								},
+								"before": {
+									"type": "string"
+								},
+								"endOfGroup": {
+									"type": "string"
+								},
+								"endOfDocument": {
+									"type": "boolean"
+								}
+							}
+						}
+					},
+					"required": [
+						"file",
+						"startLine",
+						"endLine",
+						"anchor"
+					]
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_setHunkHighlights",
+				"tags": [
+					"change tour"
+				],
+				"displayName": "Set Hunk Highlights (Change Tour)",
+				"modelDescription": "Replace highlight ranges on an existing hunk. Pass an empty array to remove all highlights.",
+				"icon": "$(edit)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"hunkId": {
+							"type": "string",
+							"description": "ID of the hunk node (from getCurrentTour)."
+						},
+						"highlights": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"properties": {
+									"side": {
+										"type": "string",
+										"enum": [
+											"old",
+											"new"
+										]
+									},
+									"start": {
+										"type": "number"
+									},
+									"end": {
+										"type": "number"
+									}
+								},
+								"required": [
+									"side",
+									"start",
+									"end"
+								]
+							}
+						}
+					},
+					"required": [
+						"hunkId",
+						"highlights"
+					]
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_setHunkSummary",
+				"tags": [
+					"change tour"
+				],
+				"displayName": "Set Hunk Summary (Change Tour)",
+				"modelDescription": "Set or clear the one-line natural-language summary on an existing hunk. Shown inline in the hunk header in both edit and viewer modes; without one, readers see a generic auto-fallback (the first changed line of the patch). Pass an empty string to clear and fall back to the auto default.",
+				"icon": "$(edit)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"hunkId": {
+							"type": "string",
+							"description": "ID of the hunk node (from getCurrentTour)."
+						},
+						"summary": {
+							"type": "string",
+							"description": "One-sentence description (120 chars or less). Empty string clears the summary."
+						}
+					},
+					"required": [
+						"hunkId",
+						"summary"
+					]
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_removeTourNode",
+				"tags": [
+					"change tour"
+				],
+				"displayName": "Remove Node (Change Tour)",
+				"modelDescription": "Remove a node from the Change Tour by id. User confirmation is required.",
+				"icon": "$(trash)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"nodeId": {
+							"type": "string",
+							"description": "ID of the node to remove (from getCurrentTour)."
+						}
+					},
+					"required": [
+						"nodeId"
+					]
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_addExclusion",
+				"tags": [
+					"change tour"
+				],
+				"displayName": "Exclude PR Hunk (Change Tour)",
+				"modelDescription": "Mark a PR hunk (or whole file, or glob of files) as intentionally NOT covered by the Change Tour. Writes a `<!-- changetour:exclude ... -->` marker into the tour's appendix; future `changeTour_getDriftReport` calls will filter the matching PR hunk(s) out of `missingInTour`. Use this ONLY for hunks that should be out of the tour entirely (deleted files, autogenerated/built output under `dist/`, `src/generated/`, etc.) - trivial-but-representable hunks belong in a `Miscellaneous` section instead. Three input shapes: (a) exact-range `file` + `startLine` + `endLine`; (b) whole-file `file` (literal path) with no line bounds; (c) glob `file` (contains `*`/`?`/`[`) with no line bounds.",
+				"icon": "$(eye-closed)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"file": {
+							"type": "string",
+							"description": "Literal repo-relative path OR a glob pattern. `*` matches one path segment; `**` matches across segments. Examples: `src/foo.ts`, `src/generated/**`, `**/*.d.ts`."
+						},
+						"startLine": {
+							"type": "number",
+							"description": "Optional. New-side start line (1-indexed) for an exact-range marker. Must be paired with `endLine`. Omit (along with `endLine`) for a whole-file or glob marker. Cannot be combined with a glob `file`."
+						},
+						"endLine": {
+							"type": "number",
+							"description": "Optional. New-side end line (inclusive) for an exact-range marker. Must be paired with `startLine`. Omit (along with `startLine`) for a whole-file or glob marker."
+						},
+						"reason": {
+							"type": "string",
+							"description": "Optional but strongly recommended. Short human-readable rationale shown to reviewers (e.g. `\"autogenerated typings\"`, `\"file deleted in this PR\"`)."
+						}
+					},
+					"required": [
+						"file"
+					]
+				},
+				"when": "config.changeTour.assistant.enabled"
+			},
+			{
+				"name": "changeTour_removeExclusion",
+				"tags": [
+					"change tour"
+				],
+				"displayName": "Remove Exclusion (Change Tour)",
+				"modelDescription": "Remove an existing exclusion marker from the Change Tour's appendix. Match must be exact: pass the `file` AND the same line bounds the marker carries (or omit both when the marker has no `lines=`). Read the appendix or call changeTour_getDriftReport first if the exact attributes aren't already in context.",
+				"icon": "$(trash)",
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"file": {
+							"type": "string",
+							"description": "Literal path or glob pattern matching the marker's `file=` attribute exactly."
+						},
+						"startLine": {
+							"type": "number",
+							"description": "Optional. Must match the marker's `lines=` start. Omit (along with `endLine`) to target a whole-file or glob marker (one without `lines=`)."
+						},
+						"endLine": {
+							"type": "number",
+							"description": "Optional. Must match the marker's `lines=` end. Omit (along with `startLine`) to target a whole-file or glob marker."
+						}
+					},
+					"required": [
+						"file"
+					]
+				},
+				"when": "config.changeTour.assistant.enabled"
 			},
 			{
 				"name": "github-pull-request_resolveReviewThread",
@@ -4191,14 +4640,15 @@
 		"bundle": "webpack --mode production --env esbuild",
 		"bundle:node": "webpack --mode production --config-name extension:node --config-name webviews",
 		"bundle:web": "webpack --mode production --config-name extension:webworker --config-name webviews",
-		"clean": "rm -r dist/",
+		"clean": "rm -rf dist/",
 		"compile": "webpack --mode development --env esbuild",
 		"compile:test": "tsc -p tsconfig.test.json",
 		"watch:test": "tsc -w -p tsconfig.test.json",
 		"compile:node": "webpack --mode development --config-name extension:node --config-name webviews",
 		"compile:web": "webpack --mode development --config-name extension:webworker --config-name webviews",
 		"lint": "eslint --fix --cache . --ext .ts,.tsx",
-		"package": "npx vsce package",
+		"vscode:prepublish": "npm run clean && npm run bundle",
+		"package": "npx vsce package --no-yarn",
 		"test": "npm run test:preprocess && node ./out/src/test/runTests.js",
 		"test:preprocess": "npm run compile:test && npm run test:preprocess-gql && npm run test:preprocess-svg && npm run test:preprocess-fixtures",
 		"browsertest:preprocess": "tsc ./src/test/browser/runTests.ts --outDir ./dist/browser/test --rootDir ./src/test/browser --target es6 --module commonjs",
@@ -4287,7 +4737,9 @@
 		"webpack-cli": "4.2.0"
 	},
 	"dependencies": {
+		"@anthropic-ai/sdk": "^0.99.0",
 		"@joaomoreno/unique-names-generator": "^5.2.0",
+		"@octokit/plugin-throttling": "11.0.3",
 		"@octokit/rest": "22.0.0",
 		"@octokit/types": "14.1.0",
 		"@vscode/codicons": "^0.0.36",

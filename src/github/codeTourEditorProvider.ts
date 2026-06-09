@@ -1,0 +1,1130 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 Hannah Potter. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+'use strict';
+
+import * as path from 'path';
+import * as vscode from 'vscode';
+import { appendExclusionMarker, appendWholeFileExclusionMarker, createHunkBlock, dropTourHunkNodes, editContentFingerprint, ExcludedHunkMarker, findTourHunksMatchingMarker, HunkReference, parseCodeTourMarkdown, removeExclusionMarker, removeWholeFileExclusionMarker, serializeCodeTourMarkdown, TourHunkNode } from './codeTourMarkdown';
+import { PullRequestModel } from './pullRequestModel';
+import { detectRateLimit, formatRateLimitMessage, recordObservedRateLimit } from './rateLimitError';
+import { RepositoriesManager } from './repositoriesManager';
+import { DiffSide } from '../common/comment';
+import Logger from '../common/logger';
+import { Schemes } from '../common/uri';
+import { formatError } from '../common/utils';
+import { generateUuid } from '../common/uuid';
+import { IRequestMessage, WebviewBase } from '../common/webview';
+import { AssistantMode, runAssistant } from '../lm/tourAssistant/orchestrator';
+
+
+export const CODE_TOUR_EDITOR_VIEW_TYPE = 'codeTourEditor';
+
+/**
+ * Enforce the "tour and excluded list don't overlap" invariant when the
+ * user clicks an Exclude affordance. Returns:
+ *   - `{ proceed: true, conflictsToDrop: [] }` when there's no conflict --
+ *     the caller follows the normal append-marker path.
+ *   - `{ proceed: true, conflictsToDrop: [...] }` when the user confirmed
+ *     the "move to excluded" prompt -- the caller must drop these tour
+ *     hunks AND append the marker in a single edit.
+ *   - `{ proceed: false }` when the user cancelled, or when there are no
+ *     conflicts but the user dismissed the no-op path (never reached;
+ *     `proceed: true` always fires for the empty case).
+ *
+ * We re-parse the document here (instead of relying on a cached `doc`)
+ * because the user might have typed into the editor since the last
+ * initialize message.
+ */
+async function resolveExclusionConflict(
+	document: vscode.TextDocument,
+	marker: ExcludedHunkMarker,
+): Promise<{ proceed: true; conflictsToDrop: TourHunkNode[] } | { proceed: false }> {
+	const doc = parseCodeTourMarkdown(document.getText());
+	const conflicts = findTourHunksMatchingMarker(doc.children, marker, h => editContentFingerprint(h.patch));
+	if (conflicts.length === 0) {
+		return { proceed: true, conflictsToDrop: [] };
+	}
+	const target = marker.startLine !== undefined && marker.endLine !== undefined
+		? `${marker.file}:${marker.startLine}-${marker.endLine}`
+		: marker.file;
+	// Deduplicate the displayed sample so that a hunk appearing N times in the
+	// tour shows up once (annotated with the count), instead of N identical
+	// lines. The full `conflicts` array is still passed downstream so every
+	// copy gets removed -- only the user-facing summary collapses duplicates.
+	const occurrences = new Map<string, number>();
+	const orderedKeys: string[] = [];
+	for (const n of conflicts) {
+		const key = `${n.hunk.file}:${n.hunk.startLine}-${n.hunk.endLine}`;
+		if (!occurrences.has(key)) {
+			orderedKeys.push(key);
+		}
+		occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+	}
+	const sample = orderedKeys
+		.slice(0, 5)
+		.map(key => occurrences.get(key)! > 1 ? `${key} (×${occurrences.get(key)})` : key)
+		.join(', ');
+	const more = orderedKeys.length > 5 ? `, plus ${orderedKeys.length - 5} more` : '';
+	const distinctCount = orderedKeys.length;
+	const totalCount = conflicts.length;
+	const countSummary = totalCount === distinctCount
+		? `${totalCount} hunk(s) currently in the tour would be covered by this marker`
+		: `${distinctCount} distinct hunk(s) currently in the tour would be covered by this marker (${totalCount} total occurrence(s))`;
+	const detail = `${countSummary}:\n${sample}${more}\n\nMove them out of the tour and into the excluded list? All copies will be removed.`;
+	const choice = await vscode.window.showWarningMessage(
+		`Exclude ${target}?`,
+		{ modal: true, detail },
+		'Move to Excluded',
+	);
+	if (choice !== 'Move to Excluded') {
+		return { proceed: false };
+	}
+	return { proceed: true, conflictsToDrop: conflicts };
+}
+
+/**
+ * Build the new document text after dropping `conflictsToDrop` from the tour
+ * tree and appending `marker` to the exclusion appendix. Round-trips through
+ * `serializeCodeTourMarkdown` (which re-emits the sentinel + markers from
+ * `doc.exclusions`) so the on-disk shape stays canonical.
+ */
+function buildMoveToExcludedText(
+	document: vscode.TextDocument,
+	marker: ExcludedHunkMarker,
+	conflictsToDrop: ReadonlyArray<TourHunkNode>,
+): string {
+	const doc = parseCodeTourMarkdown(document.getText());
+	if (conflictsToDrop.length > 0) {
+		// Re-locate the conflicting nodes by (file, startLine, endLine) -- the
+		// parser regenerates node IDs on every parse, so the `conflictsToDrop`
+		// references from the earlier parse can't be matched by identity.
+		const targetKeys = new Set(conflictsToDrop.map(n => `${n.hunk.file}|${n.hunk.startLine}|${n.hunk.endLine}`));
+		const freshTargets = new Set<TourHunkNode>();
+		const collect = (nodes: ReadonlyArray<{ type: string } & Record<string, unknown>>) => {
+			for (const n of nodes) {
+				if (n.type === 'hunk') {
+					const hunkNode = n as unknown as TourHunkNode;
+					const key = `${hunkNode.hunk.file}|${hunkNode.hunk.startLine}|${hunkNode.hunk.endLine}`;
+					if (targetKeys.has(key)) freshTargets.add(hunkNode);
+				} else if (n.type === 'group') {
+					const groupNode = n as unknown as { children: Array<{ type: string } & Record<string, unknown>> };
+					collect(groupNode.children);
+				}
+			}
+		};
+		collect(doc.children as unknown as Array<{ type: string } & Record<string, unknown>>);
+		doc.children = dropTourHunkNodes(doc.children, freshTargets);
+	}
+	doc.exclusions = [...(doc.exclusions ?? []), marker];
+	return serializeCodeTourMarkdown(doc);
+}
+
+export class CodeTourEditorProvider extends WebviewBase implements vscode.CustomTextEditorProvider {
+
+	public static readonly onDidChangeActiveCodeTour = new vscode.EventEmitter<vscode.TextDocument | undefined>();
+	public static activeDocumentTracker: vscode.TextDocument | undefined = undefined;
+
+	private static readonly _webviewPanels = new Map<string, vscode.WebviewPanel>();
+	private static readonly _editModeByDocument = new Map<string, boolean>();
+	// Pre-registered initial mode for a URI; consumed when the webview sends `ready`.
+	// Lets commands like "Edit Change Tour" open the file directly in edit mode without
+	// the user seeing a view → edit flash.
+	private static readonly _pendingInitialMode = new Map<string, 'view' | 'edit'>();
+	private _pendingWebviewEdits = new Map<string, number>();
+	// Active assistant runs keyed by requestId so the webview's stop button can abort the matching run.
+	private _activeAssistantRuns = new Map<string, AbortController>();
+
+	constructor(private readonly _extensionUri: vscode.Uri, private readonly _reposManager: RepositoriesManager, private readonly _extensionContext: vscode.ExtensionContext) {
+		super();
+	}
+
+	/**
+	 * Record the initial mode the next opening of `uri` should use.
+	 * Read once when the webview sends its `ready` message, then cleared.
+	 */
+	public static requestInitialMode(uri: vscode.Uri, mode: 'view' | 'edit'): void {
+		CodeTourEditorProvider._pendingInitialMode.set(uri.toString(), mode);
+	}
+
+	private static _viewedStateKey(uri: vscode.Uri): string {
+		return `changetour.viewed:${uri.toString()}`;
+	}
+
+	private static _setEditModeContext(value: boolean): void {
+		vscode.commands.executeCommand('setContext', 'changeTourEditMode', value);
+	}
+
+	/**
+	 * Stringify an error for the viewer's inline comment-error toast. When the
+	 * underlying failure is a recognizable GitHub rate-limit case, prefix the
+	 * raw error with the human-readable "Resets at ..." sentence so the user
+	 * sees actionable text instead of "Request failed with status code 403".
+	 */
+	private static _formatUserFacingError(e: unknown): string {
+		const info = detectRateLimit(e);
+		const raw = formatError(e);
+		if (info) {
+			recordObservedRateLimit(info);
+			return `${formatRateLimitMessage(info)} ${raw}`;
+		}
+		return raw;
+	}
+
+	/** Workspace-state key for the user's preferred diff layout. Shared across all tours. */
+	private static readonly _diffLayoutStateKey = 'changetour.diffLayout';
+	private static _readDiffLayout(ctx: vscode.ExtensionContext): 'inline' | 'sideBySide' {
+		const v = ctx.workspaceState.get<string>(CodeTourEditorProvider._diffLayoutStateKey, 'inline');
+		return v === 'sideBySide' ? 'sideBySide' : 'inline';
+	}
+
+	/**
+	 * Snapshot every owner/repo identifier the active PR might be known by so
+	 * the webview can match the tour's frontmatter regardless of whether the
+	 * tour was authored against the upstream while the local repo tracks a fork
+	 * (or vice versa).
+	 */
+	private static _activePrInfo(activePR: PullRequestModel | undefined) {
+		if (!activePR) {
+			return undefined;
+		}
+		return {
+			number: activePR.number,
+			owner: activePR.remote.owner,
+			repo: activePR.remote.repositoryName,
+			baseOwner: activePR.base?.owner,
+			baseRepo: activePR.base?.name,
+			headOwner: activePR.head?.owner,
+			headRepo: activePR.head?.name,
+		};
+	}
+
+	public static toggleEditMode(uri?: vscode.Uri) {
+		if (uri) {
+			const panel = CodeTourEditorProvider._webviewPanels.get(uri.toString());
+			if (panel) {
+				panel.webview.postMessage({
+					res: { command: 'codeTourEditor.toggleEditMode' }
+				});
+				return;
+			}
+		}
+
+		for (const panel of CodeTourEditorProvider._webviewPanels.values()) {
+			if (panel.active || panel.visible) {
+				panel.webview.postMessage({
+					res: { command: 'codeTourEditor.toggleEditMode' }
+				});
+				return;
+			}
+		}
+	}
+
+	/**
+	 * Flip the persisted diff layout (inline ↔ side-by-side) and broadcast the new value
+	 * to every open Change Tour panel so the toggle applies everywhere at once.
+	 */
+	public static toggleDiffLayout(_uri?: vscode.Uri) {
+		const provider = CodeTourEditorProvider._instance;
+		if (!provider) {
+			return;
+		}
+		const current = CodeTourEditorProvider._readDiffLayout(provider._extensionContext);
+		const next = current === 'inline' ? 'sideBySide' : 'inline';
+		provider._extensionContext.workspaceState.update(CodeTourEditorProvider._diffLayoutStateKey, next);
+		for (const panel of CodeTourEditorProvider._webviewPanels.values()) {
+			panel.webview.postMessage({
+				res: { command: 'codeTourEditor.updateDiffLayout', diffLayout: next }
+			});
+		}
+	}
+
+	public static toggleChangesForDocument(uri?: vscode.Uri) {
+		if (uri) {
+			const panel = CodeTourEditorProvider._webviewPanels.get(uri.toString());
+			if (panel) {
+				panel.webview.postMessage({
+					res: { command: 'codeTourEditor.toggleChanges' }
+				});
+				return;
+			}
+		}
+
+		for (const panel of CodeTourEditorProvider._webviewPanels.values()) {
+			if (panel.active || panel.visible) {
+				panel.webview.postMessage({
+					res: { command: 'codeTourEditor.toggleChanges' }
+				});
+				return;
+			}
+		}
+	}
+
+	public static async addHunkToEditor(hunks: HunkReference[], mode: 'active' | 'quickpick') {
+		const document = CodeTourEditorProvider.activeDocumentTracker;
+		if (!document) {
+			vscode.window.showErrorMessage('No active Change Tour editor found. Please focus a Change Tour first.');
+			return;
+		}
+
+		const uri = document.uri;
+		const panel = CodeTourEditorProvider._webviewPanels.get(uri.toString());
+		if (!panel) {
+			vscode.window.showErrorMessage('No Change Tour editor panel found.');
+			return;
+		}
+
+		if (mode === 'quickpick') {
+			panel.webview.postMessage({ res: { command: 'codeTourEditor.requestGroupsForQuickPick', hunk: hunks } });
+		} else {
+			panel.webview.postMessage({
+				res: {
+					command: 'codeTourEditor.insertHunkAt',
+					hunk: hunks,
+					mode
+				}
+			});
+		}
+	}
+
+	public static scrollToNode(uri: vscode.Uri, nodeId: string) {
+		const key = uri.toString();
+		const panel = CodeTourEditorProvider._webviewPanels.get(key);
+		if (panel) {
+			if (!panel.active) {
+				panel.reveal();
+			}
+			panel.webview.postMessage({
+				res: { command: 'codeTourEditor.scrollToNode', id: nodeId }
+			});
+		} else {
+			vscode.window.showErrorMessage(`No Change Tour editor found for ${key}`);
+		}
+	}
+
+	private static _instance: CodeTourEditorProvider | undefined;
+
+	public static register(context: vscode.ExtensionContext, reposManager: RepositoriesManager): vscode.Disposable {
+		const provider = new CodeTourEditorProvider(context.extensionUri, reposManager, context);
+		CodeTourEditorProvider._instance = provider;
+		return vscode.window.registerCustomEditorProvider(
+			CODE_TOUR_EDITOR_VIEW_TYPE,
+			provider,
+			{
+				webviewOptions: { retainContextWhenHidden: true },
+				supportsMultipleEditorsPerDocument: false,
+			},
+		);
+	}
+
+	public async resolveCustomTextEditor(
+		document: vscode.TextDocument,
+		webviewPanel: vscode.WebviewPanel,
+		_token: vscode.CancellationToken,
+	): Promise<void> {
+		// For non-file URIs (VS Code's diff editor, PR review, git history,
+		// etc.) the rendered Change Tour view doesn't compose with the diff
+		// layout and the user just wants to see the raw markdown change.
+		// Dispose this webview and reopen the resource in the default text
+		// editor - the diff editor will then show plain text on each side.
+		if (document.uri.scheme !== Schemes.File) {
+			webviewPanel.dispose();
+			await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+			return;
+		}
+
+		const key = document.uri.toString();
+		CodeTourEditorProvider._webviewPanels.set(key, webviewPanel);
+
+		if (webviewPanel.active) {
+			CodeTourEditorProvider.activeDocumentTracker = document;
+			CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(document);
+			vscode.commands.executeCommand('setContext', 'activeCodeTour', true);
+			CodeTourEditorProvider._setEditModeContext(CodeTourEditorProvider._editModeByDocument.get(key) ?? false);
+		}
+
+		const viewStateDisposable = webviewPanel.onDidChangeViewState(e => {
+			if (e.webviewPanel.active) {
+				CodeTourEditorProvider.activeDocumentTracker = document;
+				CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(document);
+				vscode.commands.executeCommand('setContext', 'activeCodeTour', true);
+				CodeTourEditorProvider._setEditModeContext(CodeTourEditorProvider._editModeByDocument.get(key) ?? false);
+			} else if (CodeTourEditorProvider.activeDocumentTracker === document) {
+				CodeTourEditorProvider.activeDocumentTracker = undefined;
+				CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(undefined);
+				vscode.commands.executeCommand('setContext', 'activeCodeTour', false);
+				CodeTourEditorProvider._setEditModeContext(false);
+			}
+		});
+
+		this._webview = webviewPanel.webview;
+
+		webviewPanel.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, 'dist')],
+		};
+
+		webviewPanel.webview.html = this._getHtmlForWebview(webviewPanel.webview);
+
+		// Listen for webview ready + messages
+		const messageDisposable = webviewPanel.webview.onDidReceiveMessage(async (message: IRequestMessage<any>) => {
+			await this._handleMessage(document, webviewPanel, message);
+		});
+
+		// Sync document → webview when the text document changes (e.g. from undo/redo)
+		const changeDisposable = vscode.workspace.onDidChangeTextDocument(e => {
+			if (e.document.uri.toString() === document.uri.toString() && e.contentChanges.length > 0) {
+				// Skip echo: decrement counter for each webview-originated edit
+				const pending = this._pendingWebviewEdits.get(key) ?? 0;
+				if (pending > 0) {
+					this._pendingWebviewEdits.set(key, pending - 1);
+					return;
+				}
+				this._sendDocumentToWebview(webviewPanel.webview, document);
+			}
+		});
+
+		const disposables: vscode.Disposable[] = [];
+		const folderManager = this._reposManager.getManagerForFile(document.uri) ?? this._reposManager.folderManagers[0];
+
+		const bindActivePRListener = (manager: typeof folderManager) => {
+			if (!manager) return;
+			disposables.push(manager.onDidChangeActivePullRequest(e => {
+				const prInfo = CodeTourEditorProvider._activePrInfo(e.new);
+				webviewPanel.webview.postMessage({
+					res: {
+						command: 'codeTourEditor.updateActivePR',
+						activePR: prInfo
+					}
+				});
+			}));
+		};
+
+		if (folderManager) {
+			bindActivePRListener(folderManager);
+		} else {
+			// If it hasn't initialized yet, listen for the folder repository to be added
+			disposables.push(this._reposManager.onDidChangeFolderRepositories(e => {
+				if (e.added) {
+					bindActivePRListener(e.added);
+					if (e.added.activePullRequest) {
+						webviewPanel.webview.postMessage({
+							res: {
+								command: 'codeTourEditor.updateActivePR',
+								activePR: CodeTourEditorProvider._activePrInfo(e.added.activePullRequest)
+							}
+						});
+					}
+				}
+			}));
+		}
+
+		webviewPanel.onDidDispose(() => {
+			CodeTourEditorProvider._webviewPanels.delete(key);
+			CodeTourEditorProvider._editModeByDocument.delete(key);
+			messageDisposable.dispose();
+			changeDisposable.dispose();
+			viewStateDisposable.dispose();
+			if (CodeTourEditorProvider.activeDocumentTracker === document) {
+				CodeTourEditorProvider.activeDocumentTracker = undefined;
+				CodeTourEditorProvider.onDidChangeActiveCodeTour.fire(undefined);
+				vscode.commands.executeCommand('setContext', 'activeCodeTour', false);
+				CodeTourEditorProvider._setEditModeContext(false);
+			}
+			disposables.forEach(d => d.dispose());
+		});
+	}
+
+	private async _handleMessage(
+		document: vscode.TextDocument,
+		panel: vscode.WebviewPanel,
+		message: IRequestMessage<any>,
+	): Promise<void> {
+		switch (message.command) {
+			case 'ready':
+				this._sendDocumentToWebview(panel.webview, document);
+				// Kick off the PR data fetch in the background so the outdated-hunk
+				// banner can render as soon as it's available. We don't await -
+				// the webview renders immediately from the initialize message; the
+				// changes data arrives later and triggers re-detection. Failure is
+				// silent (no PR resolved, offline, etc.) - the banner just stays
+				// hidden in that case.
+				this._sendChangesData(document, panel).catch(e =>
+					Logger.error(`Failed to fetch PR changes on init: ${formatError(e)}`, CodeTourEditorProvider.name),
+				);
+				return;
+
+			case 'codeTourEditor.updateDocument': {
+				const { markdown } = message.args as { markdown: string };
+				await this._applyEdit(document, markdown);
+				return;
+			}
+
+			case 'codeTourEditor.insertHunk': {
+				const { hunk } = message.args as { hunk: HunkReference[] };
+				if (hunk.length === 0) {
+					return;
+				}
+				const block = hunk.map(createHunkBlock).join('\n\n');
+				const text = document.getText();
+				const newText = text.trimEnd() + '\n\n' + block + '\n';
+				await this._applyEdit(document, newText);
+				return;
+			}
+
+			case 'codeTourEditor.openDiff': {
+				const { hunk } = message.args as { hunk: HunkReference };
+				vscode.commands.executeCommand('codetour.openDiff', hunk);
+				return;
+			}
+
+			case 'codeTourEditor.openExcludedDiff': {
+				// The Excluded outline's "Open diff" button. For an exact-range
+				// marker this is just one hunk; for a whole-file or glob marker
+				// there can be many, so we surface a quickpick before delegating
+				// to `codetour.openDiff`. The webview pre-resolves the candidate
+				// HunkReferences from `changesData`.
+				const { hunks, target } = message.args as { hunks: HunkReference[]; target: string };
+				if (!hunks || hunks.length === 0) {
+					vscode.window.showInformationMessage(`No matching PR hunks for \`${target}\`.`);
+					return;
+				}
+				if (hunks.length === 1) {
+					vscode.commands.executeCommand('codetour.openDiff', hunks[0]);
+					return;
+				}
+				const items = hunks.map(h => ({
+					label: `${h.file}:${h.startLine}-${h.endLine}`,
+					description: h.previousFile && h.previousFile !== h.file ? `← ${h.previousFile}` : undefined,
+					hunk: h,
+				}));
+				const picked = await vscode.window.showQuickPick(items, {
+					title: `Excluded by ${target} - pick a hunk to open`,
+					placeHolder: `${hunks.length} hunks match this marker`,
+					matchOnDescription: true,
+				});
+				if (picked) {
+					vscode.commands.executeCommand('codetour.openDiff', picked.hunk);
+				}
+				return;
+			}
+
+			case 'codeTourEditor.showError': {
+				const { message: errMsg } = message.args as { message: string };
+				vscode.window.showErrorMessage(errMsg);
+				return;
+			}
+
+			case 'codeTourEditor.checkoutPR': {
+				const { prNumber, owner, repo } = message.args as { prNumber: number, owner: string, repo: string };
+				vscode.commands.executeCommand('pr.checkoutFromCodeTour', prNumber, owner, repo, document.uri);
+				return;
+			}
+
+			case 'codeTourEditor.addHunk': {
+				const { hunk, mode } = message.args as { hunk: HunkReference[], mode: 'active' | 'quickpick' };
+				CodeTourEditorProvider.addHunkToEditor(hunk, mode);
+				return;
+			}
+
+			case 'codeTourEditor.excludeHunk': {
+				const { file, startLine, endLine, fp } = message.args as { file: string; startLine: number; endLine: number; fp?: string };
+				const resolution = await resolveExclusionConflict(document, { file, startLine, endLine });
+				if (!resolution.proceed) {
+					return; // user cancelled the conflict prompt
+				}
+				const reason = await vscode.window.showInputBox({
+					title: 'Exclude PR hunk from Change Tour',
+					prompt: `${file} lines ${startLine}-${endLine} - optional reason`,
+					placeHolder: 'e.g. deleted file, intentionally not narrated',
+					ignoreFocusOut: true,
+				});
+				if (reason === undefined) {
+					return; // user cancelled the reason prompt
+				}
+				const marker: ExcludedHunkMarker = { file, startLine, endLine, fp, reason: reason || undefined };
+				const newText = resolution.conflictsToDrop.length > 0
+					? buildMoveToExcludedText(document, marker, resolution.conflictsToDrop)
+					: appendExclusionMarker(document.getText(), file, startLine, endLine, fp, reason || undefined);
+				// Programmatic edit -- the webview has no local copy of this change,
+				// so the doc must round-trip back via onDidChangeTextDocument.
+				await this._applyEdit(document, newText, /* originatedFromWebview */ false);
+				return;
+			}
+
+			case 'codeTourEditor.excludeFile': {
+				const { file } = message.args as { file: string };
+				const resolution = await resolveExclusionConflict(document, { file });
+				if (!resolution.proceed) {
+					return;
+				}
+				const reason = await vscode.window.showInputBox({
+					title: 'Exclude entire file from Change Tour',
+					prompt: `${file} - optional reason`,
+					placeHolder: 'e.g. autogenerated, deleted, generated noise',
+					ignoreFocusOut: true,
+				});
+				if (reason === undefined) {
+					return;
+				}
+				const marker: ExcludedHunkMarker = { file, reason: reason || undefined };
+				const newText = resolution.conflictsToDrop.length > 0
+					? buildMoveToExcludedText(document, marker, resolution.conflictsToDrop)
+					: appendWholeFileExclusionMarker(document.getText(), file, reason || undefined);
+				await this._applyEdit(document, newText, /* originatedFromWebview */ false);
+				return;
+			}
+
+			case 'codeTourEditor.removeExclusion': {
+				const { file, startLine, endLine } = message.args as { file: string; startLine?: number; endLine?: number };
+				// undefined bounds -> whole-file / glob marker; otherwise exact-range.
+				const newText = (startLine === undefined && endLine === undefined)
+					? removeWholeFileExclusionMarker(document.getText(), file)
+					: removeExclusionMarker(document.getText(), file, startLine!, endLine!);
+				if (newText !== document.getText()) {
+					await this._applyEdit(document, newText, /* originatedFromWebview */ false);
+				}
+				return;
+			}
+
+			case 'codeTourEditor.showGroupsQuickPick': {
+				const { groups, hunk } = message.args as { groups: { id: string, title: string, level: number }[], hunk: HunkReference[] };
+				const options: ({ label: string, id: string })[] = [
+					{ label: '$(root-folder) Document End', id: 'root' },
+					...groups.map(g => ({
+						label: '\u00A0'.repeat((g.level - 1) * 4) + '$(symbol-folder) ' + (g.title || 'Untitled Section'),
+						id: g.id
+					}))
+				];
+				const selected = await vscode.window.showQuickPick(options, { placeHolder: 'Select target section for hunk' });
+				if (selected) {
+					panel.webview.postMessage({
+						res: {
+							command: 'codeTourEditor.insertHunkAt',
+							hunk,
+							mode: 'quickpick',
+							targetId: selected.id
+						}
+					});
+				}
+				return;
+			}
+
+			case 'codeTourEditor.runAssistant': {
+				const { mode, hunkId, groupId, requestId } = message.args as {
+					mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration';
+					hunkId?: string;
+					groupId?: string;
+					requestId: string;
+				};
+				this._runAssistantForWebview(panel, document, mode, requestId, { hunkId, groupId });
+				return;
+			}
+
+			case 'codeTourEditor.cancelAssistant': {
+				const { requestId } = message.args as { requestId: string };
+				const controller = this._activeAssistantRuns.get(requestId);
+				if (controller) {
+					controller.abort();
+				}
+				return;
+			}
+
+			case 'codeTourEditor.setEditMode': {
+				const { isEditMode } = message.args as { isEditMode: boolean };
+				const docKey = document.uri.toString();
+				CodeTourEditorProvider._editModeByDocument.set(docKey, isEditMode);
+				if (CodeTourEditorProvider.activeDocumentTracker?.uri.toString() === docKey) {
+					CodeTourEditorProvider._setEditModeContext(isEditMode);
+				}
+				return;
+			}
+
+			case 'codeTourViewer.persistViewed': {
+				const { keys } = message.args as { keys: string[] };
+				const stateKey = CodeTourEditorProvider._viewedStateKey(document.uri);
+				if (Array.isArray(keys) && keys.length > 0) {
+					await this._extensionContext.workspaceState.update(stateKey, keys);
+				} else {
+					await this._extensionContext.workspaceState.update(stateKey, undefined);
+				}
+				return;
+			}
+
+			case 'codeTourViewer.loadThreads': {
+				const { prNumber, prOwner, prRepo } = message.args as { prNumber: number; prOwner: string; prRepo: string };
+				try {
+					const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
+					if (!folderManager) {
+						panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
+						return;
+					}
+					// useCache: true - we'll likely reuse the same PR model for
+					// every interaction in this editor session.
+					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber), true);
+					if (!pr) {
+						panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
+						return;
+					}
+					// useCache: true - the viewer reloads threads on every editor
+					// open/mount. The PullRequestModel keeps its review-thread
+					// cache up to date in response to comment events, so we can
+					// safely serve cached data without staleness risk.
+					const threads = await pr.getReviewThreads(true);
+					panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads } });
+				} catch (e) {
+					// Same rate-limit surfacing as _sendChangesData: route to the
+					// banner instead of disappearing into the log. We deliberately
+					// skip posting an empty `threadsLoaded` in the rate-limit
+					// case - the banner is now the user's signal, and skipping
+					// the empty payload gives the webview a clean "next
+					// successful threadsLoaded = clear the banner" trigger.
+					if (this._postRateLimitIfApplicable(panel, e, 'threads')) {
+						Logger.warn(`Review-threads fetch rate-limited: ${formatError(e)}`, CodeTourEditorProvider.name);
+					} else {
+						Logger.error(`Failed to load review threads: ${formatError(e)}`, CodeTourEditorProvider.name);
+						panel.webview.postMessage({ res: { command: 'codeTourViewer.threadsLoaded', threads: [] } });
+					}
+				}
+				return;
+			}
+
+			case 'codeTourViewer.addComment': {
+				const { requestId, prNumber, prOwner, prRepo, file, startLine, endLine, side, body } = message.args as {
+					requestId: string;
+					prNumber: number;
+					prOwner: string;
+					prRepo: string;
+					file: string;
+					startLine?: number;
+					endLine: number;
+					side: 'LEFT' | 'RIGHT';
+					body: string;
+				};
+				try {
+					const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
+					if (!folderManager) {
+						throw new Error('No checked-out repository matches this pull request.');
+					}
+					// useCache: true to avoid an extra GraphQL roundtrip when
+					// the user comments multiple times in one session.
+					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber), true);
+					if (!pr) {
+						throw new Error('Pull request not found.');
+					}
+					const diffSide = side === 'LEFT' ? DiffSide.LEFT : DiffSide.RIGHT;
+					const effectiveStart = startLine ?? endLine;
+					const thread = await pr.createReviewThread(body, file, effectiveStart, endLine, diffSide, false);
+					if (!thread) {
+						throw new Error('Comment creation returned no thread.');
+					}
+					panel.webview.postMessage({
+						res: { command: 'codeTourViewer.commentPosted', requestId, thread },
+					});
+				} catch (e) {
+					Logger.error(`Failed to post review comment: ${formatError(e)}`, CodeTourEditorProvider.name);
+					panel.webview.postMessage({
+						res: {
+							command: 'codeTourViewer.commentError',
+							requestId,
+							error: CodeTourEditorProvider._formatUserFacingError(e),
+						},
+					});
+				}
+				return;
+			}
+
+			case 'codeTourViewer.replyToThread': {
+				const { requestId, prNumber, prOwner, prRepo, threadId, inReplyToCommentNodeId, body } = message.args as {
+					requestId: string;
+					prNumber: number;
+					prOwner: string;
+					prRepo: string;
+					threadId: string;
+					inReplyToCommentNodeId: string;
+					body: string;
+				};
+				try {
+					const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
+					if (!folderManager) {
+						throw new Error('No checked-out repository matches this pull request.');
+					}
+					// useCache: true to avoid an extra GraphQL roundtrip when
+					// the user comments multiple times in one session.
+					const pr = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber), true);
+					if (!pr) {
+						throw new Error('Pull request not found.');
+					}
+					const comment = await pr.createCommentReply(body, inReplyToCommentNodeId, true);
+					if (!comment) {
+						throw new Error('Reply creation returned no comment.');
+					}
+					panel.webview.postMessage({
+						res: { command: 'codeTourViewer.replyPosted', requestId, threadId, comment },
+					});
+				} catch (e) {
+					Logger.error(`Failed to post reply: ${formatError(e)}`, CodeTourEditorProvider.name);
+					panel.webview.postMessage({
+						res: {
+							command: 'codeTourViewer.commentError',
+							requestId,
+							error: CodeTourEditorProvider._formatUserFacingError(e),
+						},
+					});
+				}
+				return;
+			}
+
+			case 'codeTourEditor.requestChanges':
+				await this._sendChangesData(document, panel);
+				return;
+
+			case 'codeTourEditor.retryAfterRateLimit': {
+				// Banner-driven retry: re-run only the call that hit the limit.
+				// Keeping retry scope tight keeps the budget cost of a retry
+				// click predictable (one fetch, not a full editor reload).
+				const { retryKind } = message.args as { retryKind: 'changes' | 'threads' };
+				if (retryKind === 'changes') {
+					await this._sendChangesData(document, panel);
+				} else if (retryKind === 'threads') {
+					// The threads load needs the PR coords, which the webview
+					// already has; ask it to re-issue the load on its side.
+					panel.webview.postMessage({ res: { command: 'codeTourViewer.retryLoadThreads' } });
+				}
+				return;
+			}
+
+			case 'codeTourEditor.showOutputChannel':
+				// "View log" link on the rate-limit banner. Surfaces the shared
+				// "GitHub Pull Request" output channel where the rate-limit
+				// failure (and any prior context) was logged.
+				Logger.show();
+				return;
+
+			case 'codeTourEditor.openClaudeCodeUpdate':
+				// Delegate to the existing Claude CLI bridge so the same skill
+				// install + terminal prompt path runs from either the title-menu
+				// or the outdated-banner button.
+				await vscode.commands.executeCommand('pr.updateTourWithClaudeCode', document.uri);
+				return;
+
+			case 'codeTourEditor.openCopilotChatUpdate':
+				// Pre-populate the chat panel with `@change-tour /update`. The
+				// user reviews and presses enter; the participant runs the
+				// `update` AssistantMode against the active tour.
+				await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@change-tour /update ' });
+				return;
+
+			default:
+				return;
+		}
+	}
+
+	/**
+	 * Fetch the bound PR's current diff and post a `changesData` message back
+	 * to the webview. Used for two things: the changes-pane file list (drag/drop
+	 * authoring) and the outdated-hunk detector (per-file blob SHAs + current
+	 * head SHA + per-file patch). The webview parses each file's patch locally
+	 * to derive per-file hunks for the auto-update flow.
+	 *
+	 * Silent on failure (no PR bound, offline, mismatched binding) - the
+	 * outdated banner stays hidden in those cases, which is the right thing.
+	 */
+	private async _sendChangesData(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
+		try {
+			const parsed = parseCodeTourMarkdown(document.getText());
+			if (!parsed.prOwner || !parsed.prRepo || !parsed.prNumber) {
+				return;
+			}
+			const { prOwner, prRepo, prNumber } = parsed;
+			const folderManager = this._reposManager.getManagerForRepository(prOwner, prRepo);
+			if (!folderManager) {
+				return;
+			}
+			// `useCache: true` skips the GraphQL PR-resolve query if we already
+			// have the model in memory. Without it, opening any .changetour.md
+			// file refetches the PR from scratch even when nothing changed -
+			// the single biggest source of redundant API traffic in change
+			// tour flows.
+			const prModel = await folderManager.resolvePullRequest(prOwner, prRepo, Number(prNumber), true);
+			if (!prModel) {
+				return;
+			}
+			const rawChanges = await prModel.getRawFileChangesInfo();
+			const files = rawChanges.map(change => ({
+				fileName: change.filename,
+				status: change.status,
+				additions: change.additions,
+				deletions: change.deletions,
+				previousFileName: change.previous_filename,
+				patch: change.patch,
+				// Per-file blob SHA at PR head. Drag/drop carries this into the hunk's
+				// `baseBlob` so the outdated-detection flow can compare against the
+				// file's current blob.
+				blobSha: change.sha,
+			}));
+			panel.webview.postMessage({
+				res: {
+					command: 'codeTourEditor.changesData',
+					data: {
+						title: prModel.title,
+						number: prModel.number,
+						owner: prOwner,
+						repo: prRepo,
+						baseSha: prModel.base.sha,
+						headSha: prModel.head?.sha,
+						files
+					}
+				}
+			});
+		} catch (e) {
+			// Rate-limit failures used to disappear into the log here, leaving
+			// the outdated-tour banner hidden and the user with no idea why
+			// their PR data is missing. Route them to the dedicated banner
+			// instead - other errors still flow through Logger.error so the
+			// "GitHub Pull Request" output channel keeps its diagnostic value.
+			if (this._postRateLimitIfApplicable(panel, e, 'changes')) {
+				Logger.warn(`PR changes fetch rate-limited: ${formatError(e)}`, CodeTourEditorProvider.name);
+				return;
+			}
+			Logger.error(`Failed to fetch PR changes: ${formatError(e)}`, CodeTourEditorProvider.name);
+		}
+	}
+
+	/**
+	 * If `e` is a recognizable GitHub rate-limit error, post a `rateLimitHit`
+	 * message to the webview so the in-editor banner can render with the reset
+	 * time + a Retry button. The `retryKind` discriminates which call the
+	 * webview's Retry button should re-trigger (see `retryAfterRateLimit`
+	 * handler). Returns `true` if a rate-limit was detected and posted so the
+	 * caller can decide whether to also log a duplicate error line.
+	 */
+	private _postRateLimitIfApplicable(
+		panel: vscode.WebviewPanel,
+		e: unknown,
+		retryKind: 'changes' | 'threads',
+	): boolean {
+		const info = detectRateLimit(e);
+		if (!info) {
+			return false;
+		}
+		// Stamp the global tracker so adjacent code paths that swallow rate-
+		// limit failures (e.g. `pr.checkoutFromCodeTour` -> getPullRequest
+		// returning undefined) can recover the reason when they fail next.
+		recordObservedRateLimit(info);
+		panel.webview.postMessage({
+			res: {
+				command: 'codeTourEditor.rateLimitHit',
+				resetAt: info.resetAt.getTime(),
+				retryKind,
+				message: formatRateLimitMessage(info),
+				isSecondary: info.isSecondary,
+				resource: info.resource,
+			},
+		});
+		return true;
+	}
+
+	private _sendDocumentToWebview(webview: vscode.Webview, document: vscode.TextDocument): void {
+		try {
+			const parsed = parseCodeTourMarkdown(document.getText());
+			const folderManager = this._reposManager.getManagerForFile(document.uri) ?? this._reposManager.folderManagers[0];
+			const prInfo = CodeTourEditorProvider._activePrInfo(folderManager?.activePullRequest);
+
+			// One-shot initial-mode hint from a command (e.g. "Edit Change Tour" → edit).
+			const key = document.uri.toString();
+			const requestedMode = CodeTourEditorProvider._pendingInitialMode.get(key);
+			if (requestedMode !== undefined) {
+				CodeTourEditorProvider._pendingInitialMode.delete(key);
+			}
+
+			// Persisted "mark-as-viewed" state for this tour. Stored per document URI
+			// in workspaceState so checkmarks survive editor close/reopen and restarts.
+			const viewedKeys = this._extensionContext.workspaceState.get<string[]>(
+				CodeTourEditorProvider._viewedStateKey(document.uri),
+				[],
+			);
+
+			// Tour file path relative to its repo root, used by the viewer to
+			// pair GitHub review threads with paragraphs in the left pane.
+			// Try several roots in order: the folder manager for this file, then
+			// every other registered folder manager (handles multi-root workspaces
+			// where getManagerForFile heuristics fail), then the workspace folder.
+			const candidateRoots: vscode.Uri[] = [];
+			const seenRoots = new Set<string>();
+			const pushRoot = (uri: vscode.Uri | undefined) => {
+				if (!uri) return;
+				const key = uri.toString();
+				if (seenRoots.has(key)) return;
+				seenRoots.add(key);
+				candidateRoots.push(uri);
+			};
+			pushRoot(folderManager?.repository.rootUri);
+			for (const fm of this._reposManager.folderManagers) {
+				pushRoot(fm.repository.rootUri);
+			}
+			pushRoot(vscode.workspace.getWorkspaceFolder(document.uri)?.uri);
+
+			let tourFilePath: string | undefined;
+			for (const root of candidateRoots) {
+				if (root.scheme !== document.uri.scheme) {
+					continue;
+				}
+				const rel = path.relative(root.fsPath, document.uri.fsPath);
+				if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+					continue;
+				}
+				tourFilePath = rel.split(path.sep).join('/');
+				break;
+			}
+			Logger.debug(
+				`tourFilePath=${tourFilePath ?? '<none>'} docUri=${document.uri.fsPath} tried=${candidateRoots.map(r => r.fsPath).join('|')}`,
+				CodeTourEditorProvider.name,
+			);
+
+			webview.postMessage({
+				res: {
+					command: 'codeTourEditor.initialize',
+					data: parsed,
+					activePR: prInfo,
+					initialEditMode: requestedMode === 'edit'
+						? true
+						: requestedMode === 'view'
+							? false
+							: undefined,
+					viewedKeys,
+					tourFilePath,
+					diffLayout: CodeTourEditorProvider._readDiffLayout(this._extensionContext),
+				},
+			});
+		} catch (e) {
+			Logger.error(`Error parsing change tour document: ${formatError(e)}`, 'CodeTourEditorProvider');
+		}
+	}
+
+	/**
+	 * Runs the Change Tour assistant orchestrator for a webview-initiated request
+	 * and pipes events back to the webview so it can render a streaming indicator
+	 * and surface errors. Write tools mutate the open document in place; the
+	 * webview will re-render via the existing onDidChangeTextDocument flow.
+	 */
+	private async _runAssistantForWebview(
+		panel: vscode.WebviewPanel,
+		document: vscode.TextDocument,
+		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration',
+		requestId: string,
+		ctx: { hunkId?: string; groupId?: string },
+	): Promise<void> {
+		const controller = new AbortController();
+		this._activeAssistantRuns.set(requestId, controller);
+
+		const send = (event: unknown) => {
+			panel.webview.postMessage({
+				res: { command: 'codeTourEditor.assistantEvent', requestId, event },
+			});
+		};
+
+		const assistantMode: AssistantMode = mode === 'narrateHunk'
+			? 'narrate'
+			: mode === 'improveSection'
+				? 'improve'
+				: mode === 'summarizeHunk'
+					? 'summarizeHunk'
+					: mode === 'updateTour'
+						? 'update'
+						: mode === 'refreshHunkNarration'
+							? 'refreshNarration'
+							: 'generate';
+		const userPrompt = this._buildAssistantPromptForButton(mode, ctx);
+		const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri;
+
+		try {
+			for await (const event of runAssistant(this._extensionContext, {
+				mode: assistantMode,
+				userPrompt,
+				workspaceRoot,
+				signal: controller.signal,
+			})) {
+				send(event);
+				if (event.type === 'done') {
+					break;
+				}
+			}
+		} catch (err) {
+			send({ type: 'done', reason: 'error', error: err instanceof Error ? err.message : String(err) });
+		} finally {
+			this._activeAssistantRuns.delete(requestId);
+		}
+	}
+
+	private _buildAssistantPromptForButton(
+		mode: 'autoGenerate' | 'narrateHunk' | 'improveSection' | 'summarizeHunk' | 'updateTour' | 'refreshHunkNarration',
+		ctx: { hunkId?: string; groupId?: string },
+	): string {
+		switch (mode) {
+			case 'autoGenerate':
+				return 'Generate a complete Change Tour for the active pull request, replacing or extending whatever is currently in the document.';
+			case 'narrateHunk':
+				return `Draft narration for the hunk with id "${ctx.hunkId}" and insert it immediately after that hunk.`;
+			case 'improveSection':
+				return `Improve the section with id "${ctx.groupId}" - tighten the narration of its children, add highlights to large hunks where useful, and surface obvious gaps. Do not modify nodes outside this section.`;
+			case 'summarizeHunk':
+				return `Write a one-line natural-language summary for the hunk with id "${ctx.hunkId}" and save it on that hunk via the summary attribute. Do not insert or modify any other nodes.`;
+			case 'updateTour':
+				return 'Update this Change Tour to match the current PR. START by calling changeTour_getDriftReport - the three lists it returns are the ground truth for what needs to change. Process every entry in `drifted`, `missingInTour`, and `removedFromPR`. After the edits, call changeTour_getDriftReport again to verify all three lists are empty; if not, repeat. Don\'t stop until the verification call returns empty lists.';
+			case 'refreshHunkNarration':
+				return `The hunk with id "${ctx.hunkId}" was just auto-updated. Refresh the prose adjacent to that hunk - text nodes immediately before or after - so the narration reflects the hunk's new patch content. Do not modify the hunk itself or any other node in the tour.`;
+		}
+	}
+
+	/**
+	 * Replace the document's entire text with `newContent`.
+	 *
+	 * `originatedFromWebview` controls the self-echo dance:
+	 *   - `true` (default) - the webview already pushed this exact text via
+	 *     `codeTourEditor.updateDocument` and applied the change to its local
+	 *     React state. We bump the pending counter so the
+	 *     `onDidChangeTextDocument` listener swallows the matching workspace
+	 *     edit event instead of round-tripping it back to the webview (which
+	 *     would re-parse and reset local node IDs / selections).
+	 *   - `false` - the extension is applying the edit *on behalf of* the
+	 *     webview (e.g. the per-hunk Exclude button, the file-level Exclude,
+	 *     the Remove-exclusion "x" button). In this case the webview has NOT
+	 *     applied the change to its local state, so the listener MUST push
+	 *     the new doc back. Skip the counter bump.
+	 */
+	private async _applyEdit(document: vscode.TextDocument, newContent: string, originatedFromWebview: boolean = true): Promise<void> {
+		const key = document.uri.toString();
+		if (originatedFromWebview) {
+			this._pendingWebviewEdits.set(key, (this._pendingWebviewEdits.get(key) ?? 0) + 1);
+		}
+		const edit = new vscode.WorkspaceEdit();
+		edit.replace(
+			document.uri,
+			new vscode.Range(0, 0, document.lineCount, 0),
+			newContent,
+		);
+		await vscode.workspace.applyEdit(edit);
+	}
+
+	private _getHtmlForWebview(webview: vscode.Webview): string {
+		const nonce = generateUuid();
+		const scriptUri = webview.asWebviewUri(
+			vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview-code-tour-editor.js'),
+		);
+
+		return `<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https:; media-src https:; script-src 'nonce-${nonce}'; style-src ${webview.cspSource} 'unsafe-inline' https: data:;">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	</head>
+	<body class="${process.platform}">
+		<div id="app"></div>
+		<script nonce="${nonce}" src="${scriptUri.toString()}"></script>
+	</body>
+</html>`;
+	}
+}

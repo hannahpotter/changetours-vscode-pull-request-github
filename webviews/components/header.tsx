@@ -306,8 +306,9 @@ interface CheckoutButtonProps {
 }
 
 const CheckoutButton: React.FC<CheckoutButtonProps> = ({ isCurrentlyCheckedOut, isIssue, doneCheckoutBranch, owner, repo, number }) => {
-	const { exitReviewMode, checkout, openChanges } = useContext(PullRequestContext);
+	const { exitReviewMode, checkout, openChanges, pr } = useContext(PullRequestContext);
 	const [isBusy, setBusy] = useState(false);
+	const hasChangeTour = !!pr?.hasChangeTour;
 
 	const onClick = async (command: string) => {
 		try {
@@ -338,6 +339,7 @@ const CheckoutButton: React.FC<CheckoutButtonProps> = ({ isCurrentlyCheckedOut, 
 	const context: OverviewContext = {
 		'preventDefaultContextMenuItems': true,
 		'github:checkoutMenu': true,
+		'github:prHasChangeTour': hasChangeTour,
 		owner,
 		repo,
 		number

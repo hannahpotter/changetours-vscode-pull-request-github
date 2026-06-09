@@ -545,6 +545,8 @@ export class PRContext {
 				return this.updatePR({ state: message.state });
 			case 'pr.update-checkout-status':
 				return this.updatePR({ isCurrentlyCheckedOut: message.isCurrentlyCheckedOut });
+			case 'pr.update-hasChangeTour':
+				return this.updatePR({ hasChangeTour: message.hasChangeTour });
 			case 'pr.deleteBranch':
 				const stateChange: { isLocalHeadDeleted?: boolean, isRemoteHeadDeleted?: boolean } = {};
 				message.branchTypes && message.branchTypes.map((branchType: string) => {

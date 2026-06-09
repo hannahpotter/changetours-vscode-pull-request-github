@@ -349,3 +349,6 @@ src/constants.insiders.ts
 
 .eslintcache
 *.tsbuildinfo
+
+# Project uses npm; reject stray yarn lockfiles to keep CI/local installs deterministic.
+yarn.lock

@@ -10,6 +10,7 @@ dist/browser/test/**
 documentation/**
 node_modules/**
 scripts/**
+!scripts/*-change-tour.js
 src/**
 !src/lm/skills/**
 webviews/**
