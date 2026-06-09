@@ -15,10 +15,10 @@ There are two ways to get the extension: download a prebuilt `.vsix` from the Gi
 
 Best for most users - no Node toolchain required.
 
-1. Go to the [Releases page](https://github.com/hannahpotter/changetours-vscode-pull-request-github/releases) and download the latest `vscode-pull-request-github-<version>.vsix` asset.
+1. Go to the [Releases page](https://github.com/hannahpotter/changetours-vscode-pull-request-github/releases) and download the latest `changetours-vscode-pull-request-github-<version>.vsix` asset.
 2. Install the `.vsix` in VS Code, either from the command line:
 	```sh
-	code --install-extension vscode-pull-request-github-<version>.vsix
+	code --install-extension changetours-vscode-pull-request-github-<version>.vsix
 	```
 	or from the VS Code UI: open the Extensions view, click the `...` menu in the top-right, choose **Install from VSIX...**, and select the file.
 3. Reload VS Code if prompted.
@@ -39,15 +39,31 @@ Use this path if you want to run unreleased changes, work on the extension itsel
 	```sh
 	npm run package
 	```
-	This produces `vscode-pull-request-github-<version>.vsix` in the repository root. The `package` script invokes `vsce package`, which first runs `vscode:prepublish` (clean + bundle) so the VSIX always contains a fresh build.
+	This produces `changetours-vscode-pull-request-github-<version>.vsix` in the repository root. The `package` script invokes `vsce package`, which first runs `vscode:prepublish` (clean + bundle) so the VSIX always contains a fresh build.
 3. Install the `.vsix` in VS Code, either from the command line:
 	```sh
-	code --install-extension vscode-pull-request-github-<version>.vsix
+	code --install-extension changetours-vscode-pull-request-github-<version>.vsix
 	```
 	or from the VS Code UI: open the Extensions view, click the `...` menu in the top-right, choose **Install from VSIX...**, and select the file.
 4. Reload VS Code if prompted.
 
 See the VS Code Pull Request Extension wiki for [how to build and run for development/debugging](https://github.com/Microsoft/vscode-pull-request-github/wiki/Contributing#build-and-run).
+
+### Optional: enabling VS Code "proposed" APIs
+
+This extension inherits its base from upstream's GitHub Pull Requests extension, which opts into a handful of VS Code's experimental "proposed" APIs (richer comment integrations, the multi-diff editor, etc.). On startup you'll see an extension-host log line that reads:
+
+> *Extension 'hannahpotter.changetours-vscode-pull-request-github' CANNOT USE these API proposals 'activeComment, …'. You MUST start in extension development mode or use the --enable-proposed-api command line flag*
+
+**You can safely ignore this message for normal Change Tour work** - the authoring/review UI, the AI assistant, the Anthropic key storage, and the Claude Code skill all use stable APIs and work without the flag. The denial only affects a few inherited upstream features (e.g. some comment-composer affordances, the multi-diff "all changes" tab, share menu items).
+
+If you want those features back, launch VS Code with the flag:
+
+```sh
+code --enable-proposed-api hannahpotter.changetours-vscode-pull-request-github
+```
+
+Or make it persistent: Command Palette → **"Preferences: Configure Runtime Arguments"** and add the extension id to the `enable-proposed-api` array in `argv.json`. After saving, fully quit and reopen VS Code.
 
 ## Opening/Creating a Change Tour
 
