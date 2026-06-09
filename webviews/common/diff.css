@@ -149,17 +149,20 @@
 }
 
 .diff-table-side-by-side .diff-col-num {
-	width: 48px;
+	width: 72px;
 }
 
 /* Override the inline-mode 86px so the line-num cells match the colgroup
- * width even if the browser falls back from <col> sizing. */
+ * width even if the browser falls back from <col> sizing. The 72px width
+ * accommodates the hunk-header actions row (chevron + select checkbox +
+ * overflow-menu trigger) without bleeding into the title cell; regular
+ * line-number cells get a touch of extra padding which still reads naturally. */
 .diff-table-side-by-side .diff-line-num,
 .diff-table-side-by-side .diff-line-num-left,
 .diff-table-side-by-side .diff-line-num-right,
 .diff-table-side-by-side .diff-line-num-empty {
-	width: 48px;
-	min-width: 48px;
+	width: 72px;
+	min-width: 72px;
 }
 
 .diff-table-side-by-side .diff-line-num-left,

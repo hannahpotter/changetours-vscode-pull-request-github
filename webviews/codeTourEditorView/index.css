@@ -2397,7 +2397,8 @@ button.viewer-filter-status-clear {
 
 /* - Per-line "+" gutter button (PR-style add comment) ------ */
 
-.diff-line.diff-line-commentable .diff-line-num-left {
+.diff-line.diff-line-commentable .diff-line-num-left,
+.diff-line.diff-line-commentable .diff-line-num-right {
 	position: relative;
 }
 

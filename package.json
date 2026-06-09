@@ -3761,7 +3761,7 @@
 				},
 				{
 					"command": "pr.newCodeTour",
-					"group": "checkout@1",
+					"group": "checkout@0",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu && !github:prHasChangeTour"
 				},
 				{
@@ -3771,17 +3771,17 @@
 				},
 				{
 					"command": "pr.pickInWorktreeFromDescription",
-					"group": "checkout@1",
+					"group": "checkout@3",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu && !isWeb"
 				},
 				{
 					"command": "pr.checkoutOnVscodeDevFromDescription",
-					"group": "checkout@2",
+					"group": "checkout@4",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{
 					"command": "pr.checkoutOnCodespacesFromDescription",
-					"group": "checkout@3",
+					"group": "checkout@5",
 					"when": "webviewId == PullRequestOverview && github:checkoutMenu"
 				},
 				{

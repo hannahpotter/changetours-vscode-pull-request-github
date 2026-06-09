@@ -291,7 +291,7 @@ function buildSideBySideRows(lines: ParsedDiffLine[]): SideBySideRow[] {
 	return rows;
 }
 
-function DiffTableSideBySide({ lines, coveredHeaderIndices, hideCovered, highlightedLineIndices, highlightMode, onHighlightDragStart, onHighlightDragEnter, onHighlightDragEnd, onRemoveHighlightForRow, onAddCommentForLine, composerLineIdx, composerNode, threadWidgetsByLineIdx }: DiffTableProps) {
+function DiffTableSideBySide({ lines, onHunkHeaderDragStart, onHunkAddActive, onHunkAddQuickPick, onHunkExclude, activeNodeContext, coveredHeaderIndices, hideCovered, selectedHeaderIndices, searchActive, searchMatchedHeaderIndices, searchMatchedLineIndices, onHunkSelectToggle, selectedHunksCount, highlightedLineIndices, highlightMode, onHighlightDragStart, onHighlightDragEnter, onHighlightDragEnd, onRemoveHighlightForRow, onAddCommentForLine, composerLineIdx, composerNode, threadWidgetsByLineIdx }: DiffTableProps) {
 	const [collapsedState, setCollapsedState] = useState<{ [key: number]: boolean }>({});
 	const rows = React.useMemo(() => buildSideBySideRows(lines), [lines]);
 
@@ -387,9 +387,9 @@ function DiffTableSideBySide({ lines, coveredHeaderIndices, hideCovered, highlig
 	return (
 		<table className="diff-table diff-table-side-by-side">
 			<colgroup>
-				<col className="diff-col-num" style={{ width: 48 }} />
+				<col className="diff-col-num" style={{ width: 72 }} />
 				<col className="diff-col-content" />
-				<col className="diff-col-num" style={{ width: 48 }} />
+				<col className="diff-col-num" style={{ width: 72 }} />
 				<col className="diff-col-content" />
 			</colgroup>
 			<tbody>
@@ -401,18 +401,68 @@ function DiffTableSideBySide({ lines, coveredHeaderIndices, hideCovered, highlig
 					}
 
 					if (row.kind === 'header') {
-						const isCollapsed = collapsedState[row.idx] !== undefined ? collapsedState[row.idx] : isCovered;
+						const draggable = !!onHunkHeaderDragStart;
+						const isSearchMatch = !!searchActive && !!searchMatchedHeaderIndices?.has(row.idx);
+						const isCollapsed = isSearchMatch ? false : (collapsedState[row.idx] !== undefined ? collapsedState[row.idx] : isCovered);
 						return (
-							<tr key={`h-${row.idx}`} className={`diff-line diff-hunk-header${isCovered ? ' diff-hunk-covered' : ''}`}>
+							<tr
+								key={`h-${row.idx}`}
+								className={`diff-line diff-hunk-header${draggable ? ' draggable-hunk' : ''}${isCovered ? ' diff-hunk-covered' : ''}${isSearchMatch ? ' diff-search-match' : ''}`}
+								draggable={draggable || undefined}
+								onDragStart={draggable ? e => onHunkHeaderDragStart!(e, row.idx) : undefined}
+								title={draggable ? 'Drag this hunk into a Change Tour editor' : undefined}
+							>
 								<td className="diff-line-num diff-hunk-header-actions" style={{ width: 48 }}>
 									<span className="diff-hunk-actions">
-										<span
-											className={`expand-icon icon-button ${isCollapsed ? 'closed' : ''}`}
-											title={isCollapsed ? 'Expand hunk' : 'Collapse hunk'}
-											onClick={(e) => { e.stopPropagation(); toggleCollapse(row.idx, isCovered); }}
-										>
-											{chevronDownIcon}
-										</span>
+										<Tooltip text={isCollapsed ? 'Expand hunk' : 'Collapse hunk'}>
+											<span
+												className={`expand-icon icon-button ${isCollapsed ? 'closed' : ''}`}
+												onClick={(e) => { e.stopPropagation(); toggleCollapse(row.idx, isCovered); }}
+											>
+												{chevronDownIcon}
+											</span>
+										</Tooltip>
+										{onHunkSelectToggle && (
+											<Tooltip text="Select hunk">
+												<div className="checkbox-wrapper">
+													<input
+														type="checkbox"
+														checked={!!selectedHeaderIndices?.has(row.idx)}
+														onChange={(e) => onHunkSelectToggle?.(row.idx, e.target.checked)}
+														onClick={(e) => e.stopPropagation()}
+													/>
+												</div>
+											</Tooltip>
+										)}
+										{(() => {
+											const multi = !!selectedHunksCount && selectedHunksCount > 1;
+											const menuItems: OverflowMenuItem[] = [];
+											if (onHunkAddActive) {
+												menuItems.push({
+													key: 'add',
+													icon: addIcon,
+													label: multi ? `Add ${selectedHunksCount} selected hunks` : (activeNodeContext ? `Add after: ${activeNodeContext}` : 'Add to end of tour'),
+													onSelect: () => onHunkAddActive(row.idx),
+												});
+											}
+											if (onHunkAddQuickPick) {
+												menuItems.push({
+													key: 'add-section',
+													icon: listTree,
+													label: multi ? `Add ${selectedHunksCount} selected hunks to section…` : 'Add to section…',
+													onSelect: () => onHunkAddQuickPick(row.idx),
+												});
+											}
+											if (onHunkExclude) {
+												menuItems.push({
+													key: 'exclude',
+													icon: eyeClosedIcon,
+													label: 'Exclude from tour',
+													onSelect: () => onHunkExclude(row.idx),
+												});
+											}
+											return <OverflowMenu items={menuItems} title="Hunk actions" />;
+										})()}
 									</span>
 								</td>
 								<td colSpan={3} className="diff-line-content diff-hunk-content-flex">
@@ -422,9 +472,13 @@ function DiffTableSideBySide({ lines, coveredHeaderIndices, hideCovered, highlig
 						);
 					}
 
-					const isCollapsed = headerIdx >= 0
-						? (collapsedState[headerIdx] !== undefined ? collapsedState[headerIdx] : isCovered)
-						: false;
+					// Search forces the containing hunk to stay expanded so matches are visible.
+					const headerIsSearchMatch = headerIdx >= 0 && !!searchActive && !!searchMatchedHeaderIndices?.has(headerIdx);
+					const isCollapsed = headerIsSearchMatch
+						? false
+						: headerIdx >= 0
+							? (collapsedState[headerIdx] !== undefined ? collapsedState[headerIdx] : isCovered)
+							: false;
 					if (isCollapsed) {
 						return null;
 					}
@@ -432,25 +486,23 @@ function DiffTableSideBySide({ lines, coveredHeaderIndices, hideCovered, highlig
 					if (row.kind === 'context') {
 						const ln = row.line;
 						const isHighlighted = !!highlightedLineIndices?.has(row.idx);
+						const isSearchMatch = !!searchActive && !!searchMatchedLineIndices?.has(row.idx);
+						const showAddCommentButton = !!onAddCommentForLine;
 						const threadWidget = threadWidgetsByLineIdx?.get(row.idx);
 						const showComposer = composerLineIdx === row.idx && composerNode;
+						// Route context rows through renderSide so they inherit the same
+						// per-side affordances change rows already get: the add-comment
+						// button, highlight-drag handlers, and the remove-highlight button.
+						// Both sides of a context row refer to the same line index, so
+						// either side's "+" button targets the same comment thread.
+						// `diff-line-commentable` goes on the <tr> (not the <td>) so
+						// the row-hover CSS selector (`.diff-line.diff-line-commentable:hover`)
+						// can fade the "+" buttons in - same pattern as the inline path.
 						return (
 							<React.Fragment key={`c-${row.idx}`}>
-								<tr className={`diff-line diff-context${isCovered ? ' diff-hunk-covered' : ''}${isHighlighted ? ' diff-line-highlighted' : ''}`}>
-									<td className="diff-line-num diff-line-num-left">
-										<span className="diff-line-num-text">{ln.oldLine ?? ''}</span>
-									</td>
-									<td className="diff-line-content diff-context">
-										<span className="diff-line-prefix"> </span>
-										{ln.content}
-									</td>
-									<td className="diff-line-num diff-line-num-right">
-										<span className="diff-line-num-text">{ln.newLine ?? ''}</span>
-									</td>
-									<td className="diff-line-content diff-context">
-										<span className="diff-line-prefix"> </span>
-										{ln.content}
-									</td>
+								<tr className={`diff-line diff-context${isCovered ? ' diff-hunk-covered' : ''}${isHighlighted ? ' diff-line-highlighted' : ''}${isSearchMatch ? ' diff-search-match' : ''}${showAddCommentButton ? ' diff-line-commentable' : ''}`}>
+									{renderSide(ln, row.idx, 'left')}
+									{renderSide(ln, row.idx, 'right')}
 								</tr>
 								{threadWidget && (
 									<tr className="diff-thread-row">
@@ -473,12 +525,19 @@ function DiffTableSideBySide({ lines, coveredHeaderIndices, hideCovered, highlig
 					const composerOnRight = row.rightIdx !== undefined && composerLineIdx === row.rightIdx && composerNode;
 					const leftHighlighted = row.leftIdx !== undefined && !!highlightedLineIndices?.has(row.leftIdx);
 					const rightHighlighted = row.rightIdx !== undefined && !!highlightedLineIndices?.has(row.rightIdx);
+					const leftSearchMatch = row.leftIdx !== undefined && !!searchActive && !!searchMatchedLineIndices?.has(row.leftIdx);
+					const rightSearchMatch = row.rightIdx !== undefined && !!searchActive && !!searchMatchedLineIndices?.has(row.rightIdx);
+					// `diff-line-commentable` on the <tr> mirrors the inline path so the
+					// row-hover CSS selector can fade in the per-side "+" buttons.
+					const rowCommentable = !!onAddCommentForLine && (row.leftIdx !== undefined || row.rightIdx !== undefined);
 					const rowClass = [
 						'diff-line',
 						'diff-line-change',
 						isCovered ? 'diff-hunk-covered' : '',
 						leftHighlighted ? 'diff-line-highlighted-left' : '',
 						rightHighlighted ? 'diff-line-highlighted-right' : '',
+						(leftSearchMatch || rightSearchMatch) ? 'diff-search-match' : '',
+						rowCommentable ? 'diff-line-commentable' : '',
 					].filter(Boolean).join(' ');
 					return (
 						<React.Fragment key={`x-${row.leftIdx ?? 'e'}-${row.rightIdx ?? 'e'}`}>
